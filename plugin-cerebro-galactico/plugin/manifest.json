@@ -1,0 +1,9 @@
+{
+  "id": "cerebro-galactico",
+  "name": "Cérebro Galáctico",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.7",
+  "description": "O cofre como galáxia espiral em 3D: notas viram estrelas, links viram poeira estelar, e cada abertura, salvamento ou captura acende a galáxia.",
+  "author": "offlucas-off",
+  "isDesktopOnly": true
+}

@@ -6,10 +6,16 @@
   "type": "module",
   "scripts": {
     "grafo": "python3 scripts/extrair-grafo ../../SkynetBrain-leitura previa/grafo.json",
-    "previa": "node scripts/montar-previa.mjs"
+    "previa": "node scripts/montar-previa.mjs",
+    "plugin": "node scripts/montar-plugin.mjs",
+    "typecheck": "tsc -p plugin/tsconfig.json"
   },
   "devDependencies": {
+    "@codemirror/state": "6.5.0",
+    "@codemirror/view": "6.38.6",
     "esbuild": "0.28.2",
-    "three": "0.185.1"
+    "obsidian": "1.13.1",
+    "three": "0.185.1",
+    "typescript": "5.9.3"
   }
 }

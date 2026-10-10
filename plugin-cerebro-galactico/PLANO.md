@@ -69,13 +69,20 @@ O revisor de acabamento deu "entregar depois das correções". As 8 foram aplica
 7. Brilhos e filetes escalam com o tamanho da tela (painel lateral estreito fica legível).
 8. Textos do canto (#marca e #evento) com fundo suave para ler sobre a poeira, e posição própria no celular.
 
-Capturas em `capturas/` (relógio virtual, fases exatas): 01 galáxia, 02a–c fases do raio, 03a–c fases da explosão, 04 voo, 05 painel lateral 380 px, 06 céu 360°, 07 filtros com o som.
+Capturas em `capturas/` (relógio virtual, fases exatas): 01 galáxia, 02a–c fases do raio, 03a–c fases da explosão, 04 voo, 05 painel lateral 380 px, 06 céu 360°, 07 filtros com o som, 08 plugin (visão), 09 plugin (captura).
 
-## Depois do ok
+## Plugin do Obsidian (construído)
 
-- **Estrutura:** plugin TypeScript em `plugin-cerebro-galactico/plugin/` (manifest.json, main.js, styles.css), com `ItemView` própria, comando, ícone na faixa lateral e aba de configurações. three@0.185.1 embutido no bundle.
-- **Finalização:** DESIGN.md e capturas com procedência.
-- **Notas para o plugin:** uma folha oculta do Obsidian não dispara `visibilitychange`, então a pausa precisa vir dos eventos de layout e da visibilidade da própria folha; o tamanho vem de um `ResizeObserver` no contêiner (já é assim na prévia).
+**Instalar:** copie `plugin/manifest.json`, `plugin/main.js` e `plugin/styles.css` para `<cofre>/.obsidian/plugins/cerebro-galactico/`, reinicie o Obsidian (ou recarregue os plugins) e ative "Cérebro Galáctico" em Configurações → Plugins da comunidade. Abre pelo ícone de órbita na faixa lateral ou pelo comando "Abrir Cérebro Galáctico". Só desktop; tudo embutido, funciona offline.
+
+- **Um motor só:** `motor/galaxia.js` + `motor/galaxia.css` + `motor/hud.js` rodam tanto na prévia (`npm run previa`) quanto no plugin (`npm run plugin`). O CSS vive sob `.cg-raiz` e mede o painel por container query (`@container galaxia`), não pela janela, porque a visão do Obsidian pode ser uma coluna estreita.
+- **Grafo:** notas de `vault.getMarkdownFiles()`, links de `metadataCache.resolvedLinks`, mesmas regiões de `scripts/extrair-grafo`.
+- **Eventos ao vivo:** abrir nota (`file-open`) → pulso; salvar (`modify`) → raio, no máximo 1 por nota a cada 15 s; salvar a nota de captura (padrão `01_ENTRADA.md`) → tempestade do núcleo; nota criada → nasce já ligada aos links dela; link novo → filete acende; renomear e apagar acompanham. Passou de ~96 notas novas na sessão, a galáxia se remonta sozinha com o grafo atual.
+- **Clique numa estrela** abre a nota numa aba nova (`getLeaf('tab')`); o `file-open` que vem em seguida não repete o efeito. Na aba de configurações dá para reaproveitar a última aba de nota.
+- **Configurações:** som de trovão (desligado), efeitos reduzidos, atividade de fundo, esconder 99_ARQUIVO, abrir em aba nova, nota de captura. As chaves do painel de filtros e as da aba de configurações são as mesmas e ficam salvas.
+- **Pausa:** a galáxia para de desenhar quando a aba fica oculta (eventos de layout + visibilidade da folha), quando a janela some e quando a visão fecha (libera a GPU).
+- **Ctrl/Cmd+K** busca dentro da galáxia enquanto ela está ativa, sem disparar o atalho global do Obsidian.
+- **Verificação:** typecheck (`npm run typecheck`) limpo; o plugin rodou num simulador da API do Obsidian no Chromium com o cofre real (1.114 notas): visão, salvar, captura, nota nova, link novo, renomear, apagar, clique, configurações nos dois sentidos, pausa e fechamento, sem erros no console. Capturas 08 e 09. Falta o teste no Obsidian de verdade, na GPU integrada do dono (meta: 30 fps ou mais; o painel de filtros mostra o fps medido).
 
 ## Decisões do dono (2026-10-10)
 

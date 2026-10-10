@@ -1,5 +1,6 @@
 // Monta previa/index.html: um arquivo único, offline, com three.js, o grafo real
-// e as fontes Manrope do tema Cerebro embutidos. Uso: npm run previa
+// e as fontes Manrope do tema Cerebro embutidos. O motor (motor/galaxia.js + .css)
+// é o mesmo que o plugin do Obsidian usa. Uso: npm run previa
 import { build } from 'esbuild';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -23,6 +24,7 @@ if (!fontes) throw new Error('Manrope não encontrada em referencias/tema-cerebr
 const grafo = ler('previa/grafo.json').replace(/</g, '\\u003c');
 const html = ler('previa/src/previa.html')
   .replace('{{FONTES}}', () => fontes)
+  .replace('{{CSS}}', () => ler('motor/galaxia.css'))
   .replace('{{GRAFO}}', () => grafo)
   .replace('{{JS}}', () => js.replace(/<\/script/gi, '<\\/script'));
 
