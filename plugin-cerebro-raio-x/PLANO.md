@@ -78,7 +78,8 @@
 - **Resolução:** DPR limitado a 1,5 (1,0 nos efeitos reduzidos). Pede a GPU de baixo consumo.
 - **Pausa:** para tudo quando a aba fica oculta (`visibilitychange`). No plugin, também quando a folha não está visível.
 - **`prefers-reduced-motion`:** sem giro automático; pulsos chegam na hora, sem viajar; o EEG atualiza 1×/s; transições zeradas.
-- **Medido aqui:** só em Chromium headless com **SwiftShader (GPU por software, sem placa)**: 16 a 32 fps com 1.114 neurônios. Não representa a GPU integrada; o número real aparece no painel de filtros no notebook.
+- **Medido aqui:** só em Chromium headless com **SwiftShader (GPU por software, sem placa)**: 16 a 32 fps com 1.114 neurônios, caindo para ~1 fps quando o container ficou sem CPU (a build anterior caiu igual, então não é regressão). Não representa a GPU integrada.
+- **Para medir no notebook:** abra `previa/index.html?carga=1300` e veja a linha de desempenho no painel de filtros. Ela completa o grafo com 186 notas sintéticas e avisa "carga de teste".
 
 ## 9. Depois do ok (limite 2 do pedido)
 
@@ -88,7 +89,20 @@
 - **Restrições:** nenhuma URL externa, sem telemetria, só leitura. Combina com o tema Cerebro e não mexe nele.
 - **Finalização:** revisão final da Impeccable, DESIGN.md registrado pelo documentador e capturas com procedência.
 
-## 10. Decisões em aberto
+## 10. Revisão final da prévia (impeccable-finish-reviewer): "ship after fixes", 8 correções aplicadas
+
+1. 99_ARQUIVO apagado de verdade no tronco (cor #58627e e 45% do brilho em repouso).
+2. Um único laço de render: esconder e mostrar a aba não duplica mais o requestAnimationFrame (vazamento num dia inteiro aberto).
+3. A câmera volta à vista de 3/4 centrada com Esc, com clique no vazio ou depois de 20 s sem interação.
+4. A casca usa os tokens do tema (#569cff / #7ea2ff).
+5. O brilho das sinapses se ajusta à área da tela, para o painel lateral não virar uma placa azul.
+6. O EEG redesenha 4×/s, ou na hora quando chega um evento (antes eram 30×/s), e cada pico só é calculado na sua janela. Entrou o `?carga=1300`.
+7. Contraste: rótulos do EEG, legenda, desempenho e atalho passaram para #8d97b3 (cerca de 6,8:1).
+8. As sinapses de uma nota nova voltam ao brilho normal depois do nascimento.
+
+Também saiu o vidro decorativo (backdrop-filter) da busca, e o contrato registra o EEG com 132 px.
+
+## 11. Decisões em aberto
 
 1. **Clique num neurônio:** abre a nota na mesma aba ou numa aba nova? (Proposta: aba nova, deixando o cérebro aberto.)
 2. **No painel lateral:** o EEG some por padrão? Hoje ele aparece, com siglas.

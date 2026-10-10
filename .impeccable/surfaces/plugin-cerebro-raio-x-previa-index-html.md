@@ -17,7 +17,7 @@ OWN-WORLD: ground #070b16 with a #0c1630 halo vignette. The cortex is a rim-lit 
 
 STORY: open in the morning and the brain breathes with sparse background activity. Opening, saving, or creating notes lights their region, and a capture in 01_ENTRADA sends a wave from the thalamus. Clicking a neuron opens its note. The EEG strip keeps the morning's history.
 
-FIRST VIEWPORT: the brain in three-quarter view, centred, filling about 78% of the height, rotating slowly. Top left: "Cérebro" with 1.114 neurônios · 5.955 sinapses in small tabular numbers. Top right: search (Ctrl+K) and a filters toggle. Bottom: 8 faint EEG channels, one per lobe, about 84px tall. A hover label follows the cursor.
+FIRST VIEWPORT: the brain in three-quarter view, centred, filling about 78% of the height, rotating slowly. Top left: "Cérebro" with 1.114 neurônios · 5.955 sinapses in small tabular numbers. Top right: search (Ctrl+K) and a filters toggle. Bottom: 8 faint EEG channels, one per lobe, about 132px tall (8 labelled channels need the height; amended after the finish review). A hover label follows the cursor.
 
 FORM: grounded candidate 7 of 7 (EEG/oscilloscope phosphor trace), fused as the per-lobe event-history channel. The world is pinned by the brief (X-ray neural simulation plus the Cerebro theme). Seed key 5a3a6a92. Signature interaction: opening a note lights its neuron, a pulse travels two synapse hops, and a spike lands on that lobe's EEG channel.
 

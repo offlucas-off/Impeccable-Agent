@@ -6,6 +6,21 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
 const GRAFO = JSON.parse(document.getElementById('grafo').textContent);
+// ?carga=1300 completa o grafo com notas sintéticas (cópias de pasta e grau das reais)
+// só para medir fps no tamanho pedido; o painel de filtros avisa que há carga de teste
+const CARGA = Math.min(5000, parseInt(new URLSearchParams(location.search).get('carga') || '0', 10) || 0);
+const SINTETICAS = Math.max(0, CARGA - GRAFO.nos.length);
+if (SINTETICAS) {
+  const reais = GRAFO.nos.length, porNo = (GRAFO.arestas.length * 2) / reais;
+  let semente = 1;
+  const r = () => { semente = (semente * 16807) % 2147483647; return semente / 2147483647; };
+  for (let k = 0; k < SINTETICAS; k++) {
+    const molde = GRAFO.nos[Math.floor(r() * reais)];
+    GRAFO.nos.push({ ...molde, id: `${molde.id} (sintética ${k + 1})`, t: `Sintética ${k + 1}` });
+    const i = GRAFO.nos.length - 1;
+    for (let e = 0; e < Math.round(porNo / 2); e++) GRAFO.arestas.push([Math.floor(r() * i), i]);
+  }
+}
 
 // ---------- vocabulário ----------
 const COR = {
@@ -332,8 +347,8 @@ const raioX = new THREE.ShaderMaterial({
   transparent: true, depthWrite: false, depthTest: false, side: THREE.DoubleSide,
   blending: THREE.AdditiveBlending,
   uniforms: {
-    uBase: { value: 0.006 }, uBorda: { value: 0.20 },
-    uCor1: { value: new THREE.Color('#2f5fd0') }, uCor2: { value: new THREE.Color('#b4cbff') },
+    uBase: { value: 0.006 }, uBorda: { value: 0.24 },
+    uCor1: { value: new THREE.Color('#569cff') }, uCor2: { value: new THREE.Color('#7ea2ff') },
     uIntensidade: { value: 1 },
   },
   vertexShader: `attribute float aCrista; attribute float aMedial; varying vec3 vN; varying vec3 vV; varying float vCrista; varying float vMedial;
@@ -419,7 +434,7 @@ realce.frustumCulled = false; realce.renderOrder = 3;
 scene.add(realce);
 
 // ---------- neurônios ----------
-const aTam = new Float32Array(CAP), aAtiv = new Float32Array(CAP), aCor = new Float32Array(CAP * 3), aVis = new Float32Array(CAP), aNasc = new Float32Array(CAP);
+const aTam = new Float32Array(CAP), aAtiv = new Float32Array(CAP), aCor = new Float32Array(CAP * 3), aVis = new Float32Array(CAP), aNasc = new Float32Array(CAP), aApagado = new Float32Array(CAP);
 const corTmp = new THREE.Color();
 function configurarNo(n) {
   const grau = n.viz.length;
@@ -428,6 +443,7 @@ function configurarNo(n) {
   aCor.set([corTmp.r, corTmp.g, corTmp.b], n.i * 3);
   aVis[n.i] = 1;
   aNasc[n.i] = 1;
+  aApagado[n.i] = n.l === 'tronco' ? 1 : 0;
 }
 nos.forEach(configurarNo);
 const noGeo = new THREE.BufferGeometry();
@@ -437,26 +453,27 @@ noGeo.setAttribute('aAtiv', new THREE.BufferAttribute(aAtiv, 1));
 noGeo.setAttribute('aCor', new THREE.BufferAttribute(aCor, 3));
 noGeo.setAttribute('aVis', new THREE.BufferAttribute(aVis, 1));
 noGeo.setAttribute('aNasc', new THREE.BufferAttribute(aNasc, 1));
+noGeo.setAttribute('aApagado', new THREE.BufferAttribute(aApagado, 1));
 noGeo.setDrawRange(0, N0);
 const noMat = new THREE.ShaderMaterial({
   transparent: true, depthWrite: false, depthTest: false, blending: THREE.AdditiveBlending,
   uniforms: { uEscala: { value: 1 }, uRepouso: { value: new THREE.Color('#9dbdff') }, uArquivo: { value: new THREE.Color('#58627e') }, uPerto: { value: 1.8 }, uLonge: { value: 3.6 } },
-  vertexShader: `attribute float aTam; attribute float aAtiv; attribute vec3 aCor; attribute float aVis; attribute float aNasc;
+  vertexShader: `attribute float aTam; attribute float aAtiv; attribute vec3 aCor; attribute float aVis; attribute float aNasc; attribute float aApagado;
     uniform float uEscala; uniform float uPerto; uniform float uLonge;
-    varying float vAtiv; varying vec3 vCor; varying float vVis; varying float vNevoa; varying float vHalo;
+    varying float vAtiv; varying vec3 vCor; varying float vVis; varying float vNevoa; varying float vHalo; varying float vApagado;
     void main(){ vec4 mv = modelViewMatrix * vec4(position, 1.0);
       float a = clamp(aAtiv, 0.0, 1.6);
       vHalo = 1.0 + a * 7.0 + (1.0 - aNasc) * 9.0;
       gl_PointSize = aTam * vHalo * uEscala / -mv.z * aVis;
-      vAtiv = a; vCor = aCor; vVis = aVis; vNevoa = mix(1.0, 0.32, smoothstep(uPerto, uLonge, -mv.z));
+      vAtiv = a; vCor = aCor; vVis = aVis; vApagado = aApagado; vNevoa = mix(1.0, 0.32, smoothstep(uPerto, uLonge, -mv.z));
       gl_Position = projectionMatrix * mv; }`,
-  fragmentShader: `uniform vec3 uRepouso; varying float vAtiv; varying vec3 vCor; varying float vVis; varying float vNevoa; varying float vHalo;
+  fragmentShader: `uniform vec3 uRepouso; uniform vec3 uArquivo; varying float vAtiv; varying vec3 vCor; varying float vVis; varying float vNevoa; varying float vHalo; varying float vApagado;
     void main(){ vec2 d = gl_PointCoord - 0.5; float r2 = dot(d, d) * 4.0;
       if (r2 > 1.0) discard;
       float nucleo = exp(-r2 * 9.0 * vHalo * vHalo);
       float halo = exp(-r2 * 5.0) * min(vAtiv, 1.0);
-      vec3 c = mix(uRepouso, vCor, smoothstep(0.0, 0.35, vAtiv));
-      float brilho = nucleo * (0.55 + vAtiv * 1.6) * vNevoa + halo * 0.55;
+      vec3 c = mix(mix(uRepouso, uArquivo, vApagado), vCor, smoothstep(0.0, 0.35, vAtiv));
+      float brilho = nucleo * (0.55 * mix(1.0, 0.45, vApagado) + vAtiv * 1.6) * vNevoa + halo * 0.55;
       gl_FragColor = vec4(c * brilho * vVis, 1.0); }`,
 });
 noMat.blending = THREE.CustomBlending;
@@ -524,12 +541,13 @@ function registrarEEG(i, amp, cor) {
   const n = nos[i];
   eeg.eventos.push({ t: Date.now(), canal: LOBO_IDX[n.l] ?? 7, amp, cor, no: i });
   if (eeg.eventos.length > 2000) eeg.eventos.splice(0, 500);
+  eegPendente = true;
 }
-let eegUltimo = 0;
+let eegUltimo = 0, eegPendente = false;
 function desenharEEG(force) {
   if (!estado.eeg) return;
   const now = Date.now();
-  if (!force && now - eegUltimo < (estado.movimentoReduzido ? 1000 : estado.reduzidos ? 100 : 33)) return;
+  if (!force && now - eegUltimo < (estado.movimentoReduzido ? 1000 : 250)) return;
   eegUltimo = now;
   const dpr = Math.min(devicePixelRatio || 1, 2);
   const W = eeg.canvas.clientWidth, H = eeg.canvas.clientHeight;
@@ -544,7 +562,7 @@ function desenharEEG(force) {
   const grad = c.createLinearGradient(0, 0, 0, H);
   grad.addColorStop(0, 'rgba(7,11,22,0)'); grad.addColorStop(0.35, 'rgba(7,11,22,.72)'); grad.addColorStop(1, 'rgba(7,11,22,.9)');
   c.fillStyle = grad; c.fillRect(0, 0, W, H);
-  c.font = '500 10px Manrope, system-ui, sans-serif';
+  c.font = '500 11px Manrope, system-ui, sans-serif';
   c.textBaseline = 'middle';
   const span = eeg.janela, passo = 2;
   const porCanal = LOBOS.map(() => []);
@@ -553,7 +571,7 @@ function desenharEEG(force) {
   LOBOS.forEach((l, ci) => {
     const y = topo + alt * (ci + 0.5);
     const filtrado = estado.lobo && estado.lobo !== l.id;
-    c.fillStyle = filtrado ? 'rgba(88,98,126,.45)' : '#58627e';
+    c.fillStyle = filtrado ? 'rgba(141,151,179,.45)' : '#8d97b3';
     c.textAlign = 'left';
     c.fillText(estreito ? l.curto : l.nome, estreito ? 8 : 22, y);
     const evs = porCanal[ci];
@@ -562,20 +580,25 @@ function desenharEEG(force) {
     c.beginPath();
     let corAtual = null;
     const segmentos = [];
-    for (let x = x0; x <= x1; x += passo) {
-      const t = now - (x1 - x) / (x1 - x0) * span;
-      const tb = Math.floor(t / 700);
-      let v = (ruido(tb * 0.37, ci * 3.1, 0.5) + 0.6 * ruido(t / 300, ci * 7.7, 2.5)) * 0.9;
-      let corPico = null, maior = 0;
-      for (const e of evs) {
-        const d = (t - e.t) / 1000 * (x1 - x0) / (span / 1000) / 7; // largura do pico em px → tempo
-        if (d < -3 || d > 6) continue;
+    // base de ruído; cada pico só soma nas amostras da sua janela (−21 a +42 px)
+    const nAm = Math.floor((x1 - x0) / passo) + 1;
+    const val = new Float32Array(nAm), maior = new Float32Array(nAm), corPico = new Array(nAm).fill(null);
+    for (let a = 0; a < nAm; a++) {
+      const t = now - (x1 - (x0 + a * passo)) / (x1 - x0) * span;
+      val[a] = (ruido(Math.floor(t / 700) * 0.37, ci * 3.1, 0.5) + 0.6 * ruido(t / 300, ci * 7.7, 2.5)) * 0.9;
+    }
+    for (const e of evs) {
+      const xe = x1 - (now - e.t) / span * (x1 - x0);
+      const a0 = Math.max(0, Math.floor((xe - 21 - x0) / passo)), a1 = Math.min(nAm - 1, Math.ceil((xe + 42 - x0) / passo));
+      for (let a = a0; a <= a1; a++) {
+        const d = (x0 + a * passo - xe) / 7;
         const k = e.amp * (Math.exp(-(d * d) * 1.4) * 9 - Math.exp(-((d - 1.2) ** 2) * 1.2) * 4);
-        v += k;
-        if (Math.abs(k) > maior) { maior = Math.abs(k); corPico = e.cor; }
+        val[a] += k;
+        if (Math.abs(k) > maior[a]) { maior[a] = Math.abs(k); corPico[a] = e.cor; }
       }
-      const yy = y - v * (alt / 12) * 1.0;
-      segmentos.push([x, yy, maior > 0.4 ? corPico : null]);
+    }
+    for (let a = 0; a < nAm; a++) {
+      segmentos.push([x0 + a * passo, y - val[a] * (alt / 12), maior[a] > 0.4 ? corPico[a] : null]);
     }
     const base = filtrado ? 'rgba(86,156,255,.12)' : 'rgba(86,156,255,.35)';
     for (let k = 1; k < segmentos.length; k++) {
@@ -590,7 +613,7 @@ function desenharEEG(force) {
     }
     if (corAtual) c.stroke();
   });
-  c.fillStyle = '#58627e'; c.textAlign = 'left';
+  c.fillStyle = '#8d97b3'; c.textAlign = 'left';
   c.fillText('−5 min', x0, H - 7);
   c.textAlign = 'right';
   c.fillText('agora', x1, H - 7);
@@ -662,7 +685,7 @@ const eventos = {
     sinGeo.setDrawRange(0, arestas.length * SEG * 2);
     sinGeo.attributes.position.needsUpdate = true;
     noGeo.setDrawRange(0, nos.length);
-    ['position', 'aTam', 'aCor', 'aVis'].forEach((k) => { noGeo.attributes[k].needsUpdate = true; });
+    ['position', 'aTam', 'aCor', 'aVis', 'aApagado'].forEach((k) => { noGeo.attributes[k].needsUpdate = true; });
     nascendo.push({ i, t0: agora, arestas: ligar.length });
     registrarEEG(i, 0.85, corDe(i));
     document.getElementById('n-notas').textContent = fmt(nos.length);
@@ -675,6 +698,7 @@ const eventos = {
     disparar(painel, 1.3);
     LOBOS.forEach((l, ci) => setTimeout(() => {
       eeg.eventos.push({ t: Date.now(), canal: ci, amp: 0.45, cor: '#cfe0ff', no: painel });
+      eegPendente = true;
     }, (7 - ci) * 0 + ci * 90));
     aviso('Captura nova no **01_ENTRADA** · onda a partir do centro', '#cfe0ff');
   },
@@ -732,7 +756,7 @@ renderer.domElement.addEventListener('wheel', pausarGiro, { passive: true });
 
 function selecionar(i, centralizar) {
   estado.selecionado = i;
-  if (i < 0) { realceGeo.setDrawRange(0, 0); return; }
+  if (i < 0) { realceGeo.setDrawRange(0, 0); voltarAoCentro(); return; }
   const viz = nos[i].viz.filter(vivo).slice(0, 400);
   const a = new THREE.Vector3().fromArray(posicoes, i * 3), b = new THREE.Vector3(), c = new THREE.Vector3(), p = new THREE.Vector3();
   let o = 0;
@@ -752,20 +776,26 @@ function selecionar(i, centralizar) {
   if (centralizar) voarPara(a);
 }
 let voo = null;
-function voarPara(alvo) {
-  const dist = Math.min(camera.position.distanceTo(controls.target), 2.1);
+const ALVO_CENTRO = new THREE.Vector3(0, -0.25, -0.06);
+const distanciaCentro = () => 2.85 * Math.max(1, 1.12 / (palco.clientWidth / palco.clientHeight));
+function voarPara(alvo, dist = Math.max(1.1, Math.min(camera.position.distanceTo(controls.target), 2.1))) {
   const dir = camera.position.clone().sub(controls.target).normalize();
   voo = {
     t0: agora, dur: estado.movimentoReduzido ? 1 : 900,
     alvo0: controls.target.clone(), alvo1: alvo.clone(),
-    cam0: camera.position.clone(), cam1: alvo.clone().add(dir.multiplyScalar(Math.max(1.1, dist))),
+    cam0: camera.position.clone(), cam1: alvo.clone().add(dir.multiplyScalar(dist)),
   };
+}
+// volta à vista de 3/4 centrada (depois de um clique, Esc ou 20 s sem mexer)
+function voltarAoCentro() {
+  if (controls.target.distanceTo(ALVO_CENTRO) < 0.01 && Math.abs(camera.position.distanceTo(controls.target) - distanciaCentro()) < 0.05) return;
+  voarPara(ALVO_CENTRO, distanciaCentro());
 }
 let giroTimer = 0;
 function pausarGiro() {
   controls.autoRotate = false;
   clearTimeout(giroTimer);
-  giroTimer = setTimeout(() => { controls.autoRotate = !estado.movimentoReduzido; }, 20000);
+  giroTimer = setTimeout(() => { voltarAoCentro(); controls.autoRotate = !estado.movimentoReduzido; }, 20000);
 }
 controls.autoRotate = !estado.movimentoReduzido;
 mqReduzido.addEventListener('change', () => { controls.autoRotate = !estado.movimentoReduzido; });
@@ -865,7 +895,7 @@ function aplicarVisibilidade() {
     const v = Math.min(aVis[a], aVis[b]);
     const base = v >= 1 ? 1 : v > 0 ? 0.08 : 0;
     const o = k * SEG * 2;
-    if (k >= GRAFO.arestas.length && sinAlfa[o] === 0 && base > 0 && nascendo.some((x) => arestas[k].includes(x.i))) continue;
+    if (k >= GRAFO.arestas.length && nascendo.some((x) => arestas[k].includes(x.i))) continue;
     for (let s = 0; s < SEG * 2; s++) sinAlfa[o + s] = base;
   }
   noGeo.attributes.aVis.needsUpdate = true;
@@ -935,9 +965,9 @@ function passoDemo(dt) {
 
 // ---------- laço ----------
 const fmt = (n) => n.toLocaleString('pt-BR');
-document.getElementById('n-notas').textContent = fmt(N0);
-document.getElementById('n-sinapses').textContent = fmt(GRAFO.arestas.length);
-let agora = performance.now(), ultimo = agora, fundoTimer = 600, rodando = true;
+document.getElementById('n-notas').textContent = fmt(GRAFO.notas);
+document.getElementById('n-sinapses').textContent = fmt(GRAFO.sinapses);
+let agora = performance.now(), ultimo = agora, fundoTimer = 600, rodando = true, raf = 0;
 const quadros = []; const perfEl = document.getElementById('desempenho');
 const centro = new THREE.Vector3(0, -0.06, -0.06);
 
@@ -959,6 +989,7 @@ function redimensionar(reenquadrar = true) {
   noMat.uniforms.uEscala.value = escala;
   pulMat.uniforms.uEscala.value = escala;
   fundo.material.uniforms.uAspecto.value = w / h;
+  sinMat.uniforms.uAlfa.value = 0.35 * 0.085 * THREE.MathUtils.clamp(Math.sqrt((w * h) / (1440 * 900)), 0.35, 1);
   desenharEEG(true);
 }
 addEventListener('resize', () => redimensionar());
@@ -966,7 +997,8 @@ redimensionar();
 
 document.addEventListener('visibilitychange', () => {
   rodando = !document.hidden;
-  if (rodando) { ultimo = performance.now(); requestAnimationFrame(quadro); }
+  cancelAnimationFrame(raf);
+  if (rodando) { ultimo = performance.now(); raf = requestAnimationFrame(quadro); }
 });
 
 const ease = (t) => 1 - Math.pow(1 - t, 3);
@@ -1023,7 +1055,7 @@ function quadro(t) {
       }
       sinGeo.attributes.aAlfa.needsUpdate = true;
     }
-    if (p >= 1) { disparar(b.i, 1.2); nascendo.splice(k, 1); }
+    if (p >= 1) { disparar(b.i, 1.2); nascendo.splice(k, 1); aplicarVisibilidade(); }
   }
   noGeo.attributes.aNasc.needsUpdate = true;
 
@@ -1068,14 +1100,14 @@ function quadro(t) {
   noMat.uniforms.uPerto.value = sinMat.uniforms.uPerto.value = dist - 0.7;
   noMat.uniforms.uLonge.value = sinMat.uniforms.uLonge.value = dist + 0.9;
   renderer.render(scene, camera);
-  desenharEEG(false);
+  desenharEEG(eegPendente); eegPendente = false;
 
   if (quadros.length >= 30 && Math.round(t / 500) !== Math.round((t - dt) / 500)) {
     const media = quadros.reduce((a, b) => a + b, 0) / quadros.length;
-    perfEl.textContent = `Desempenho: ${Math.round(1000 / media)} fps · ${fmt(nos.length)} neurônios`;
+    perfEl.textContent = `Desempenho: ${Math.round(1000 / media)} fps · ${fmt(nos.length)} neurônios${SINTETICAS ? ` (${fmt(SINTETICAS)} sintéticos, carga de teste)` : ''}`;
     window.__fps = 1000 / media;
   }
-  requestAnimationFrame(quadro);
+  raf = requestAnimationFrame(quadro);
 }
-requestAnimationFrame(quadro);
+raf = requestAnimationFrame(quadro);
 window.__previa = { eventos, nos, selecionar, estado, camera, controls };
