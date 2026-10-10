@@ -8,7 +8,7 @@
 
 - **Muda o mundo:** de órgão em raio X para galáxia espiral, com a paleta SHO das suas referências (poeira ferrugem, laranja e dourada, cavidade teal e azul, núcleo branco-quente).
 - **Navegação, escolha sua:** voo pela galáxia. A roda voa na direção do ponteiro, atravessando a poeira, e o clique faz um voo curvo até a estrela, com o campo de visão abrindo no meio do caminho.
-- **Fica tudo do produto:** grafo real (1.114 notas e 5.955 sinapses), eventos do Obsidian, busca, filtros, histórico, carga de teste. Fica também cada limite do pedido: só leitura, offline, GPU integrada, pausa com a aba oculta, efeitos reduzidos, `prefers-reduced-motion`.
+- **Fica tudo do produto:** grafo real (1.114 notas e 5.955 sinapses), eventos do Obsidian, busca, filtros, carga de teste. A faixa de histórico "Sinal" saiu por decisão sua; a tela fica só com o céu. Fica também cada limite do pedido: só leitura, offline, GPU integrada, pausa com a aba oculta, efeitos reduzidos, `prefers-reduced-motion`.
 
 ## Mapa do cofre na galáxia
 
@@ -39,7 +39,7 @@
 | Salvar | **Relâmpago de verdade** da estrela até as 4 notas ligadas mais distantes (ao menos metade em outra região). Primeiro desce o líder em degraus, fraco, abrindo galhos; quando toca o destino vem a descarga (o canal inteiro acende), quase apaga, reacende e esfria para violeta. O clarão ilumina a poeira por dentro, como raio em nuvem. **No máximo um raio por nota a cada 15 s**; salvar de novo antes disso dá só um pulso suave |
 | Captura no 01_ENTRADA | **Explosão estelar no núcleo:** estrela-clarão com raios de difração, 420 estilhaços que freiam e esfriam de branco para azul, ouro, laranja e ferrugem, gás que se expande devagar e acende com o clarão, frente de choque fina no plano do disco, tremor curto da câmera e raios curtos nos braços conforme a onda passa |
 | Nota nova | **Estrela nascendo:** 44 grãos de poeira espiralam até um ponto, a estrela acende com um clarão e os filetes entram em seguida |
-| Sem eventos | Estrelas cintilam e, a cada 9–18 s, um trovão distante acende um pedaço da poeira |
+| Sem eventos | Estrelas cintilam e, a cada 9–18 s, um trovão distante acende um pedaço da poeira (com som, se ligado) |
 
 - **Estrelas-hub** (40 ou mais sinapses, e o 00_PAINEL) têm raios de difração em cruz, como a estrela azul da sua foto.
 
@@ -53,7 +53,7 @@
 
 - **Poeira:** cerca de 3.800 nuvens e 500 faixas escuras, cada uma um ponto com textura de um atlas procedural 4×4 gerado no código. É desenhada em **meia resolução** e composta por cima, o que corta o custo de sobreposição em cerca de 4×. O tamanho tem teto relativo à tela, e a nuvem some perto da câmera.
 - **Ajuste automático:** abaixo de 28 fps por 3 s, a resolução cai para 1× e a poeira para 60%. O painel avisa "qualidade ajustada".
-- **Comum ao projeto anterior:** um único laço de render, pausa com a aba oculta, histórico redesenhado a 4×/s e carga de teste com `?carga=1300` ou `#carga1300`.
+- **Comum ao projeto anterior:** um único laço de render, pausa com a aba oculta e carga de teste com `?carga=1300` ou `#carga1300`.
 - **Medido aqui:** só GPU por software, então não vale como número. O real aparece no painel de filtros no seu notebook.
 
 ## Revisão final (aplicada)
@@ -69,7 +69,7 @@ O revisor de acabamento deu "entregar depois das correções". As 8 foram aplica
 7. Brilhos e filetes escalam com o tamanho da tela (painel lateral estreito fica legível).
 8. Textos do canto (#marca e #evento) com fundo suave para ler sobre a poeira, e posição própria no celular.
 
-Capturas em `capturas/` (relógio virtual, fases exatas): 01 galáxia, 02a–c fases do raio, 03a–c fases da explosão, 04 voo, 05 painel lateral 380 px, 06 céu 360°.
+Capturas em `capturas/` (relógio virtual, fases exatas): 01 galáxia, 02a–c fases do raio, 03a–c fases da explosão, 04 voo, 05 painel lateral 380 px, 06 céu 360°, 07 filtros com o som.
 
 ## Depois do ok
 
@@ -77,8 +77,8 @@ Capturas em `capturas/` (relógio virtual, fases exatas): 01 galáxia, 02a–c f
 - **Finalização:** DESIGN.md e capturas com procedência.
 - **Notas para o plugin:** uma folha oculta do Obsidian não dispara `visibilitychange`, então a pausa precisa vir dos eventos de layout e da visibilidade da própria folha; o tamanho vem de um `ResizeObserver` no contêiner (já é assim na prévia).
 
-## Decisões em aberto
+## Decisões do dono (2026-10-10)
 
-1. Clicar numa estrela abre a nota numa aba nova (proposta) ou na mesma?
-2. O histórico ("Sinal") continua na galáxia ou sai para a tela ficar só com o céu?
-3. Som de trovão opcional, desligado por padrão e ativado por você?
+1. **Clique numa estrela abre a nota numa aba nova.** Na prévia o aviso diz "Abriria numa aba nova"; no plugin, `workspace.getLeaf('tab').openFile()`.
+2. **A faixa "Sinal" saiu.** Os botões da simulação e o aviso de evento desceram para o rodapé.
+3. **Som de trovão opcional, desligado por padrão.** Chave "Som de trovão" nos filtros (no plugin, também na aba de configurações). O som é sintetizado na hora (Web Audio, sem arquivos, offline): estalo e ronco ao salvar, chegando junto com a descarga; estrondo grave e longo na captura; e, no trovão distante, o som chega um pouco depois do clarão, como no céu real. Silencia com a aba oculta.

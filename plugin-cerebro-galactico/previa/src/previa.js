@@ -53,7 +53,7 @@ const SHO = {
 
 const mqReduzido = matchMedia('(prefers-reduced-motion: reduce)');
 const estado = {
-  esconderArquivo: false, fundo: true, reduzidos: false, eeg: true,
+  esconderArquivo: false, fundo: true, reduzidos: false, som: false,
   regiao: null, selecionado: -1, sobre: -1, demo: true, qualidadeAjustada: false,
   get movimentoReduzido() { return mqReduzido.matches; },
 };
@@ -1151,98 +1151,47 @@ function propagar(i, forca, saltos, cor, leque = 12) {
   });
 }
 
-// ---------- sinal: um canal por região ----------
-const eeg = { canvas: document.querySelector('#eeg canvas'), eventos: [], janela: 300000 };
-const ctxEEG = eeg.canvas.getContext('2d');
-let eegUltimo = 0, eegPendente = false;
-function registrarEEG(i, amp, cor) {
-  eeg.eventos.push({ t: Date.now(), canal: REG_IDX[nos[i].l] ?? 7, amp, cor, no: i });
-  if (eeg.eventos.length > 2000) eeg.eventos.splice(0, 500);
-  eegPendente = true;
-}
-function geometriaEEG(W, H) {
-  const estreito = W < 560;
-  return { estreito, x0: estreito ? 40 : 118, x1: W - (estreito ? 12 : 22), topo: 6, alt: (H - 6 - 18) / REGIOES.length };
-}
-function desenharEEG(force) {
-  if (!estado.eeg) return;
-  const now = Date.now();
-  if (!force && now - eegUltimo < (estado.movimentoReduzido ? 1000 : 250)) return;
-  eegUltimo = now;
-  const dpr = Math.min(devicePixelRatio || 1, 2);
-  const W = eeg.canvas.clientWidth, H = eeg.canvas.clientHeight;
-  if (eeg.canvas.width !== Math.round(W * dpr) || eeg.canvas.height !== Math.round(H * dpr)) {
-    eeg.canvas.width = Math.round(W * dpr); eeg.canvas.height = Math.round(H * dpr);
+// ---------- som de trovão (opcional, desligado por padrão; sintetizado na hora, sem arquivos) ----------
+const som = { ctx: null, marrom: null, branco: null, saida: null };
+function ligarSom() {
+  if (!som.ctx) {
+    const C = window.AudioContext || window.webkitAudioContext;
+    if (!C) return false;
+    const c = som.ctx = new C(), n = c.sampleRate * 4;
+    som.marrom = c.createBuffer(1, n, c.sampleRate); som.branco = c.createBuffer(1, c.sampleRate, c.sampleRate);
+    // ruído marrom (grave, o ronco) e branco (o estalo do raio perto)
+    const m = som.marrom.getChannelData(0), b = som.branco.getChannelData(0);
+    let u = 0;
+    for (let k = 0; k < n; k++) { u = (u + 0.02 * (Math.random() * 2 - 1)) / 1.02; m[k] = u * 3.5; }
+    for (let k = 0; k < b.length; k++) b[k] = Math.random() * 2 - 1;
+    const comp = c.createDynamicsCompressor();
+    som.saida = c.createGain(); som.saida.gain.value = 0.55;
+    som.saida.connect(comp).connect(c.destination);
   }
-  const c = ctxEEG;
-  c.setTransform(dpr, 0, 0, dpr, 0, 0);
-  c.clearRect(0, 0, W, H);
-  const { estreito, x0, x1, topo, alt } = geometriaEEG(W, H);
-  const grad = c.createLinearGradient(0, 0, 0, H);
-  grad.addColorStop(0, 'rgba(7,11,22,0)'); grad.addColorStop(0.35, 'rgba(7,11,22,.7)'); grad.addColorStop(1, 'rgba(7,11,22,.9)');
-  c.fillStyle = grad; c.fillRect(0, 0, W, H);
-  c.font = '500 11px Manrope, system-ui, sans-serif';
-  c.textBaseline = 'middle';
-  const span = eeg.janela, passo = 2;
-  const porCanal = REGIOES.map(() => []);
-  const minT = now - span - 4000;
-  for (const e of eeg.eventos) if (e.t > minT) porCanal[e.canal].push(e);
-  REGIOES.forEach((l, ci) => {
-    const y = topo + alt * (ci + 0.5);
-    const filtrado = estado.regiao && estado.regiao !== l.id;
-    c.fillStyle = filtrado ? 'rgba(141,151,179,.45)' : '#8d97b3';
-    c.textAlign = 'left';
-    c.fillText(estreito ? l.curto : l.nome, estreito ? 8 : 22, y);
-    const nAm = Math.floor((x1 - x0) / passo) + 1;
-    const val = new Float32Array(nAm), maior = new Float32Array(nAm), corPico = new Array(nAm).fill(null);
-    for (let a = 0; a < nAm; a++) {
-      const t = now - (x1 - (x0 + a * passo)) / (x1 - x0) * span;
-      val[a] = (ruido(Math.floor(t / 700) * 0.37, ci * 3.1, 0.5) + 0.6 * ruido(t / 300, ci * 7.7, 2.5)) * 0.9;
-    }
-    for (const e of porCanal[ci]) {
-      const xe = x1 - (now - e.t) / span * (x1 - x0);
-      const a0 = Math.max(0, Math.floor((xe - 21 - x0) / passo)), a1 = Math.min(nAm - 1, Math.ceil((xe + 42 - x0) / passo));
-      for (let a = a0; a <= a1; a++) {
-        const d = (x0 + a * passo - xe) / 7;
-        const k = e.amp * (Math.exp(-(d * d) * 1.4) * 9 - Math.exp(-((d - 1.2) ** 2) * 1.2) * 4);
-        val[a] += k;
-        if (Math.abs(k) > maior[a]) { maior[a] = Math.abs(k); corPico[a] = e.cor; }
-      }
-    }
-    const base = filtrado ? 'rgba(240,180,76,.10)' : 'rgba(240,180,76,.30)';
-    let corAtual = null;
-    for (let a = 1; a < nAm; a++) {
-      const cor = (maior[a - 1] > 0.4 ? corPico[a - 1] : null) || (maior[a] > 0.4 ? corPico[a] : null) || base;
-      const xa = x0 + (a - 1) * passo, xb = x0 + a * passo;
-      const ya = y - val[a - 1] * (alt / 12), yb = y - val[a] * (alt / 12);
-      if (cor !== corAtual) {
-        if (corAtual) c.stroke();
-        c.beginPath(); c.strokeStyle = cor; c.lineWidth = cor === base ? 1 : 1.4; corAtual = cor;
-        c.moveTo(xa, ya);
-      }
-      c.lineTo(xb, yb);
-    }
-    if (corAtual) c.stroke();
-  });
-  c.fillStyle = '#8d97b3'; c.textAlign = 'left';
-  c.fillText('−5 min', x0, H - 8);
-  c.textAlign = 'right';
-  c.fillText('agora', x1, H - 8);
+  som.ctx.resume();
+  return true;
 }
-function eventoNoEEG(cx, cy) {
-  const r = eeg.canvas.getBoundingClientRect();
-  const { x0, x1, topo, alt } = geometriaEEG(r.width, r.height);
-  const x = cx - r.left, y = cy - r.top;
-  const canal = Math.floor((y - topo) / alt);
-  if (canal < 0 || canal >= REGIOES.length || x < x0 - 6) return null;
-  const t = Date.now() - (x1 - x) / (x1 - x0) * eeg.janela;
-  let melhor = null, md = Infinity;
-  for (const e of eeg.eventos) {
-    if (e.canal !== canal || e.amp < 0.3) continue;
-    const dpx = Math.abs(e.t - t) / eeg.janela * (x1 - x0);
-    if (dpx < 10 && dpx < md) { md = dpx; melhor = e; }
+// estalo: o canal perto; ronco: o som que rola depois, em ondas, cada vez mais grave
+function trovao({ estalo = 0, ronco = 0.5, atraso = 0, dur = 2.6, grave = 220 } = {}) {
+  if (!estado.som || !som.ctx || document.hidden) return;
+  const c = som.ctx, t0 = c.currentTime + atraso / 1000;
+  if (estalo) {
+    const src = c.createBufferSource(), hp = c.createBiquadFilter(), g = c.createGain();
+    src.buffer = som.branco; hp.type = 'highpass'; hp.frequency.value = 900;
+    g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(estalo, t0 + 0.006);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.32);
+    src.connect(hp).connect(g).connect(som.saida); src.start(t0, Math.random() * 0.5, 0.4);
   }
-  return melhor;
+  const src = c.createBufferSource(), lp = c.createBiquadFilter(), g = c.createGain();
+  src.buffer = som.marrom; src.playbackRate.value = 0.8 + Math.random() * 0.4;
+  lp.type = 'lowpass';
+  lp.frequency.setValueAtTime(grave * 2.2, t0); lp.frequency.exponentialRampToValueAtTime(grave * 0.45, t0 + dur);
+  const pico = estalo ? 0.06 : 0.25;
+  g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(ronco, t0 + pico);
+  g.gain.exponentialRampToValueAtTime(ronco * 0.4, t0 + dur * 0.22);
+  g.gain.exponentialRampToValueAtTime(ronco * 0.75, t0 + dur * 0.36);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  src.connect(lp).connect(g).connect(som.saida); src.start(t0, Math.random() * (4 - dur - 0.2), dur + 0.1);
 }
 
 // ---------- eventos (no plugin: workspace 'file-open', vault 'modify' / 'create') ----------
@@ -1267,12 +1216,10 @@ const eventos = {
     if (!vivo(i)) return;
     propagar(i, 1.0, 2, corDe(i), 12);
     clarao(posDe(i), corDe(i), 0.35, 0.08, 900);
-    registrarEEG(i, 0.75, corDe(i));
-    if (origem) aviso(`${origem === 'clique' ? 'Abriria' : 'Abriu'} **${nos[i].t}** · ${NOME_TIPO[nos[i].k]} no ${nomeRegiao(i).onde}`, corDe(i));
+    if (origem) aviso(`${origem === 'clique' ? 'Abriria numa aba nova' : 'Abriu'} **${nos[i].t}** · ${NOME_TIPO[nos[i].k]} no ${nomeRegiao(i).onde}`, corDe(i));
   },
   salvar(i) {
     if (!vivo(i)) return;
-    registrarEEG(i, 1.0, corDe(i));
     // o Obsidian salva a cada ~2 s enquanto se digita: raio cheio no máximo 1 vez a cada 15 s por nota
     if (agora - (ultimoRaio.get(i) ?? -1e9) < INTERVALO_RAIO) {
       propagar(i, 0.7, 1, corDe(i), 6);
@@ -1290,6 +1237,7 @@ const eventos = {
     const resto = [...fora.slice(metade.length), ...dentro].sort((x, y) => y[1] - x[1]).slice(0, qtd - metade.length);
     const escolhidos = [...metade, ...resto].map(([j]) => j);
     clarao(a, corDe(i), 0.55, 0.13, 900, true);
+    trovao({ estalo: 0.5, ronco: 0.6, atraso: estado.movimentoReduzido ? 0 : LIDER, dur: 2.4, grave: 260 });
     escolhidos.forEach((j, k) => setTimeout(() => {
       raio(a, posDe(j), corDe(i), k ? 0.75 : 1, k < 3);
       setTimeout(() => disparar(j, 0.9), estado.movimentoReduzido ? 0 : LIDER);
@@ -1339,7 +1287,6 @@ const eventos = {
     }
     nascendo.push({ i, t0: agora, arestas: novas });
     uDens.value = densidade(arestas.length);
-    registrarEEG(i, 0.85, corDe(i));
     document.getElementById('n-notas').textContent = fmt(nos.length - SINTETICAS);
     document.getElementById('n-sinapses').textContent = fmt(arestas.length - (GRAFO.arestas.length - GRAFO.sinapses));
     atualizarTextoPoeira();
@@ -1355,8 +1302,7 @@ const eventos = {
     clarao(new THREE.Vector3(0, 0, 0), '#fff1d6', 0.5, 0.24, 1300);
     setTimeout(() => clarao(new THREE.Vector3(0, 0, 0), '#e0733a', 0.35, 0.5, 1800), estado.movimentoReduzido ? 0 : 260);
     if (!estado.movimentoReduzido && !estado.reduzidos) abalo = { t0: agora };
-    REGIOES.forEach((_, ci) => { eeg.eventos.push({ t: Date.now(), canal: ci, amp: 0.45, cor: '#cfe6ff', no: painel }); });
-    eegPendente = true;
+    trovao({ estalo: 0.35, ronco: 0.95, dur: 3.8, grave: 130 });
     aviso('Captura nova no **01_ENTRADA** · tempestade a partir do núcleo', '#cfe6ff');
   },
 };
@@ -1532,7 +1478,6 @@ const regioesEl = document.getElementById('lobos');
     estado.regiao = l.id;
     [...regioesEl.children].forEach((x) => x.setAttribute('aria-pressed', x === b ? 'true' : 'false'));
     aplicarVisibilidade();
-    desenharEEG(true);
   });
   regioesEl.append(b);
 });
@@ -1574,20 +1519,11 @@ function atualizarTextoPoeira() {
 document.getElementById('f-arquivo').addEventListener('change', (e) => { estado.esconderArquivo = e.target.checked; aplicarVisibilidade(); });
 document.getElementById('f-fundo').addEventListener('change', (e) => { estado.fundo = e.target.checked; });
 document.getElementById('f-reduzidos').addEventListener('change', (e) => { estado.reduzidos = e.target.checked; atualizarPoeira(); redimensionar(false); });
-document.getElementById('f-eeg').addEventListener('change', (e) => {
-  estado.eeg = e.target.checked;
-  document.getElementById('eeg').hidden = !estado.eeg;
+document.getElementById('f-som').addEventListener('change', (e) => {
+  estado.som = e.target.checked && ligarSom();
+  e.target.checked = estado.som;
+  if (estado.som) trovao({ ronco: 0.3, dur: 2.2, grave: 180 }); // um ronco baixo confirma que o som está ligado
 });
-eeg.canvas.addEventListener('click', (e) => {
-  const ev = eventoNoEEG(e.clientX, e.clientY);
-  if (ev && vivo(ev.no)) { pausarGiro(); selecionar(ev.no, true); eventos.abrir(ev.no, 'clique'); }
-});
-eeg.canvas.addEventListener('mousemove', (e) => {
-  const ev = eventoNoEEG(e.clientX, e.clientY);
-  eeg.canvas.style.cursor = ev ? 'pointer' : 'default';
-  if (ev) mostrarRotulo(ev.no, e.clientX, e.clientY - 18); else if (!ponteiro.dentro) mostrarRotulo(-1);
-});
-eeg.canvas.addEventListener('mouseleave', () => mostrarRotulo(-1));
 
 // ---------- simulação (só na prévia) ----------
 const rSim = rng(2024);
@@ -1619,15 +1555,6 @@ function passoDemo(dt) {
   else if (r < 0.91) { eventos.captura(); proxDemo = 4600; }
   else { eventos.nova(foco); proxDemo = 4600; }
 }
-{
-  const agora0 = Date.now(), r = rng(5);
-  for (let k = 0; k < 46; k++) {
-    const i = Math.floor(r() * N0), t = agora0 - r() * eeg.janela * 0.98;
-    eeg.eventos.push({ t, canal: REG_IDX[nos[i].l] ?? 7, amp: r() < 0.25 ? 0.18 : 0.5 + r() * 0.5, cor: corDe(i), no: i });
-  }
-  eeg.eventos.sort((a, b) => a.t - b.t);
-}
-
 // ---------- laço ----------
 const fmt = (n) => n.toLocaleString('pt-BR');
 document.getElementById('n-notas').textContent = fmt(GRAFO.notas);
@@ -1660,7 +1587,6 @@ function redimensionar(reenquadrar = true) {
   uProjCeu.value = uProj.value; uCapCeu.value = 0.2 * h * dpr;
   scene.getObjectByName('ceu').material.uniforms.uDpr.value = dpr;
   fundo.material.uniforms.uAspecto.value = w / h;
-  desenharEEG(true);
 }
 // observa o palco, não a janela: no plugin a aba muda de tamanho sem 'resize' na janela
 new ResizeObserver(() => redimensionar()).observe(palco);
@@ -1668,6 +1594,7 @@ redimensionar();
 
 document.addEventListener('visibilitychange', () => {
   rodando = !document.hidden;
+  if (som.ctx) { if (rodando && estado.som) som.ctx.resume(); else som.ctx.suspend(); }
   cancelAnimationFrame(raf);
   if (rodando) { ultimo = performance.now(); raf = requestAnimationFrame(quadro); }
 });
@@ -1698,7 +1625,11 @@ function quadro(t) {
     trovaoLonge -= dt;
     if (trovaoLonge <= 0 && !estado.movimentoReduzido) {
       const i = Math.floor(Math.random() * N0);
-      if (vivo(i)) clarao(posDe(i), Math.random() < 0.5 ? '#f0b44c' : '#3cc3d0', 0.32, 0.12, 900, true);
+      if (vivo(i)) {
+        clarao(posDe(i), Math.random() < 0.5 ? '#f0b44c' : '#3cc3d0', 0.32, 0.12, 900, true);
+        // trovão distante: o som chega depois do clarão, como no céu de verdade
+        trovao({ ronco: 0.16, atraso: 700 + Math.random() * 1200, dur: 3, grave: 150 });
+      }
       trovaoLonge = 9000 + Math.random() * 9000;
     }
   }
@@ -1826,7 +1757,6 @@ function quadro(t) {
   renderer.setClearColor(0x070b16, 1);
   renderer.render(scene, camera);
   camera.position.sub(desloc);
-  desenharEEG(eegPendente); eegPendente = false;
 
   if (quadros.length >= 30 && Math.round(t / 500) !== Math.round((t - dt) / 500)) {
     const media = quadros.reduce((a, b) => a + b, 0) / quadros.length;

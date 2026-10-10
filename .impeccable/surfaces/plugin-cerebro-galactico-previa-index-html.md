@@ -17,7 +17,7 @@ OWN-WORLD: Hubble SHO palette from the owner's plates. Ground is the theme's #07
 
 STORY: open in the morning to a galaxy turning slowly. Scrolling flies into it through layered dust toward the pointer. A click flies to a star and opens the note. Work happens as weather: opening sends light along the lanes, saving throws lightning, a capture raises a storm from the core, and a new note condenses from dust.
 
-FIRST VIEWPORT: the galaxy at about 40° tilt (28° flattened the spiral in the first render), its disk filling about 80% of the width. The warm core sits slightly above centre, inside its teal cavity. Top left: "Cérebro Galáctico" with 1.114 estrelas · 5.955 sinapses. Top right: search (Ctrl+K) and filters. Bottom: a thin signal strip, one channel per region. Hover shows the star's name.
+FIRST VIEWPORT: the galaxy at about 40° tilt (28° flattened the spiral in the first render), its disk filling about 80% of the width. The warm core sits slightly above centre, inside its teal cavity. Top left: "Cérebro Galáctico" with 1.114 estrelas · 5.955 sinapses. Top right: search (Ctrl+K) and filters. Bottom: nothing but sky (the owner removed the signal strip on 2026-10-10); the preview-only simulation buttons sit in the bottom-right corner. Hover shows the star's name.
 
 FORM: owner's pick (flight-through nebula, reference video 1) over the dealt orienteering-map direction. The world is pinned by the owner's references (SHO nebula plate, nebula flight, cosmic vortex). Seed key db2a0df3. Signature moment: saving a note throws branching lightning from its star to its linked stars, and the flash lights the surrounding dust from inside, like lightning in a cloud.
 

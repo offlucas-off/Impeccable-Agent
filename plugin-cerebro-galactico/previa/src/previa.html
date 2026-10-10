@@ -138,13 +138,9 @@ body {
 #rotulo strong { display: block; font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #rotulo span { color: var(--cb-muted); font-size: 11.5px; }
 
-/* ---------- sinal ---------- */
-#eeg { left: 0; right: 0; bottom: 0; height: 124px; pointer-events: none; }
-#eeg canvas { width: 100%; height: 100%; display: block; pointer-events: auto; }
-
 /* ---------- prévia: simulação ---------- */
 #simular {
-  right: 16px; bottom: 132px; display: flex; align-items: center; gap: 4px; flex-wrap: wrap; justify-content: flex-end;
+  right: 16px; bottom: 16px; display: flex; align-items: center; gap: 4px; flex-wrap: wrap; justify-content: flex-end;
   max-width: calc(100vw - 32px);
 }
 #simular .legenda { color: var(--cb-muted); font-size: 11.5px; margin-right: 4px; }
@@ -157,7 +153,7 @@ body {
 #simular button:hover { color: var(--cb-fg); border-color: var(--cb-edge); }
 #simular button[aria-pressed="true"] { color: var(--cb-fg); border-color: rgba(126, 162, 255, .5); }
 #evento {
-  left: 12px; bottom: 168px; max-width: min(540px, calc(100vw - 24px)); pointer-events: none;
+  left: 12px; bottom: 14px; max-width: min(540px, calc(100vw - 24px)); pointer-events: none;
   padding: 6px 10px; border-radius: 14px; background: radial-gradient(closest-side, rgba(7, 11, 22, .75), rgba(7, 11, 22, .35));
   text-shadow: 0 0 10px var(--cb-bg), 0 0 3px var(--cb-bg);
   color: var(--cb-muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -180,9 +176,8 @@ body {
   #busca kbd { display: none; }
   #resultados { width: calc(100vw - 20px); right: -42px; }
   #simular .legenda { display: none; }
-  #simular { right: 10px; bottom: 128px; }
-  #evento { left: 4px; bottom: 196px; }
-  #eeg { height: 120px; }
+  #simular { right: 10px; bottom: 10px; }
+  #evento { left: 4px; bottom: 76px; }
 }
 @media (prefers-reduced-motion: reduce) {
   * { transition-duration: 0s !important; }
@@ -216,7 +211,7 @@ body {
         <label class="chave">Esconder 99_ARQUIVO (halo) <input type="checkbox" id="f-arquivo"></label>
         <label class="chave">Atividade de fundo <input type="checkbox" id="f-fundo" checked></label>
         <label class="chave">Efeitos reduzidos <input type="checkbox" id="f-reduzidos"></label>
-        <label class="chave">Sinal (histórico) <input type="checkbox" id="f-eeg" checked></label>
+        <label class="chave">Som de trovão <input type="checkbox" id="f-som"></label>
       </div>
       <h2>Só uma região</h2>
       <div id="lobos"></div>
@@ -237,8 +232,6 @@ body {
   <button data-evento="captura">Captura no 01_ENTRADA</button>
   <button id="demo" aria-pressed="true">Manhã de trabalho</button>
 </div>
-
-<div id="eeg" class="hud"><canvas aria-label="Sinal de atividade por região da galáxia, últimos 5 minutos. Clique num pico para ir à nota."></canvas></div>
 
 <div id="sem-webgl" hidden><div><strong>A galáxia precisa de WebGL.</strong>Este computador ou navegador não liberou a aceleração gráfica.</div></div>
 
