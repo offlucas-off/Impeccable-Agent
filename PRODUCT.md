@@ -36,7 +36,7 @@ The vault's own mechanism is the **blindagem ladder**: 0 incident → 1 rule in 
 - Item IDs (RG-*, INC-*, DEC-*) should open the matching note in Obsidian (`obsidian://` link) — undecided whether the owner wants this.
 - Text in Brazilian Portuguese, using the vault's own terms (blindagem, reincidência, aplicar_por, prazo, n1–n4).
 - Undecided: whether the history CSV should drive trend lines beyond the current snapshot.
-- Second surface: Obsidian plugin "Cérebro em raio X" (`plugin-cerebro-raio-x/`), the vault drawn as a living brain on Obsidian desktop. TypeScript, read-only, offline, bundled dependencies at exact versions, must match the owner's "Cerebro" Obsidian theme (`referencias/tema-cerebro/`) without replacing it. (Confirmed by the owner, 2026-10-10.)
+- Second surface: Obsidian plugin "Cérebro Galáctico" (`plugin-cerebro-galactico/`), the vault drawn as a spiral galaxy on Obsidian desktop (replaced the archived brain version "Cérebro em raio X", `arquivo/plugin-cerebro-raio-x/`, on 2026-10-10). TypeScript, read-only, offline, bundled dependencies at exact versions, must match the owner's "Cerebro" Obsidian theme (`referencias/tema-cerebro/`) without replacing it. (Confirmed by the owner, 2026-10-10.)
 
 ## Evidence on Hand
 

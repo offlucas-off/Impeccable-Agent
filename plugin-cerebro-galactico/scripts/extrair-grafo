@@ -1,0 +1,92 @@
+#!/usr/bin/env python3
+"""Extrai o grafo do cofre (notas = neurônios, [[links]] = sinapses) para a prévia.
+
+Uso: scripts/extrair-grafo <pasta-do-cofre> [saida.json]
+
+Só lê o cofre. Resolve links como o Obsidian: caminho relativo exato ou nome
+do arquivo (no empate, o caminho mais curto). Ignora blocos de código. A saída
+é determinística (ordem por caminho), então duas execuções no mesmo commit
+geram o mesmo arquivo.
+"""
+import json
+import re
+import sys
+from pathlib import Path
+
+FORA = {".git", ".obsidian", ".trash"}
+LINK = re.compile(r"!?\[\[([^\]\|#\^]+)(?:[#\^][^\]\|]*)?(?:\|[^\]]*)?\]\]")
+CERCA = re.compile(r"^(```|~~~).*?^\1", re.S | re.M)
+
+# pasta de topo -> (lobo, tipo de disparo)
+LOBOS = {
+    "60_CONHECIMENTO": ("frontal", "conhecimento"),
+    "10_PROJETOS": ("parietal", "projeto"),
+    "20_REGRAS": ("temporal", "regra"),
+    "50_METODOS": ("temporal", "metodo"),
+    "30_INCIDENTES": ("occipital", "incidente"),
+    "40_DECISOES": ("motor", "decisao"),
+    "70_FONTES": ("cerebelo", "fonte"),
+    "80_PESQUISA": ("cerebelo", "pesquisa"),
+    "99_ARQUIVO": ("tronco", "arquivo"),
+    "90_SISTEMA": ("talamo", "sistema"),
+}
+
+
+def main():
+    if len(sys.argv) < 2:
+        sys.exit("uso: extrair-grafo <pasta-do-cofre> [saida.json]")
+    raiz = Path(sys.argv[1]).resolve()
+    saida = Path(sys.argv[2]) if len(sys.argv) > 2 else Path("grafo.json")
+
+    arquivos = sorted(
+        p for p in raiz.rglob("*.md")
+        if not FORA.intersection(p.relative_to(raiz).parts)
+    )
+    caminhos = [p.relative_to(raiz).with_suffix("").as_posix() for p in arquivos]
+    por_caminho = {c.lower(): i for i, c in enumerate(caminhos)}
+    por_nome = {}
+    for i, c in enumerate(caminhos):
+        por_nome.setdefault(c.rsplit("/", 1)[-1].lower(), []).append(i)
+    for lista in por_nome.values():
+        lista.sort(key=lambda i: (caminhos[i].count("/"), caminhos[i]))
+
+    nos = []
+    for c in caminhos:
+        partes = c.split("/")
+        topo = partes[0] if len(partes) > 1 else ""
+        lobo, tipo = LOBOS.get(topo, ("talamo", "sistema"))
+        # sub-região: 2º nível de 60_CONHECIMENTO (VIDEO, AUDIO...) e de VIDEO
+        sub = ""
+        if topo == "60_CONHECIMENTO" and len(partes) > 2:
+            sub = partes[1]
+            if sub == "VIDEO" and len(partes) > 3:
+                sub = "VIDEO/" + partes[2]
+        elif topo == "10_PROJETOS" and len(partes) > 2:
+            sub = partes[1]
+        nos.append({"id": c, "t": partes[-1], "l": lobo, "k": tipo, "s": sub})
+
+    arestas = set()
+    for i, p in enumerate(arquivos):
+        texto = CERCA.sub("", p.read_text(encoding="utf-8", errors="replace"))
+        for alvo in LINK.findall(texto):
+            alvo = alvo.strip().removesuffix(".md").lower()
+            j = por_caminho.get(alvo)
+            if j is None:
+                candidatos = por_nome.get(alvo.rsplit("/", 1)[-1])
+                j = candidatos[0] if candidatos else None
+            if j is not None and j != i:
+                arestas.add((min(i, j), max(i, j)))
+
+    grafo = {
+        "fonte": raiz.name,
+        "notas": len(nos),
+        "sinapses": len(arestas),
+        "nos": nos,
+        "arestas": sorted(arestas),
+    }
+    saida.write_text(json.dumps(grafo, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    print(f"{len(nos)} notas, {len(arestas)} sinapses -> {saida}")
+
+
+if __name__ == "__main__":
+    main()
