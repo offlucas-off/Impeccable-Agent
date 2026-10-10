@@ -50,7 +50,9 @@ body {
 
 /* ---------- HUD ---------- */
 .hud { position: fixed; z-index: 2; }
-#marca { top: 18px; left: 22px; pointer-events: none; }
+/* véu suave atrás do texto do HUD: a poeira brilhante passa por baixo sem roubar o contraste */
+#marca { top: 18px; left: 22px; pointer-events: none; isolation: isolate; text-shadow: 0 0 10px var(--cb-bg), 0 0 3px var(--cb-bg); }
+#marca::before { content: ''; position: absolute; inset: -16px -36px; z-index: -1; background: radial-gradient(closest-side, rgba(7, 11, 22, .75), rgba(7, 11, 22, 0)); }
 #marca h1 { margin: 0; font-size: 15px; font-weight: 700; letter-spacing: -0.01em; }
 #marca p { margin: 2px 0 0; color: var(--cb-muted); font-size: 12px; }
 #marca p b { color: var(--cb-fg); font-weight: 500; }
@@ -155,7 +157,9 @@ body {
 #simular button:hover { color: var(--cb-fg); border-color: var(--cb-edge); }
 #simular button[aria-pressed="true"] { color: var(--cb-fg); border-color: rgba(126, 162, 255, .5); }
 #evento {
-  left: 22px; bottom: 136px; max-width: min(520px, calc(100vw - 44px)); pointer-events: none;
+  left: 12px; bottom: 168px; max-width: min(540px, calc(100vw - 24px)); pointer-events: none;
+  padding: 6px 10px; border-radius: 14px; background: radial-gradient(closest-side, rgba(7, 11, 22, .75), rgba(7, 11, 22, .35));
+  text-shadow: 0 0 10px var(--cb-bg), 0 0 3px var(--cb-bg);
   color: var(--cb-muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   transition: opacity .4s var(--ease);
 }
@@ -177,7 +181,7 @@ body {
   #resultados { width: calc(100vw - 20px); right: -42px; }
   #simular .legenda { display: none; }
   #simular { right: 10px; bottom: 128px; }
-  #evento { left: 14px; bottom: 164px; }
+  #evento { left: 4px; bottom: 196px; }
   #eeg { height: 120px; }
 }
 @media (prefers-reduced-motion: reduce) {

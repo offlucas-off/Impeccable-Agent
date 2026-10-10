@@ -206,7 +206,7 @@ controls.zoomSpeed = 1.1;
 controls.rotateSpeed = 0.55;
 controls.autoRotateSpeed = 0.12;
 
-// fundo: halo do tema e um véu violeta muito leve (referência do voo pela nebulosa)
+// fundo: o chão do tema (#070b16) com o halo #0c1630 do tamanho do disco
 const fundo = new THREE.Mesh(
   new THREE.PlaneGeometry(2, 2),
   new THREE.ShaderMaterial({
@@ -214,41 +214,210 @@ const fundo = new THREE.Mesh(
     uniforms: { uAspecto: { value: 1 } },
     vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
     fragmentShader: `varying vec2 vUv; uniform float uAspecto;
-      void main(){ vec2 p = (vUv - vec2(0.5, 0.55)) * vec2(uAspecto, 1.0);
-        float h = smoothstep(0.95, 0.0, length(p));
-        float v = smoothstep(0.9, 0.0, length(p - vec2(-0.55 * uAspecto, 0.35)));
-        vec3 c = mix(vec3(0.0275, 0.043, 0.086), vec3(0.047, 0.086, 0.188), h * 0.85);
-        c += vec3(0.05, 0.025, 0.09) * v * 0.55;
-        gl_FragColor = vec4(c, 1.0); }`,
+      void main(){ vec2 p = (vUv - vec2(0.5, 0.55)) * vec2(uAspecto, 1.0) / min(uAspecto, 1.0);
+        float h = smoothstep(0.9, 0.0, length(p));
+        gl_FragColor = vec4(mix(vec3(0.0275, 0.043, 0.086), vec3(0.047, 0.086, 0.188), h * h * 0.8), 1.0); }`,
   }),
 );
 fundo.frustumCulled = false; fundo.renderOrder = -10;
 scene.add(fundo);
 
-// céu distante (cenário, não são notas)
+// ---------- céu 360°: Via Láctea, estrelas e galáxias distantes ----------
+// A Via Láctea e as estrelas ficam no infinito (acompanham a câmera). As galáxias ficam
+// em camadas de 14 a 38 unidades e não acompanham: é a paralaxe delas que dá a profundidade no voo.
+const RUIDO_GLSL = `
+  float h3(vec3 p){ p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
+  float vn(vec3 x){ vec3 i = floor(x), f = fract(x); f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(mix(h3(i), h3(i + vec3(1,0,0)), f.x), mix(h3(i + vec3(0,1,0)), h3(i + vec3(1,1,0)), f.x), f.y),
+               mix(mix(h3(i + vec3(0,0,1)), h3(i + vec3(1,0,1)), f.x), mix(h3(i + vec3(0,1,1)), h3(i + vec3(1,1,1)), f.x), f.y), f.z); }
+  float fbm(vec3 p){ float s = 0.0, a = 0.5; for (int i = 0; i < 6; i++) { s += a * vn(p); p = p * 2.03 + vec3(1.7, 9.2, 3.1); a *= 0.5; } return s; }`;
+const NORMAL_VIA = new THREE.Vector3(0.42, 0.78, -0.46).normalize();
+const grupoCeu = new THREE.Group();
+grupoCeu.renderOrder = -9;
+scene.add(grupoCeu);
+// a Via Láctea é calculada uma vez na GPU para uma textura equirretangular e depois só amostrada
+const texVia = (() => {
+  const rt = new THREE.WebGLRenderTarget(2048, 1024, { depthBuffer: false, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, generateMipmaps: false });
+  const cena = new THREE.Scene(), cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+  cena.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMaterial({
+    uniforms: { uN: { value: NORMAL_VIA } },
+    vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
+    fragmentShader: `uniform vec3 uN; varying vec2 vUv; ${RUIDO_GLSL}
+      void main(){
+        float lon = (vUv.x - 0.5) * 6.2831853, lat = (vUv.y - 0.5) * 3.1415927;
+        vec3 dir = vec3(cos(lat) * sin(lon), sin(lat), cos(lat) * cos(lon));
+        vec3 C = normalize(cross(uN, vec3(0.0, 0.0, 1.0)));
+        float bojo = exp(-dot(dir - C, dir - C) / 0.35);
+        float d = dot(dir, uN), d2 = d + (fbm(dir * 2.5) - 0.5) * 0.12;
+        float brilho = exp(-d2 * d2 / 0.010) * (0.5 + 0.5 * bojo) + exp(-d2 * d2 / 0.06) * 0.22;
+        float mancha = fbm(dir * 6.0 + 3.0);
+        brilho *= 0.35 + mancha * 1.2;
+        // faixas escuras de poeira, concentradas na linha central (a Grande Fenda)
+        float faixa = smoothstep(0.47, 0.64, fbm(dir * 9.0 + 11.0)) * exp(-d * d / 0.005);
+        brilho *= 1.0 - 0.85 * faixa;
+        vec3 cor = mix(vec3(0.55, 0.62, 0.86), vec3(0.88, 0.75, 0.6), clamp(bojo * 0.8 + mancha * 0.3, 0.0, 1.0)) * brilho;
+        // estrelas não resolvidas: o grão da faixa
+        // regiões HII rosadas ao longo da faixa
+        cor += vec3(0.78, 0.3, 0.38) * smoothstep(0.6, 0.78, fbm(dir * 4.0 + 20.0)) * exp(-d * d / 0.02) * 0.45;
+        cor += vec3(0.05, 0.06, 0.1) * fbm(dir * 1.5 + 7.0) * 0.4;
+        gl_FragColor = vec4(cor, 1.0); }`,
+  })));
+  renderer.setRenderTarget(rt); renderer.render(cena, cam); renderer.setRenderTarget(null);
+  cena.children[0].geometry.dispose(); cena.children[0].material.dispose();
+  return rt.texture;
+})();
 {
-  const r = rng(404), n = 1600, pos = new Float32Array(n * 3), cor = new Float32Array(n * 3), tam = new Float32Array(n);
-  const c = new THREE.Color();
+  const m = new THREE.ShaderMaterial({
+    transparent: true, depthTest: false, depthWrite: false, side: THREE.BackSide,
+    uniforms: { uVia: { value: texVia }, uIntens: { value: 0.3 } },
+    vertexShader: 'varying vec3 vD; void main(){ vD = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+    fragmentShader: `uniform sampler2D uVia; uniform float uIntens; varying vec3 vD;
+      void main(){ vec3 d = normalize(vD);
+        vec2 uv = vec2(atan(d.x, d.z) / 6.2831853 + 0.5, asin(clamp(d.y, -1.0, 1.0)) / 3.1415927 + 0.5);
+        gl_FragColor = vec4(texture2D(uVia, uv).rgb * uIntens, 1.0); }`,
+  });
+  m.blending = THREE.CustomBlending; m.blendSrc = THREE.OneFactor; m.blendDst = THREE.OneFactor;
+  const via = new THREE.Mesh(new THREE.SphereGeometry(40, 64, 32), m);
+  via.frustumCulled = false; via.renderOrder = -9.5;
+  grupoCeu.add(via);
+}
+// estrelas: 55% concentradas na faixa, as mais brilhantes com raios de difração
+{
+  const r = rng(404), n = 14000, pos = new Float32Array(n * 3), cor = new Float32Array(n * 3), tam = new Float32Array(n);
+  const c = new THREE.Color(), v = new THREE.Vector3();
+  const cores = ['#ffffff', '#cfe0ff', '#aac8ff', '#ffe2c4', '#ffd0a8', '#ffb98a'];
   for (let i = 0; i < n; i++) {
-    const v = new THREE.Vector3(gauss(r), gauss(r), gauss(r)).normalize().multiplyScalar(30);
+    v.set(gauss(r), gauss(r), gauss(r)).normalize();
+    const naFaixa = r() < 0.6;
+    if (naFaixa) { const d = v.dot(NORMAL_VIA); v.addScaledVector(NORMAL_VIA, -d + gauss(r) * 0.06).normalize(); }
+    v.multiplyScalar(30);
     pos.set([v.x, v.y, v.z], i * 3);
-    c.set(['#ffffff', '#cfe0ff', '#ffe2c4', '#ffd0a8'][Math.floor(r() * 4)]);
+    c.set(cores[Math.floor(r() * cores.length)]);
     cor.set([c.r, c.g, c.b], i * 3);
-    tam[i] = 0.5 + Math.pow(r(), 3) * 1.6;
+    tam[i] = naFaixa ? 0.3 + Math.pow(r(), 9) * 2.6 : 0.4 + Math.pow(r(), 7) * 3.2;
   }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   g.setAttribute('aCor', new THREE.BufferAttribute(cor, 3));
   g.setAttribute('aTam', new THREE.BufferAttribute(tam, 1));
   const m = new THREE.ShaderMaterial({
-    transparent: true, depthTest: false, depthWrite: false, blending: THREE.AdditiveBlending,
+    transparent: true, depthTest: false, depthWrite: false,
     uniforms: { uDpr: { value: 1 } },
-    vertexShader: `attribute vec3 aCor; attribute float aTam; uniform float uDpr; varying vec3 vC;
-      void main(){ vC = aCor; vec4 mv = modelViewMatrix * vec4(position, 1.0); gl_PointSize = aTam * uDpr * 1.6; gl_Position = projectionMatrix * mv; }`,
-    fragmentShader: `varying vec3 vC; void main(){ vec2 d = gl_PointCoord - 0.5; float a = exp(-dot(d, d) * 18.0); gl_FragColor = vec4(vC, a * 0.55); }`,
+    vertexShader: `attribute vec3 aCor; attribute float aTam; uniform float uDpr; varying vec3 vC; varying float vE;
+      void main(){ vC = aCor; vE = step(2.0, aTam); vec4 mv = modelViewMatrix * vec4(position, 1.0);
+        gl_PointSize = aTam * uDpr * (1.6 + vE * 4.0); gl_Position = projectionMatrix * mv; }`,
+    fragmentShader: `varying vec3 vC; varying float vE;
+      void main(){ vec2 d = gl_PointCoord - 0.5; float k = 1.0 + vE * 4.0;
+        float a = exp(-dot(d, d) * 18.0 * k * k);
+        vec2 q = abs(d) * 2.0;
+        a += vE * (exp(-q.x * 60.0) * exp(-q.y * 4.0) + exp(-q.y * 60.0) * exp(-q.x * 4.0)) * 0.5;
+        gl_FragColor = vec4(vC * a * 0.6, 1.0); }`,
   });
+  m.blending = THREE.CustomBlending; m.blendSrc = THREE.OneFactor; m.blendDst = THREE.OneFactor;
   const ceu = new THREE.Points(g, m); ceu.frustumCulled = false; ceu.renderOrder = -9; ceu.name = 'ceu';
-  scene.add(ceu);
+  grupoCeu.add(ceu);
+}
+// atlas de galáxias e nebulosas distantes (4×4), gerado no código
+function atlasGalaxias() {
+  const C = 160, N = 4, cv = document.createElement('canvas');
+  cv.width = cv.height = C * N;
+  const ctx = cv.getContext('2d'), img = ctx.createImageData(C * N, C * N);
+  const ex = (x) => Math.exp(x);
+  for (let cell = 0; cell < 16; cell++) {
+    const ox = (cell % N) * C, oy = Math.floor(cell / N) * C, sd = cell * 5.31;
+    const bracos = cell % 3 === 0 ? 3 : 2, giro = 2.2 + (cell % 4) * 0.5;
+    for (let y = 0; y < C; y++) for (let x = 0; x < C; x++) {
+      const u = (x + 0.5) / C * 2 - 1, v = (y + 0.5) / C * 2 - 1;
+      const r = Math.hypot(u, v), th = Math.atan2(v, u);
+      const nz = ruido(u * 6 + sd, v * 6 - sd, 0.7) * 0.5 + 0.5;
+      let R = 0, G = 0, B = 0;
+      if (cell <= 7) { // espirais (6 e 7 barradas)
+        const barra = cell >= 6;
+        const s = Math.cos(bracos * (th - giro * Math.log(r + 0.04)));
+        const braco = Math.pow(Math.max(0, s * 0.5 + 0.5), 3) * (barra ? Math.min(1, Math.max(0, (r - 0.18) * 5)) : 1);
+        const disco = ex(-r * 3.4), nucleo = ex(-r * r * 70);
+        let I = disco * (0.18 + 0.95 * braco * (0.55 + 0.45 * nz));
+        if (barra) I += ex(-(u * u / 0.09 + v * v / 0.003)) * 0.6;
+        R = nucleo * 1.2 + I * 0.62; G = nucleo * 1.05 + I * 0.72; B = nucleo * 0.8 + I * 1.0;
+        if (braco > 0.7 && nz > 0.62) { R += disco * 0.5; G += disco * 0.18; B += disco * 0.3; }
+      } else if (cell <= 9) { // elípticas
+        const I = ex(-Math.pow(r / 0.16, 0.6) * 2.2) * 1.1;
+        R = I; G = I * 0.86; B = I * 0.66;
+      } else if (cell <= 11) { // de perfil, com faixa de poeira
+        const disco = ex(-Math.abs(v) * 20 - Math.abs(u) * 2.6), bojo = ex(-(u * u + v * v * 3) * 28);
+        const faixa = 1 - 0.85 * ex(-Math.pow((v - 0.012) * 70, 2)) * Math.max(0, 1 - Math.abs(u) * 1.1);
+        const I = (disco * (0.6 + 0.4 * nz) + bojo) * faixa;
+        R = I * 0.9 + bojo * 0.3; G = I * 0.85 + bojo * 0.2; B = I * 0.95;
+      } else if (cell === 12) { // irregular
+        let I = 0;
+        for (let k = 0; k < 6; k++) { const bx = Math.sin(k * 2.1 + 1) * 0.35, by = Math.cos(k * 3.7) * 0.25; I += ex(-((u - bx) ** 2 + (v - by) ** 2) * 30) * (0.4 + (k % 3) * 0.2); }
+        I *= 0.6 + 0.6 * nz; R = I * 0.7; G = I * 0.8; B = I * 1.05;
+      } else if (cell === 13) { // nebulosa em casca: estrela azul, brilho violeta, casca laranja
+        const casca = ex(-Math.pow((r - 0.6 - 0.1 * (nz - 0.5)) / 0.09, 2)) * (0.45 + 0.55 * Math.abs(Math.sin(th + 0.6))) * (0.5 + nz);
+        const violeta = ex(-r * r * 7) * 0.55, estrela = ex(-r * r * 400);
+        R = casca * 1.0 + violeta * 0.7 + estrela; G = casca * 0.5 + violeta * 0.35 + estrela; B = casca * 0.22 + violeta * 1.0 + estrela * 1.2;
+      } else if (cell === 14) { // explosão de filamentos (Órion em infravermelho)
+        const fil = Math.pow(0.5 + 0.5 * Math.sin(th * 23 + nz * 5), 6) * ex(-r * 3.2) * (0.6 + nz);
+        const nucleo = ex(-r * r * 40) * 1.4;
+        R = nucleo * 0.9 + fil * 1.0; G = nucleo * 0.95 + fil * 0.5; B = nucleo * 1.1 + fil * 0.3 + ex(-r * r * 9) * 0.2;
+      } else { // lenticular
+        const I = ex(-r * 4.5) * 0.7 + ex(-r * r * 50) * 0.8;
+        R = I; G = I * 0.9; B = I * 0.78;
+      }
+      const borda = Math.max(0, Math.min(1, (1 - r) / 0.2));
+      const k = ((oy + y) * C * N + ox + x) * 4;
+      img.data[k] = Math.min(255, R * borda * 255); img.data[k + 1] = Math.min(255, G * borda * 255); img.data[k + 2] = Math.min(255, B * borda * 255);
+      img.data[k + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.generateMipmaps = true; tex.minFilter = THREE.LinearMipmapLinearFilter; tex.magFilter = THREE.LinearFilter;
+  return tex;
+}
+const uProjCeu = { value: 1 }, uCapCeu = { value: 200 };
+{
+  const r = rng(808), grandes = 120, n = grandes + 420;
+  const pos = new Float32Array(n * 3), tam = new Float32Array(n), cel = new Float32Array(n), rot = new Float32Array(n), incl = new Float32Array(n), alfa = new Float32Array(n);
+  const v = new THREE.Vector3();
+  for (let i = 0; i < n; i++) {
+    // zona de evitação: quase nenhuma galáxia atrás da faixa da Via Láctea
+    do v.set(gauss(r), gauss(r), gauss(r)).normalize(); while (Math.abs(v.dot(NORMAL_VIA)) < 0.13 && r() < 0.88);
+    const grande = i < grandes, R = grande ? 14 + r() * 20 : 30 + r() * 8;
+    pos.set([v.x * R, v.y * R, v.z * R], i * 3);
+    const ang = grande ? THREE.MathUtils.degToRad(1.0 + Math.pow(r(), 2.2) * 6.5) : THREE.MathUtils.degToRad(0.25 + r() * 0.5);
+    tam[i] = R * ang;
+    const c = grande ? Math.floor(r() * 16) : Math.floor(r() * 12);
+    cel[i] = c;
+    rot[i] = r() * Math.PI * 2;
+    incl[i] = c >= 10 && c <= 11 || c >= 13 && c <= 14 ? 1 : 0.25 + r() * 0.75;
+    alfa[i] = grande ? 0.6 + r() * 0.5 : 0.35 + r() * 0.4;
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  for (const [k, a] of [['aTam', tam], ['aCel', cel], ['aRot', rot], ['aIncl', incl], ['aAlfa', alfa]]) g.setAttribute(k, new THREE.BufferAttribute(a, 1));
+  const m = new THREE.ShaderMaterial({
+    transparent: true, depthTest: false, depthWrite: false,
+    uniforms: { uAtlas: { value: atlasGalaxias() }, uProj: uProjCeu, uCap: uCapCeu },
+    vertexShader: `attribute float aTam; attribute float aCel; attribute float aRot; attribute float aIncl; attribute float aAlfa;
+      uniform float uProj; uniform float uCap; varying float vCel; varying float vRot; varying float vIncl; varying float vA;
+      void main(){ vec4 mv = modelViewMatrix * vec4(position, 1.0);
+        float px = aTam * uProj / -mv.z;
+        gl_PointSize = clamp(px, 1.5, uCap);
+        vA = aAlfa * min(1.0, px / 1.5); vCel = aCel; vRot = aRot; vIncl = aIncl;
+        gl_Position = projectionMatrix * mv; }`,
+    fragmentShader: `uniform sampler2D uAtlas; varying float vCel; varying float vRot; varying float vIncl; varying float vA;
+      void main(){ vec2 p = gl_PointCoord - 0.5;
+        float c = cos(vRot), s = sin(vRot);
+        p = vec2(c * p.x - s * p.y, (s * p.x + c * p.y) / vIncl) + 0.5;
+        if (p.x < 0.0 || p.y < 0.0 || p.x > 1.0 || p.y > 1.0) discard;
+        vec2 cel = vec2(mod(vCel, 4.0), floor(vCel / 4.0));
+        gl_FragColor = vec4(texture2D(uAtlas, (cel + p) / 4.0).rgb * vA, 1.0); }`,
+  });
+  m.blending = THREE.CustomBlending; m.blendSrc = THREE.OneFactor; m.blendDst = THREE.OneFactor;
+  const galaxias = new THREE.Points(g, m);
+  galaxias.frustumCulled = false; galaxias.renderOrder = -8;
+  scene.add(galaxias);
 }
 
 // ---------- atlas de nuvens procedurais (4×4) ----------
@@ -279,24 +448,27 @@ function atlasNuvens() {
 const ATLAS = atlasNuvens();
 
 // ---------- clarões: luz de raios e ondas acendendo a poeira por dentro ----------
-const MAX_CLAROES = 6;
+const MAX_CLAROES = 8;
 const claroes = Array.from({ length: MAX_CLAROES }, () => ({ pos: new THREE.Vector3(), cor: new THREE.Color(), t0: -1e9, forca: 0, raio: 0.1, dur: 600, piscar: false }));
 const uClaroes = { value: claroes.map(() => new THREE.Vector4(0, 0, 0, 0)) };
 const uClaroesCor = { value: claroes.map(() => new THREE.Vector3()) };
+const uClaroesRaio = { value: claroes.map(() => 0.01) };
 let claroProx = 0;
 function clarao(pos, cor, forca, raio, dur, piscar = false) {
   const c = claroes[claroProx++ % MAX_CLAROES];
-  c.pos.copy(pos); c.cor.set(cor); c.t0 = agora; c.forca = forca; c.raio = raio; c.dur = dur; c.piscar = piscar;
+  // fotossensibilidade: com efeitos reduzidos ou movimento reduzido, nada pisca, só acende e apaga
+  c.pos.copy(pos); c.cor.set(cor); c.t0 = agora; c.forca = forca; c.raio = raio; c.dur = dur;
+  c.piscar = piscar && !estado.reduzidos && !estado.movimentoReduzido;
 }
 const CLARAO_GLSL = `
-  uniform vec4 uClaroes[${MAX_CLAROES}]; uniform vec3 uClaroesCor[${MAX_CLAROES}];
+  uniform vec4 uClaroes[${MAX_CLAROES}]; uniform vec3 uClaroesCor[${MAX_CLAROES}]; uniform float uClaroesRaio[${MAX_CLAROES}];
   vec3 luzClaroes(vec3 p) {
     vec3 s = vec3(0.0);
     for (int i = 0; i < ${MAX_CLAROES}; i++) {
       vec4 c = uClaroes[i];
       if (c.w <= 0.001) continue;
       vec3 d = p - c.xyz;
-      s += uClaroesCor[i] * c.w * exp(-dot(d, d) / 0.012);
+      s += uClaroesCor[i] * c.w * exp(-dot(d, d) / uClaroesRaio[i]);
     }
     return s;
   }`;
@@ -309,9 +481,11 @@ const uDens = { value: densidade(GRAFO.arestas.length) };
 const uProj = { value: 1 };
 const uRegiao = { value: -1 };
 const uEscondeArq = { value: 0 };
+const uProjPoeira = { value: 1 }, uCap = { value: 100 }, uQualidade = { value: 1 }, uTela = { value: 1 };
 
 function corDaPoeira(r, rr, regiao, out) {
   if (regiao === 'tronco') return out.copy(SHO.violeta).lerp(SHO.cavidade, rr() * 0.4);
+  if (regiao === 'talamo' || r < 0.07) return out.copy(SHO.nucleo).lerp(SHO.ouro, rr() * 0.6);
   if (r < 0.2) return out.copy(SHO.teal).lerp(SHO.cavidade, rr() * 0.8);
   if (r < 0.32) return out.copy(SHO.teal).lerp(SHO.ouro, (r - 0.2) / 0.12 * (0.6 + rr() * 0.4));
   if (r < 0.62) return out.copy(SHO.ouro).lerp(SHO.laranja, (r - 0.32) / 0.3 * (0.5 + rr() * 0.5));
@@ -319,11 +493,11 @@ function corDaPoeira(r, rr, regiao, out) {
 }
 
 const MAX_POEIRA_ARESTA = 2600;
-const nuvemDados = { pos: [], cor: [], tam: [], alfa: [], var: [], rot: [], reg: [] };
-const escuraDados = { pos: [], cor: [], tam: [], alfa: [], var: [], rot: [], reg: [] };
+const nuvemDados = { pos: [], cor: [], tam: [], alfa: [], var: [], rot: [], reg: [], keep: [] };
+const escuraDados = { pos: [], cor: [], tam: [], alfa: [], var: [], rot: [], reg: [], keep: [] };
 function soprar(dest, p, cor, tam, alfa, rr, reg) {
   dest.pos.push(p.x, p.y, p.z); dest.cor.push(cor.r, cor.g, cor.b); dest.tam.push(tam);
-  dest.alfa.push(alfa); dest.var.push(Math.floor(rr() * 16)); dest.rot.push(rr() * Math.PI * 2); dest.reg.push(reg);
+  dest.alfa.push(alfa); dest.var.push(Math.floor(rr() * 16)); dest.rot.push(rr() * Math.PI * 2); dest.reg.push(reg); dest.keep.push(rr());
 }
 {
   const rr = rng(1234), c = new THREE.Color(), p = new THREE.Vector3();
@@ -336,7 +510,7 @@ function soprar(dest, p, cor, tam, alfa, rr, reg) {
   for (let k = 0; k < 40; k++) {
     const a = rr() * Math.PI * 2, r = 0.1 + rr() * 0.14;
     p.set(Math.cos(a) * r, gauss(rr) * 0.02, Math.sin(a) * r);
-    soprar(nuvemDados, p, corDaPoeira(r, rr, 'talamo', c), 0.16 + rr() * 0.12, 0.07, rr, 7);
+    soprar(nuvemDados, p, corDaPoeira(r, rr, 'cavidade', c), 0.16 + rr() * 0.12, 0.07, rr, 7);
   }
   // uma nuvem por nota
   for (const n of nos) {
@@ -379,25 +553,29 @@ function geometriaPoeira(dados, cap) {
   g.setAttribute('aVar', mk(dados.var, 1));
   g.setAttribute('aRot', mk(dados.rot, 1));
   g.setAttribute('aReg', mk(dados.reg, 1));
+  g.setAttribute('aKeep', mk(dados.keep, 1));
   g.setDrawRange(0, dados.tam.length);
   return g;
 }
-const POEIRA_VS = `attribute vec3 aCor; attribute float aTam; attribute float aAlfa; attribute float aVar; attribute float aRot; attribute float aReg;
-  uniform float uProj; uniform float uDens; uniform float uRegiao; uniform float uEscondeArq;
+const POEIRA_VS = `attribute vec3 aCor; attribute float aTam; attribute float aAlfa; attribute float aVar; attribute float aRot; attribute float aReg; attribute float aKeep;
+  uniform float uProj; uniform float uCap; uniform float uQualidade; uniform float uDens; uniform float uRegiao; uniform float uEscondeArq;
   varying vec3 vCor; varying float vA; varying float vVar; varying float vRot; varying vec3 vLuz;
   ${CLARAO_GLSL}
   void main(){
     vec4 mv = modelViewMatrix * vec4(position, 1.0);
     float z = -mv.z;
     float px = aTam * uProj / z;
-    gl_PointSize = min(px, 360.0);
+    gl_PointSize = min(px, uCap);
     // perto da câmera a nuvem se abre e some: é o voo atravessando o gás
     float perto = smoothstep(0.015, 0.16, z);
     float filtro = (uRegiao < 0.0 || abs(aReg - uRegiao) < 0.5) ? 1.0 : 0.12;
     if (uEscondeArq > 0.5 && abs(aReg - 6.0) < 0.5) filtro = 0.0;
-    vA = aAlfa * uDens * perto * filtro * min(1.0, px / 360.0 > 1.0 ? 360.0 / px : 1.0);
+    float corte = px > uCap ? (uCap / px) * (uCap / px) : 1.0;
+    vA = aAlfa * uDens * perto * filtro * corte * step(aKeep, uQualidade);
     vCor = aCor; vVar = aVar; vRot = aRot; vLuz = luzClaroes(position) * filtro;
     gl_Position = projectionMatrix * mv;
+    // invisível não custa nada: fora do recorte, tamanho zero
+    if (vA < 0.003) { gl_PointSize = 0.0; gl_Position = vec4(2.0, 2.0, 2.0, 1.0); }
   }`;
 const POEIRA_FS = (escura) => `uniform sampler2D uAtlas; varying vec3 vCor; varying float vA; varying float vVar; varying float vRot; varying vec3 vLuz;
   void main(){
@@ -414,12 +592,12 @@ const POEIRA_FS = (escura) => `uniform sampler2D uAtlas; varying vec3 vCor; vary
 function materialPoeira(escura) {
   const m = new THREE.ShaderMaterial({
     transparent: true, depthWrite: false, depthTest: false,
-    uniforms: { uAtlas: { value: ATLAS }, uProj, uDens, uRegiao, uEscondeArq, uClaroes, uClaroesCor },
+    uniforms: { uAtlas: { value: ATLAS }, uProj: uProjPoeira, uCap, uQualidade, uDens, uRegiao, uEscondeArq, uClaroes, uClaroesCor, uClaroesRaio },
     vertexShader: POEIRA_VS, fragmentShader: POEIRA_FS(escura),
   });
   m.blending = THREE.CustomBlending;
-  if (escura) { m.blendSrc = THREE.ZeroFactor; m.blendDst = THREE.OneMinusSrcAlphaFactor; }
-  else { m.blendSrc = THREE.OneFactor; m.blendDst = THREE.OneFactor; }
+  if (escura) { m.blendSrc = m.blendSrcAlpha = THREE.ZeroFactor; m.blendDst = m.blendDstAlpha = THREE.OneMinusSrcAlphaFactor; }
+  else { m.blendSrc = THREE.OneFactor; m.blendDst = THREE.OneFactor; m.blendSrcAlpha = THREE.ZeroFactor; m.blendDstAlpha = THREE.OneFactor; }
   return m;
 }
 const nuvemGeo = geometriaPoeira(nuvemDados, CAP_NUVEM);
@@ -428,7 +606,31 @@ nuvens.frustumCulled = false; nuvens.renderOrder = 1;
 const escuraGeo = geometriaPoeira(escuraDados, escuraDados.tam.length);
 const escura = new THREE.Points(escuraGeo, materialPoeira(true));
 escura.frustumCulled = false; escura.renderOrder = 2;
-scene.add(nuvens, escura);
+// a poeira é desenhada em meia resolução (¼ dos fragmentos) e composta uma vez sobre o céu.
+// A composição tem ombro suave: camadas densas chegam perto do branco sem estourar.
+const cenaPoeira = new THREE.Scene();
+cenaPoeira.add(nuvens, escura);
+const ESCALA_POEIRA = 0.5;
+const rtPoeira = new THREE.WebGLRenderTarget(1, 1, {
+  type: renderer.capabilities.isWebGL2 && renderer.extensions.has('EXT_color_buffer_float') ? THREE.HalfFloatType : THREE.UnsignedByteType,
+  depthBuffer: false, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter,
+});
+const composicao = new THREE.Mesh(
+  new THREE.PlaneGeometry(2, 2),
+  new THREE.ShaderMaterial({
+    transparent: true, depthTest: false, depthWrite: false,
+    uniforms: { uPoeira: { value: rtPoeira.texture } },
+    vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
+    fragmentShader: `uniform sampler2D uPoeira; varying vec2 vUv;
+      void main(){ vec4 p = texture2D(uPoeira, vUv);
+        gl_FragColor = vec4(vec3(1.0) - exp(-p.rgb * 1.15), p.a); }`,
+  }),
+);
+composicao.material.blending = THREE.CustomBlending;
+composicao.material.blendSrc = THREE.OneFactor; composicao.material.blendDst = THREE.SrcAlphaFactor;
+composicao.material.blendSrcAlpha = THREE.ZeroFactor; composicao.material.blendDstAlpha = THREE.OneFactor;
+composicao.frustumCulled = false; composicao.renderOrder = 1;
+scene.add(composicao);
 
 // ---------- brilhos: um grão de poeira estelar por sinapse ----------
 const CAP_ARESTAS = arestas.length + 400;
@@ -451,15 +653,15 @@ brilhoGeo.setDrawRange(0, arestas.length);
 const uTempo = { value: 0 }, uDpr = { value: 1 };
 const brilhoMat = new THREE.ShaderMaterial({
   transparent: true, depthTest: false, depthWrite: false, blending: THREE.AdditiveBlending,
-  uniforms: { uTempo, uDpr, uRegiao, uEscondeArq, uClaroes, uClaroesCor, uDens },
-  vertexShader: `attribute float aFase; attribute float aReg; attribute float aNasc; uniform float uTempo; uniform float uDpr; uniform float uRegiao; uniform float uEscondeArq; uniform float uDens;
+  uniforms: { uTempo, uDpr, uRegiao, uEscondeArq, uClaroes, uClaroesCor, uClaroesRaio, uDens, uTela },
+  vertexShader: `attribute float aFase; attribute float aReg; attribute float aNasc; uniform float uTempo; uniform float uDpr; uniform float uRegiao; uniform float uEscondeArq; uniform float uDens; uniform float uTela;
     varying float vA; varying vec3 vLuz;
     ${CLARAO_GLSL}
     void main(){ vec4 mv = modelViewMatrix * vec4(position, 1.0);
       float pisca = 0.55 + 0.45 * sin(uTempo * (0.6 + fract(aFase) * 1.4) + aFase);
       float filtro = (uRegiao < 0.0 || abs(aReg - uRegiao) < 0.5) ? 1.0 : 0.12;
       if (uEscondeArq > 0.5 && abs(aReg - 6.0) < 0.5) filtro = 0.0;
-      vA = pisca * filtro * aNasc * (0.5 + 0.5 * uDens) * smoothstep(0.0, 0.08, -mv.z);
+      vA = pisca * filtro * aNasc * (0.5 + 0.5 * uDens) * uTela * smoothstep(0.0, 0.08, -mv.z);
       vLuz = luzClaroes(position);
       gl_PointSize = (1.3 + 1.6 * aNasc * step(aNasc, 0.999)) * uDpr * clamp(1.4 / -mv.z, 0.8, 3.0);
       gl_Position = projectionMatrix * mv; }`,
@@ -478,7 +680,7 @@ const filPos = new Float32Array(CAP_ARESTAS * SEG * 6), filAlfa = new Float32Arr
 function escreverFilete(k) {
   const [a, b] = arestas[k];
   tmpA.fromArray(posicoes, a * 3); tmpB.fromArray(posicoes, b * 3); controle(tmpA, tmpB, tmpC);
-  filPeso[k] = Math.exp(-tmpA.distanceTo(tmpB) * 3.2);
+  filPeso[k] = Math.exp(-tmpA.distanceTo(tmpB) * 3.2) * Math.min(1, 6 / Math.sqrt(Math.max(1, nos[a].viz.length * nos[b].viz.length)));
   let o = k * SEG * 6;
   const prev = tmpA.clone();
   for (let s = 1; s <= SEG; s++) {
@@ -495,9 +697,9 @@ filGeo.setAttribute('aAlfa', new THREE.BufferAttribute(filAlfa, 1));
 filGeo.setDrawRange(0, arestas.length * SEG * 2);
 const filMat = new THREE.ShaderMaterial({
   transparent: true, depthWrite: false, depthTest: false, blending: THREE.AdditiveBlending,
-  uniforms: { uAlfa: { value: 0.07 } },
+  uniforms: { uAlfa: { value: 0.07 }, uTela },
   vertexShader: `attribute float aAlfa; varying float vA; void main(){ vec4 mv = modelViewMatrix * vec4(position, 1.0); vA = aAlfa * smoothstep(0.0, 0.1, -mv.z); gl_Position = projectionMatrix * mv; }`,
-  fragmentShader: `uniform float uAlfa; varying float vA; void main(){ gl_FragColor = vec4(vec3(1.0, 0.78, 0.5), uAlfa * vA); }`,
+  fragmentShader: `uniform float uAlfa; uniform float uTela; varying float vA; void main(){ gl_FragColor = vec4(vec3(1.0, 0.78, 0.5), uAlfa * uTela * vA); }`,
 });
 const filetes = new THREE.LineSegments(filGeo, filMat);
 filetes.frustumCulled = false; filetes.renderOrder = 4;
@@ -513,7 +715,7 @@ realce.frustumCulled = false; realce.renderOrder = 5;
 scene.add(realce);
 
 // ---------- estrelas (notas) ----------
-const aTam = new Float32Array(CAP), aAtiv = new Float32Array(CAP), aCor = new Float32Array(CAP * 3), aVis = new Float32Array(CAP), aNasc = new Float32Array(CAP), aEspinho = new Float32Array(CAP);
+const aTam = new Float32Array(CAP), aAtiv = new Float32Array(CAP), aCor = new Float32Array(CAP * 3), aVis = new Float32Array(CAP), aNasc = new Float32Array(CAP), aEspinho = new Float32Array(CAP), aDim = new Float32Array(CAP);
 const corTmp = new THREE.Color();
 function configurarNo(n) {
   const grau = n.viz.length;
@@ -523,30 +725,31 @@ function configurarNo(n) {
   aCor.set([corTmp.r, corTmp.g, corTmp.b], n.i * 3);
   aVis[n.i] = 1;
   aNasc[n.i] = 1;
+  aDim[n.i] = n.l === 'tronco' ? 0.4 : 1;
 }
 nos.forEach(configurarNo);
 const noGeo = new THREE.BufferGeometry();
 noGeo.setAttribute('position', new THREE.BufferAttribute(posicoes, 3));
-for (const [k, arr, n] of [['aTam', aTam, 1], ['aAtiv', aAtiv, 1], ['aCor', aCor, 3], ['aVis', aVis, 1], ['aNasc', aNasc, 1], ['aEspinho', aEspinho, 1]]) {
+for (const [k, arr, n] of [['aTam', aTam, 1], ['aAtiv', aAtiv, 1], ['aCor', aCor, 3], ['aVis', aVis, 1], ['aNasc', aNasc, 1], ['aEspinho', aEspinho, 1], ['aDim', aDim, 1]]) {
   noGeo.setAttribute(k, new THREE.BufferAttribute(arr, n));
 }
 noGeo.setDrawRange(0, N0);
 const uEscala = { value: 1 };
 const noMat = new THREE.ShaderMaterial({
   transparent: true, depthWrite: false, depthTest: false,
-  uniforms: { uEscala, uArquivo: { value: new THREE.Color('#58627e') }, uClaroes, uClaroesCor },
-  vertexShader: `attribute float aTam; attribute float aAtiv; attribute vec3 aCor; attribute float aVis; attribute float aNasc; attribute float aEspinho;
+  uniforms: { uEscala },
+  vertexShader: `attribute float aTam; attribute float aAtiv; attribute vec3 aCor; attribute float aVis; attribute float aNasc; attribute float aEspinho; attribute float aDim;
     uniform float uEscala;
-    varying float vAtiv; varying vec3 vCor; varying float vVis; varying float vHalo; varying float vEsp; varying float vPerto;
+    varying float vAtiv; varying vec3 vCor; varying float vVis; varying float vHalo; varying float vEsp; varying float vPerto; varying float vDim;
     void main(){ vec4 mv = modelViewMatrix * vec4(position, 1.0);
       float a = clamp(aAtiv, 0.0, 1.6);
       vHalo = 1.0 + a * 6.0 + (1.0 - aNasc) * 10.0;
       vEsp = aEspinho;
       float z = -mv.z;
       gl_PointSize = min(aTam * vHalo * (1.0 + aEspinho * 2.6) * uEscala * clamp(1.6 / z, 0.6, 14.0), 260.0) * aVis;
-      vAtiv = a; vCor = aCor; vVis = aVis; vPerto = smoothstep(0.004, 0.03, z);
+      vAtiv = a; vCor = aCor; vVis = aVis; vDim = max(aDim, min(a, 1.0)); vPerto = smoothstep(0.004, 0.03, z);
       gl_Position = projectionMatrix * mv; }`,
-  fragmentShader: `varying float vAtiv; varying vec3 vCor; varying float vVis; varying float vHalo; varying float vEsp; varying float vPerto;
+  fragmentShader: `varying float vAtiv; varying vec3 vCor; varying float vVis; varying float vHalo; varying float vEsp; varying float vPerto; varying float vDim;
     void main(){ vec2 d = gl_PointCoord - 0.5; float r2 = dot(d, d) * 4.0;
       if (r2 > 1.0) discard;
       float esc = vHalo * (1.0 + vEsp * 2.6);
@@ -558,7 +761,7 @@ const noMat = new THREE.ShaderMaterial({
       vec3 repouso = mix(vec3(1.0, 0.96, 0.9), vCor, 0.38);
       vec3 c = mix(repouso, vCor, smoothstep(0.0, 0.35, vAtiv));
       float brilho = nucleo * (0.9 + vAtiv * 1.6) + halo * 0.6 + esp * 0.7;
-      gl_FragColor = vec4(c * brilho * vVis * vPerto, 1.0); }`,
+      gl_FragColor = vec4(c * brilho * vVis * vPerto * vDim, 1.0); }`,
 });
 noMat.blending = THREE.CustomBlending; noMat.blendSrc = THREE.OneFactor; noMat.blendDst = THREE.OneFactor;
 const estrelas = new THREE.Points(noGeo, noMat);
@@ -589,22 +792,77 @@ pulsosObj.frustumCulled = false; pulsosObj.renderOrder = 7;
 scene.add(pulsosObj);
 const pulsos = [];
 
+// ---------- fitas: segmentos expandidos em pixels de tela (raios e estilhaços) ----------
+const uRes = { value: new THREE.Vector2(1, 1) };
+function criarFitas(max, branco) {
+  const pos = new Float32Array(max * 12), outro = new Float32Array(max * 12), lado = new Float32Array(max * 4), perfil = new Float32Array(max * 4);
+  const alfa = new Float32Array(max * 4), larg = new Float32Array(max * 4), cor = new Float32Array(max * 12);
+  const idx = new Uint32Array(max * 6);
+  for (let s = 0; s < max; s++) {
+    const v = s * 4;
+    idx.set([v, v + 1, v + 2, v + 2, v + 1, v + 3], s * 6);
+    lado.set([-1, 1, 1, -1], v); // em B a normal inverte, então o lado também
+    perfil.set([-1, 1, -1, 1], v); // o lado de verdade na tela, para o brilho não cruzar a fita
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setIndex(new THREE.BufferAttribute(idx, 1));
+  const at = { position: [pos, 3], aOutro: [outro, 3], aLado: [lado, 1], aAlfa: [alfa, 1], aLarg: [larg, 1], aCor: [cor, 3] };
+  for (const k in at) geo.setAttribute(k, new THREE.BufferAttribute(at[k][0], at[k][1]));
+  geo.setAttribute('aPerfil', new THREE.BufferAttribute(perfil, 1));
+  geo.setDrawRange(0, 0);
+  const mat = new THREE.ShaderMaterial({
+    transparent: true, depthWrite: false, depthTest: false, side: THREE.DoubleSide,
+    uniforms: { uRes, uDpr, uBranco: { value: branco } },
+    vertexShader: `attribute vec3 aOutro; attribute float aLado; attribute float aPerfil; attribute float aAlfa; attribute float aLarg; attribute vec3 aCor;
+      uniform vec2 uRes; uniform float uDpr; varying float vA; varying float vL; varying vec3 vC;
+      void main(){
+        vec4 a = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        vec4 b = projectionMatrix * modelViewMatrix * vec4(aOutro, 1.0);
+        vec2 sa = a.xy / max(a.w, 1e-4) * uRes, sb = b.xy / max(b.w, 1e-4) * uRes;
+        vec2 dir = sb - sa; float L = length(dir); dir = L > 1e-3 ? dir / L : vec2(1.0, 0.0);
+        // a ponta passa um pouco do vértice, e os segmentos se emendam sem falha nas curvas
+        a.xy += (vec2(-dir.y, dir.x) * aLado - dir * 0.5) * aLarg * uDpr / uRes * a.w;
+        vA = a.w > 0.0 ? aAlfa : 0.0; vL = aPerfil; vC = aCor;
+        gl_Position = a; }`,
+    fragmentShader: `uniform float uBranco; varying float vA; varying float vL; varying vec3 vC;
+      void main(){ float x = abs(vL);
+        float nucleo = exp(-x * x * 22.0), brilho = exp(-x * x * 3.0) * (1.0 - x * x);
+        gl_FragColor = vec4((mix(vC, vec3(0.95, 0.97, 1.0), uBranco) * nucleo * 0.85 + vC * brilho * 0.3) * vA, 1.0); }`,
+  });
+  mat.blending = THREE.CustomBlending; mat.blendSrc = THREE.OneFactor; mat.blendDst = THREE.OneFactor;
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.frustumCulled = false;
+  const f = {
+    mesh, n: 0,
+    seg(A, B, aA, aB, lA, lB, c) {
+      if (f.n >= max) return;
+      const v = f.n * 4, o = v * 3;
+      pos[o] = pos[o + 3] = A.x; pos[o + 1] = pos[o + 4] = A.y; pos[o + 2] = pos[o + 5] = A.z;
+      pos[o + 6] = pos[o + 9] = B.x; pos[o + 7] = pos[o + 10] = B.y; pos[o + 8] = pos[o + 11] = B.z;
+      outro[o] = outro[o + 3] = B.x; outro[o + 1] = outro[o + 4] = B.y; outro[o + 2] = outro[o + 5] = B.z;
+      outro[o + 6] = outro[o + 9] = A.x; outro[o + 7] = outro[o + 10] = A.y; outro[o + 8] = outro[o + 11] = A.z;
+      alfa[v] = alfa[v + 1] = aA; alfa[v + 2] = alfa[v + 3] = aB;
+      larg[v] = larg[v + 1] = lA; larg[v + 2] = larg[v + 3] = lB;
+      for (let q = 0; q < 4; q++) { cor[o + q * 3] = c.r; cor[o + q * 3 + 1] = c.g; cor[o + q * 3 + 2] = c.b; }
+      f.n++;
+    },
+    fim() {
+      geo.setDrawRange(0, f.n * 6);
+      if (f.n || f.sujo) for (const k in at) geo.attributes[k].needsUpdate = true;
+      f.sujo = f.n > 0; f.n = 0;
+    },
+  };
+  return f;
+}
+
 // ---------- raios (trovão) ----------
-const MAX_RAIOS = 24, PONTOS_RAIO = 72;
-const raioPos = new Float32Array(MAX_RAIOS * PONTOS_RAIO * 2 * 3), raioAlfa = new Float32Array(MAX_RAIOS * PONTOS_RAIO * 2);
-const raioGeo = new THREE.BufferGeometry();
-raioGeo.setAttribute('position', new THREE.BufferAttribute(raioPos, 3));
-raioGeo.setAttribute('aAlfa', new THREE.BufferAttribute(raioAlfa, 1));
-raioGeo.setDrawRange(0, 0);
-const raioMat = new THREE.ShaderMaterial({
-  transparent: true, depthWrite: false, depthTest: false,
-  vertexShader: `attribute float aAlfa; varying float vA; void main(){ vA = aAlfa; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
-  fragmentShader: `varying float vA; void main(){ gl_FragColor = vec4(vec3(0.92, 0.96, 1.0) * vA, 1.0); }`,
-});
-raioMat.blending = THREE.CustomBlending; raioMat.blendSrc = THREE.OneFactor; raioMat.blendDst = THREE.OneFactor;
-const raiosLinhas = new THREE.LineSegments(raioGeo, raioMat);
-raiosLinhas.frustumCulled = false; raiosLinhas.renderOrder = 8;
-const MAX_FAISCAS = MAX_RAIOS * 40;
+// Como um relâmpago de verdade: o líder escalonado desce fraco, em degraus, abrindo galhos;
+// quando toca o destino vem a descarga de retorno (o canal inteiro acende), apaga,
+// o mesmo canal recebe uma segunda descarga e fica um brilho residual violeta.
+const MAX_RAIOS = 24;
+const fitasRaio = criarFitas(MAX_RAIOS * 150, 1);
+fitasRaio.mesh.renderOrder = 8;
+const MAX_FAISCAS = MAX_RAIOS * 24;
 const faiPos = new Float32Array(MAX_FAISCAS * 3), faiCor = new Float32Array(MAX_FAISCAS * 3), faiForca = new Float32Array(MAX_FAISCAS);
 const faiGeo = new THREE.BufferGeometry();
 faiGeo.setAttribute('position', new THREE.BufferAttribute(faiPos, 3));
@@ -612,65 +870,248 @@ faiGeo.setAttribute('aCor', new THREE.BufferAttribute(faiCor, 3));
 faiGeo.setAttribute('aForca', new THREE.BufferAttribute(faiForca, 1));
 const faiscas = new THREE.Points(faiGeo, materialPontoBrilhante());
 faiscas.frustumCulled = false; faiscas.renderOrder = 8;
-scene.add(raiosLinhas, faiscas);
+scene.add(fitasRaio.mesh, faiscas);
 const raios = [];
 const rRaio = rng(4242);
-// deslocamento do ponto médio: o caminho quebrado do relâmpago, com galhos
-function tracarRaio(a, b, nivel, out, galhos) {
+const tmpV = new THREE.Vector3();
+// deslocamento do ponto médio, perpendicular ao trajeto; cada ponto guarda quando o líder chega nele
+function tracarRaio(a, b, nivel, out, galhos, prof = 0, chegada0 = 0, janela = 1) {
   const pts = [a.clone(), b.clone()];
-  let desloc = a.distanceTo(b) * 0.3;
+  const len = a.distanceTo(b), eixo = b.clone().sub(a).normalize();
+  let desloc = len * (prof ? 0.17 : 0.12);
   for (let k = 0; k < nivel; k++) {
     for (let i = pts.length - 1; i > 0; i--) {
       const m = pts[i - 1].clone().add(pts[i]).multiplyScalar(0.5);
-      m.add(new THREE.Vector3(gauss(rRaio), gauss(rRaio) * 0.5, gauss(rRaio)).multiplyScalar(desloc));
+      tmpV.set(gauss(rRaio), gauss(rRaio) * 0.6, gauss(rRaio));
+      tmpV.addScaledVector(eixo, -tmpV.dot(eixo) * 0.8);
+      m.addScaledVector(tmpV, desloc);
       pts.splice(i, 0, m);
     }
-    desloc *= 0.52;
+    desloc *= 0.5;
   }
-  out.push(pts);
-  if (galhos > 0) {
-    for (let g = 0; g < galhos; g++) {
-      const i = 2 + Math.floor(rRaio() * (pts.length - 4));
-      const dir = pts[i + 1].clone().sub(pts[i - 1]).normalize();
-      dir.add(new THREE.Vector3(gauss(rRaio), gauss(rRaio) * 0.4, gauss(rRaio)).multiplyScalar(0.9)).normalize();
-      const fim = pts[i].clone().addScaledVector(dir, a.distanceTo(b) * (0.18 + rRaio() * 0.22));
-      tracarRaio(pts[i], fim, Math.max(2, nivel - 2), out, 0);
-    }
+  const n = pts.length;
+  const cheg = pts.map((_, i) => chegada0 + (i / (n - 1)) * janela);
+  out.push({ pts, prof, cheg });
+  for (let g = 0; g < galhos; g++) {
+    const i = 2 + Math.floor(rRaio() * (n * 0.75 - 2));
+    const dir = pts[i + 1].clone().sub(pts[i - 1]).normalize();
+    dir.add(tmpV.set(gauss(rRaio), gauss(rRaio) * 0.5, gauss(rRaio)).multiplyScalar(0.85)).normalize();
+    const fim = pts[i].clone().addScaledVector(dir, len * (0.08 + rRaio() * 0.16) * (prof ? 0.55 : 1));
+    const sub = prof === 0 && !estado.reduzidos ? (rRaio() < 0.6 ? 2 : 1) : 0;
+    tracarRaio(pts[i], fim, Math.max(2, nivel - 2), out, sub, prof + 1, cheg[i], janela * 0.55);
   }
   return out;
 }
-function raio(de, para, cor, forca = 1) {
-  if (estado.movimentoReduzido) { clarao(para, cor, 0.5 * forca, 0.1, 500); return; }
+const COR_CANAL = new THREE.Color('#a8c0ff');
+// raio(): o canal e um clarão suave no destino. O clarão da origem é de quem chama (um por evento).
+function raio(de, para, cor, forca = 1, claraoDestino = true) {
+  if (estado.movimentoReduzido) { if (claraoDestino) clarao(para, cor, 0.5 * forca, 0.12, 700); return; }
   const linhas = tracarRaio(de, para, 5, [], estado.reduzidos ? 1 : 3);
   if (raios.length >= MAX_RAIOS) raios.shift();
-  raios.push({ linhas, t0: agora, dur: 520, cor: new THREE.Color(cor), forca });
-  clarao(de, cor, 0.9 * forca, 0.1, 700, true);
-  clarao(para, '#cfe6ff', 0.7 * forca, 0.1, 600, true);
+  raios.push({ linhas, t0: agora, cor: COR_CANAL.clone().lerp(new THREE.Color(cor), 0.3), forca, clarao: claraoDestino ? para.clone() : null });
 }
-// cintilação do relâmpago: acende, quase apaga, reacende e morre
+const LIDER = 110, DUR_RAIO = LIDER + 760;
+// brilho do canal principal e dos galhos ao longo do tempo (ms desde o início)
+function envelopeRaio(ms) {
+  if (estado.reduzidos || estado.movimentoReduzido) {
+    const u = Math.min(1, ms / DUR_RAIO);
+    return { prog: Math.min(1, ms / LIDER), canal: Math.pow(1 - u, 2), galho: Math.pow(1 - u, 2) * 0.6, ponta: 0 };
+  }
+  if (ms < LIDER) return { prog: (Math.floor(ms / LIDER * 8) + 1) / 8, canal: 0.28, galho: 0.2, ponta: 0.9 };
+  const s = ms - LIDER;
+  if (s < 55) return { prog: 1, canal: 1.3, galho: 0.8, ponta: 0 };
+  if (s < 105) return { prog: 1, canal: 0.3, galho: 0.12, ponta: 0 };
+  if (s < 165) return { prog: 1, canal: 1.0, galho: 0.28, ponta: 0 };
+  return { prog: 1, canal: 0.75 * Math.exp(-(s - 165) / 190), galho: 0.35 * Math.exp(-(s - 165) / 90), ponta: 0 };
+}
+// cintilação dos clarões de raio: acende, quase apaga, reacende e morre
 function cintila(u) {
+  if (estado.reduzidos || estado.movimentoReduzido) return Math.pow(1 - u, 2);
   if (u < 0.12) return 1;
   if (u < 0.22) return 0.25;
   if (u < 0.42) return 0.9;
   return Math.max(0, 1 - (u - 0.42) / 0.58) * 0.8;
 }
+const LARG_RAIO = [7, 3.6, 2.2];
+const corResidual = new THREE.Color('#9a7bff'), corTmpRaio = new THREE.Color();
+function desenharRaios(t) {
+  let nf = 0;
+  for (let k = raios.length - 1; k >= 0; k--) {
+    const r = raios[k], ms = t - r.t0;
+    if (ms >= DUR_RAIO) { raios.splice(k, 1); continue; }
+    const e = envelopeRaio(ms);
+    // a descarga de retorno acende a poeira do destino
+    if (r.clarao && ms >= LIDER) { clarao(r.clarao, '#cfe6ff', 0.55 * r.forca, 0.16, 650); r.clarao = null; }
+    // depois da segunda descarga o canal esfria para violeta
+    const frio = Math.min(1, Math.max(0, (ms - LIDER - 165) / 400));
+    corTmpRaio.copy(r.cor).lerp(corResidual, frio);
+    for (const { pts, prof, cheg } of r.linhas) {
+      const base = (prof === 0 ? e.canal : e.galho / prof) * r.forca;
+      if (base < 0.004 && !e.ponta) continue;
+      const w = LARG_RAIO[Math.min(2, prof)], n = pts.length;
+      for (let i = 1; i < n; i++) {
+        if (cheg[i] > e.prog) break;
+        const ponta = e.ponta && cheg[i] > e.prog - 0.07 ? e.ponta : 0;
+        const a = Math.max(base, ponta) * (prof ? 1 - 0.5 * i / n : 1);
+        const lA = prof ? w * (1 - 0.6 * (i - 1) / n) : w, lB = prof ? w * (1 - 0.6 * i / n) : w;
+        fitasRaio.seg(pts[i - 1], pts[i], a, a, lA, lB, corTmpRaio);
+        if (prof === 0 && i % 5 === 0 && nf < MAX_FAISCAS && a > 0.2) {
+          faiPos[nf * 3] = pts[i].x; faiPos[nf * 3 + 1] = pts[i].y; faiPos[nf * 3 + 2] = pts[i].z;
+          faiCor[nf * 3] = r.cor.r; faiCor[nf * 3 + 1] = r.cor.g; faiCor[nf * 3 + 2] = r.cor.b;
+          faiForca[nf] = a * 0.3;
+          nf++;
+        }
+      }
+    }
+  }
+  fitasRaio.fim();
+  faiGeo.setDrawRange(0, nf);
+  faiGeo.attributes.position.needsUpdate = true; faiGeo.attributes.aCor.needsUpdate = true; faiGeo.attributes.aForca.needsUpdate = true;
+}
 
-// ---------- onda de choque da captura ----------
+// ---------- explosão da captura ----------
+// Uma estrela que estoura no núcleo: clarão branco com raios de difração, estilhaços que
+// esfriam de branco para azul, ouro e ferrugem, gás que se expande lento e uma frente de choque irregular.
 const ondaMat = new THREE.ShaderMaterial({
   transparent: true, depthWrite: false, depthTest: false, side: THREE.DoubleSide,
-  uniforms: { uP: { value: 0 } },
+  uniforms: { uP: { value: 0 }, uSem: { value: 0 } },
   vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
-  fragmentShader: `uniform float uP; varying vec2 vUv;
-    void main(){ float r = length(vUv - 0.5) * 2.0;
-      float anel = exp(-pow((r - 0.96) / 0.035, 2.0)) + 0.35 * exp(-pow((r - 0.9) / 0.08, 2.0));
-      float a = anel * pow(1.0 - uP, 1.6) * step(r, 1.0);
-      gl_FragColor = vec4(vec3(0.62, 0.92, 1.0) * a * 1.2, 1.0); }`,
+  fragmentShader: `uniform float uP; uniform float uSem; varying vec2 vUv;
+    void main(){ vec2 q = vUv - 0.5; float r = length(q) * 2.0, a = atan(q.y, q.x);
+      // frente irregular: a onda avança mais em uns ângulos que em outros
+      float irr = sin(a * 7.0 + uSem) * 0.5 + sin(a * 13.0 - uSem * 2.0) * 0.3 + sin(a * 29.0 + uSem * 3.0) * 0.2;
+      float fr = 0.95 + irr * 0.012;
+      float frente = exp(-pow((r - fr) / 0.016, 2.0)) * (0.75 + 0.25 * sin(a * 3.0 + uSem));
+      float rastro = exp(-pow((r - fr + 0.1) / 0.09, 2.0)) * step(r, fr);
+      float f = pow(1.0 - uP, 1.5) * step(r, 1.0);
+      vec3 c = vec3(0.7, 0.88, 1.0) * frente * 0.24 + mix(vec3(0.94, 0.55, 0.24), vec3(0.55, 0.23, 0.13), uP) * rastro * 0.3;
+      gl_FragColor = vec4(c * f, 1.0); }`,
 });
 ondaMat.blending = THREE.CustomBlending; ondaMat.blendSrc = THREE.OneFactor; ondaMat.blendDst = THREE.OneFactor;
 const ondaMesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), ondaMat);
 ondaMesh.rotation.x = -Math.PI / 2; ondaMesh.visible = false; ondaMesh.renderOrder = 7; ondaMesh.frustumCulled = false;
 scene.add(ondaMesh);
 let onda = null;
+// clarão estelar: núcleo branco, raios de difração e um véu violeta, como a estrela da referência
+const explMat = new THREE.ShaderMaterial({
+  transparent: true, depthWrite: false, depthTest: false,
+  uniforms: { uF: { value: 0 }, uTam: { value: 100 } },
+  vertexShader: 'uniform float uTam; void main(){ gl_PointSize = uTam; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+  fragmentShader: `uniform float uF;
+    void main(){ vec2 d = gl_PointCoord - 0.5; float r = length(d) * 2.0;
+      float nucleo = exp(-r * r * 220.0) * 1.0 + exp(-r * r * 30.0) * 0.22 + exp(-r * 7.0) * 0.08;
+      vec2 q = abs(d) * 2.0;
+      float esp = exp(-q.x * 110.0) * exp(-q.y * 2.4) + exp(-q.y * 110.0) * exp(-q.x * 2.4);
+      vec2 e = abs(vec2(d.x + d.y, d.x - d.y)) * 1.4142;
+      float esp2 = (exp(-e.x * 160.0) * exp(-e.y * 6.0) + exp(-e.y * 160.0) * exp(-e.x * 6.0)) * 0.4;
+      vec3 c = vec3(1.0, 0.97, 0.92) * nucleo + vec3(0.72, 0.84, 1.0) * esp * 0.9 + vec3(0.66, 0.78, 1.0) * esp2
+             + vec3(0.72, 0.42, 0.95) * exp(-r * r * 5.0) * 0.12;
+      gl_FragColor = vec4(c * uF * smoothstep(1.0, 0.55, r), 1.0); }`,
+});
+explMat.blending = THREE.CustomBlending; explMat.blendSrc = THREE.OneFactor; explMat.blendDst = THREE.OneFactor;
+const explGeo = new THREE.BufferGeometry();
+explGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(3), 3));
+const explEstrela = new THREE.Points(explGeo, explMat);
+explEstrela.frustumCulled = false; explEstrela.renderOrder = 9; explEstrela.visible = false;
+scene.add(explEstrela);
+const fitasEstilhaco = criarFitas(520, 0.3);
+fitasEstilhaco.mesh.renderOrder = 8;
+scene.add(fitasEstilhaco.mesh);
+const estilhacos = [];
+// gás da explosão: as mesmas nuvens da poeira, no alvo de meia resolução, acesas pelos clarões
+const MAX_GAS_EXP = 140;
+const gasExpGeo = geometriaPoeira({ pos: [], cor: [], tam: [], alfa: [], var: [], rot: [], reg: [], keep: [] }, MAX_GAS_EXP);
+const gasExp = new THREE.Points(gasExpGeo, materialPoeira(false));
+gasExp.frustumCulled = false; gasExp.renderOrder = 1;
+cenaPoeira.add(gasExp);
+const nuvensExp = [];
+const rExp = rng(5150);
+const ESFRIA = [[0, '#ffffff'], [0.1, '#9fd8ff'], [0.32, '#f0b44c'], [0.58, '#e0733a'], [1, '#8c3b22']].map(([u, c]) => [u, new THREE.Color(c)]);
+function corEsfriando(u, out) {
+  for (let k = 1; k < ESFRIA.length; k++) {
+    if (u <= ESFRIA[k][0]) return out.copy(ESFRIA[k - 1][1]).lerp(ESFRIA[k][1], (u - ESFRIA[k - 1][0]) / (ESFRIA[k][0] - ESFRIA[k - 1][0]));
+  }
+  return out.copy(ESFRIA[ESFRIA.length - 1][1]);
+}
+function explodir() {
+  const reduz = estado.reduzidos, parado = estado.movimentoReduzido;
+  explosao = { t0: agora, dur: parado ? 900 : 2600 };
+  if (parado) return;
+  const qtd = reduz ? 140 : 420;
+  for (let k = 0; k < qtd; k++) {
+    const dir = new THREE.Vector3(gauss(rExp), gauss(rExp) * 0.32, gauss(rExp)).normalize();
+    estilhacos.push({ dir, vel: 0.22 + Math.pow(rExp(), 0.6) * 1.15, t0: agora + rExp() * 60, vida: 1200 + rExp() * 1500, larg: 1.6 + rExp() * 2.2, rastro: 0.05 + rExp() * 0.12 });
+  }
+  if (estilhacos.length > 1200) estilhacos.splice(0, estilhacos.length - 1200);
+  const nGas = reduz ? 50 : MAX_GAS_EXP;
+  nuvensExp.length = 0;
+  for (let k = 0; k < nGas; k++) {
+    const dir = new THREE.Vector3(gauss(rExp), gauss(rExp) * 0.35, gauss(rExp)).normalize();
+    const x = rExp(), cor = new THREE.Color();
+    if (x < 0.55) cor.copy(SHO.laranja).lerp(SHO.ferrugem, rExp());
+    else if (x < 0.82) cor.copy(SHO.ouro).lerp(SHO.nucleo, rExp() * 0.5);
+    else cor.copy(SHO.teal).lerp(SHO.cavidade, rExp() * 0.5);
+    nuvensExp.push({ dir, R: 0.18 + Math.pow(rExp(), 0.7) * 0.75, vida: 2400 + rExp() * 1400, tam: 0.1 + rExp() * 0.14, cor, varia: Math.floor(rExp() * 16), rot: rExp() * 6.28 });
+  }
+}
+let explosao = null, abalo = null;
+const desloc = new THREE.Vector3();
+function desenharExplosao(t) {
+  // estrela do clarão
+  if (explosao) {
+    const ms = t - explosao.t0, u = ms / explosao.dur;
+    if (u >= 1) { explosao = null; explEstrela.visible = false; }
+    else {
+      const sobe = Math.min(1, ms / 60);
+      explMat.uniforms.uF.value = (estado.movimentoReduzido ? 0.5 : 1) * 0.8 * sobe * Math.exp(-Math.max(0, ms - 60) / 520);
+      explMat.uniforms.uTam.value = Math.min(1024, renderer.domElement.height * (0.26 + 0.16 * ease(Math.min(1, ms / 900))));
+      explEstrela.visible = true;
+    }
+  }
+  // estilhaços: arrasto exponencial, rastro na direção do movimento, esfriando com a idade
+  const p = new THREE.Vector3(), q = new THREE.Vector3(), c = new THREE.Color();
+  for (let k = estilhacos.length - 1; k >= 0; k--) {
+    const s = estilhacos[k], ms = t - s.t0;
+    if (ms >= s.vida) { estilhacos.splice(k, 1); continue; }
+    if (ms < 0) continue;
+    const tau = 0.85, ts = ms / 1000, u = ms / s.vida;
+    const dist = s.vel * tau * (1 - Math.exp(-ts / tau)), v = s.vel * Math.exp(-ts / tau);
+    p.copy(s.dir).multiplyScalar(0.012 + dist);
+    q.copy(s.dir).multiplyScalar(Math.max(0.006, dist - v * s.rastro - 0.01));
+    corEsfriando(u, c);
+    const a = Math.pow(1 - u, 1.4) * Math.min(1, ms / 40);
+    fitasEstilhaco.seg(q, p, 0, a, s.larg * 0.5, s.larg * (1 - u * 0.5), c);
+  }
+  fitasEstilhaco.fim();
+  // gás em expansão
+  let ng = 0;
+  if (explosao && nuvensExp.length) {
+    const ms = t - explosao.t0, P = gasExpGeo.attributes;
+    for (const g of nuvensExp) {
+      const u = ms / g.vida;
+      if (u >= 1 || u < 0) continue;
+      const e = 1 - Math.pow(1 - u, 3);
+      P.position.array.set([g.dir.x * g.R * e, g.dir.y * g.R * e, g.dir.z * g.R * e], ng * 3);
+      P.aCor.array.set([g.cor.r, g.cor.g, g.cor.b], ng * 3);
+      P.aTam.array[ng] = g.tam * (0.5 + 1.6 * e);
+      P.aAlfa.array[ng] = 0.3 * Math.min(1, u / 0.12) * Math.pow(1 - u, 1.4);
+      P.aVar.array[ng] = g.varia; P.aRot.array[ng] = g.rot + u * 0.6; P.aReg.array[ng] = 7; P.aKeep.array[ng] = 0;
+      ng++;
+    }
+    for (const k of ['position', 'aCor', 'aTam', 'aAlfa', 'aVar', 'aRot', 'aReg', 'aKeep']) P[k].needsUpdate = true;
+  }
+  gasExpGeo.setDrawRange(0, ng);
+  // tremor curto da câmera (desligado com movimento ou efeitos reduzidos)
+  desloc.set(0, 0, 0);
+  if (abalo) {
+    const u = (t - abalo.t0) / 520;
+    if (u >= 1) abalo = null;
+    else {
+      const amp = 0.0045 * camera.position.distanceTo(controls.target) * Math.pow(1 - u, 2);
+      desloc.set(Math.sin(t * 0.09) * amp, Math.sin(t * 0.13 + 1) * amp, Math.sin(t * 0.07 + 2) * amp);
+    }
+  }
+}
 
 // ---------- nascimento: poeira que condensa numa estrela ----------
 const MAX_COND = 240;
@@ -819,6 +1260,7 @@ function aviso(texto, cor) {
   avisoTimer = setTimeout(() => { avisoEl.style.opacity = 0; }, 6000);
 }
 const painel = Math.max(0, nos.findIndex((n) => n.id === '00_PAINEL'));
+const INTERVALO_RAIO = 15000, ultimoRaio = new Map();
 const nascendo = [];
 const eventos = {
   abrir(i, origem = 'abriu') {
@@ -830,15 +1272,29 @@ const eventos = {
   },
   salvar(i) {
     if (!vivo(i)) return;
-    disparar(i, 1.5);
-    const a = posDe(i);
-    const alvos = embaralhar(nos[i].viz.filter(vivo)).slice(0, estado.reduzidos ? 3 : 6);
-    alvos.forEach((j, k) => setTimeout(() => {
-      raio(a, posDe(j), corDe(i), 1);
-      setTimeout(() => disparar(j, 0.9), 60);
-    }, estado.movimentoReduzido ? 0 : k * 70));
     registrarEEG(i, 1.0, corDe(i));
-    aviso(`Salvou **${nos[i].t}** · raio para ${alvos.length} ${alvos.length === 1 ? 'nota ligada' : 'notas ligadas'}`, corDe(i));
+    // o Obsidian salva a cada ~2 s enquanto se digita: raio cheio no máximo 1 vez a cada 15 s por nota
+    if (agora - (ultimoRaio.get(i) ?? -1e9) < INTERVALO_RAIO) {
+      propagar(i, 0.7, 1, corDe(i), 6);
+      clarao(posDe(i), corDe(i), 0.3, 0.12, 900);
+      aviso(`Salvou **${nos[i].t}** de novo · pulso suave (raio no máximo a cada 15 s)`, corDe(i));
+      return;
+    }
+    ultimoRaio.set(i, agora);
+    disparar(i, 1.5);
+    const a = posDe(i), qtd = estado.reduzidos ? 2 : 4;
+    // as ligadas mais distantes, ao menos metade fora da região: o raio cruza o céu
+    const viz = nos[i].viz.filter(vivo).map((j) => [j, a.distanceTo(posDe(j))]).sort((x, y) => y[1] - x[1]);
+    const fora = viz.filter(([j]) => nos[j].l !== nos[i].l), dentro = viz.filter(([j]) => nos[j].l === nos[i].l);
+    const metade = fora.slice(0, Math.ceil(qtd / 2));
+    const resto = [...fora.slice(metade.length), ...dentro].sort((x, y) => y[1] - x[1]).slice(0, qtd - metade.length);
+    const escolhidos = [...metade, ...resto].map(([j]) => j);
+    clarao(a, corDe(i), 0.55, 0.13, 900, true);
+    escolhidos.forEach((j, k) => setTimeout(() => {
+      raio(a, posDe(j), corDe(i), k ? 0.75 : 1, k < 3);
+      setTimeout(() => disparar(j, 0.9), estado.movimentoReduzido ? 0 : LIDER);
+    }, estado.movimentoReduzido ? 0 : k * 40));
+    aviso(`Salvou **${nos[i].t}** · raio para ${escolhidos.length} ${escolhidos.length === 1 ? 'nota ligada' : 'notas ligadas'}`, corDe(i));
   },
   nova(origem) {
     if (nos.length >= CAP) return;
@@ -874,7 +1330,7 @@ const eventos = {
     filGeo.attributes.position.needsUpdate = true;
     brilhoGeo.attributes.position.needsUpdate = true; brilhoGeo.attributes.aFase.needsUpdate = true; brilhoGeo.attributes.aReg.needsUpdate = true;
     noGeo.setDrawRange(0, nos.length);
-    ['position', 'aTam', 'aCor', 'aVis', 'aEspinho'].forEach((k) => { noGeo.attributes[k].needsUpdate = true; });
+    ['position', 'aTam', 'aCor', 'aVis', 'aEspinho', 'aDim'].forEach((k) => { noGeo.attributes[k].needsUpdate = true; });
     // grãos de poeira espiralando para o ponto onde a estrela vai acender
     const qtd = estado.reduzidos ? 18 : 44;
     for (let g = 0; g < qtd && graos.length < MAX_COND; g++) {
@@ -891,9 +1347,14 @@ const eventos = {
   },
   captura() {
     // 01_ENTRADA mudou: tempestade a partir do núcleo
-    onda = { t0: agora, dur: estado.movimentoReduzido ? 1 : 2200 };
-    disparar(painel, 1.4);
-    clarao(new THREE.Vector3(0, 0, 0), '#cfe6ff', 0.8, 0.18, 1100, true);
+    onda = { t0: agora, dur: estado.movimentoReduzido ? 1 : 2400 };
+    ondaMat.uniforms.uSem.value = Math.random() * 100;
+    disparar(painel, 1.6);
+    explodir();
+    // um único clarão forte (sem piscar) e, depois, o brilho laranja do gás aceso
+    clarao(new THREE.Vector3(0, 0, 0), '#fff1d6', 0.5, 0.24, 1300);
+    setTimeout(() => clarao(new THREE.Vector3(0, 0, 0), '#e0733a', 0.35, 0.5, 1800), estado.movimentoReduzido ? 0 : 260);
+    if (!estado.movimentoReduzido && !estado.reduzidos) abalo = { t0: agora };
     REGIOES.forEach((_, ci) => { eeg.eventos.push({ t: Date.now(), canal: ci, amp: 0.45, cor: '#cfe6ff', no: painel }); });
     eegPendente = true;
     aviso('Captura nova no **01_ENTRADA** · tempestade a partir do núcleo', '#cfe6ff');
@@ -962,8 +1423,12 @@ function selecionar(i, centralizar) {
   realceGeo.attributes.position.needsUpdate = true;
   realceGeo.setDrawRange(0, viz.length * SEG * 2);
   realceMat.color.set(corDe(i));
+  realceBase = 0.28 * Math.min(1, 4 / Math.sqrt(Math.max(1, viz.length)));
+  realceMat.opacity = realceBase;
+  realceDesde = centralizar ? -1 : agora;
   if (centralizar) voarPara(a, 0.32);
 }
+let realceBase = 0.28, realceDesde = -1;
 // voo cinematográfico: a câmera atravessa a poeira, o campo de visão abre e fecha
 let voo = null;
 const distanciaCentro = () => 1.5 * Math.max(1, 1.3 / (palco.clientWidth / palco.clientHeight));
@@ -1093,11 +1558,12 @@ function aplicarVisibilidade() {
 }
 function atualizarPoeira() {
   const g = nuvemGeo, n = nuvemDados.tam.length;
-  ['position', 'aCor', 'aTam', 'aAlfa', 'aVar', 'aRot', 'aReg'].forEach((k) => {
-    const src = { position: nuvemDados.pos, aCor: nuvemDados.cor, aTam: nuvemDados.tam, aAlfa: nuvemDados.alfa, aVar: nuvemDados.var, aRot: nuvemDados.rot, aReg: nuvemDados.reg }[k];
+  ['position', 'aCor', 'aTam', 'aAlfa', 'aVar', 'aRot', 'aReg', 'aKeep'].forEach((k) => {
+    const src = { position: nuvemDados.pos, aCor: nuvemDados.cor, aTam: nuvemDados.tam, aAlfa: nuvemDados.alfa, aVar: nuvemDados.var, aRot: nuvemDados.rot, aReg: nuvemDados.reg, aKeep: nuvemDados.keep }[k];
     g.attributes[k].array.set(src); g.attributes[k].needsUpdate = true;
   });
-  g.setDrawRange(0, Math.round(n * (estado.reduzidos || estado.qualidadeAjustada ? 0.6 : 1)));
+  g.setDrawRange(0, n);
+  uQualidade.value = estado.reduzidos || estado.qualidadeAjustada ? 0.6 : 1;
 }
 function atualizarTextoPoeira() {
   document.getElementById('poeira').innerHTML = '';
@@ -1186,11 +1652,18 @@ function redimensionar(reenquadrar = true) {
   uProj.value = (h * dpr / 2) / Math.tan(THREE.MathUtils.degToRad(FOV / 2));
   uEscala.value = h * dpr * 0.0016;
   uDpr.value = dpr;
+  uProjPoeira.value = uProj.value * ESCALA_POEIRA;
+  uCap.value = Math.max(24, 0.12 * h * dpr * ESCALA_POEIRA);
+  rtPoeira.setSize(Math.max(1, Math.round(w * dpr * ESCALA_POEIRA)), Math.max(1, Math.round(h * dpr * ESCALA_POEIRA)));
+  uTela.value = THREE.MathUtils.clamp(Math.min(w, h) / 800, 0.35, 1);
+  uRes.value.set(w * dpr / 2, h * dpr / 2);
+  uProjCeu.value = uProj.value; uCapCeu.value = 0.2 * h * dpr;
   scene.getObjectByName('ceu').material.uniforms.uDpr.value = dpr;
   fundo.material.uniforms.uAspecto.value = w / h;
   desenharEEG(true);
 }
-addEventListener('resize', () => redimensionar());
+// observa o palco, não a janela: no plugin a aba muda de tamanho sem 'resize' na janela
+new ResizeObserver(() => redimensionar()).observe(palco);
 redimensionar();
 
 document.addEventListener('visibilitychange', () => {
@@ -1237,12 +1710,13 @@ function quadro(t) {
     const f = u < 0 || u >= 1 ? 0 : c.forca * (c.piscar ? cintila(u) : Math.pow(1 - u, 2));
     uClaroes.value[k].set(c.pos.x, c.pos.y, c.pos.z, f);
     uClaroesCor.value[k].set(c.cor.r, c.cor.g, c.cor.b);
+    uClaroesRaio.value[k] = c.raio * c.raio;
   }
 
   // onda de choque: anel no plano do disco, raios curtos nos braços quando ela passa
   if (onda) {
     const p = Math.min(1, (t - onda.t0) / onda.dur);
-    const r = 0.05 + ease(p) * 1.25;
+    const r = 0.05 + ease(p) * 1.05;
     ondaMesh.visible = true; ondaMesh.scale.setScalar(r); ondaMat.uniforms.uP.value = p;
     if (!onda.raios) onda.raios = [0.3, 0.55, 0.8].map((x) => ({ x, feito: false }));
     for (const rz of onda.raios) {
@@ -1251,7 +1725,7 @@ function quadro(t) {
         for (let q = 0; q < (estado.reduzidos ? 1 : 2); q++) {
           const cands = nos.filter((n) => vivo(n.i) && Math.abs(Math.hypot(posicoes[n.i * 3], posicoes[n.i * 3 + 2]) - rz.x) < 0.04);
           const a = cands[Math.floor(Math.random() * cands.length)];
-          if (a && a.viz.length) raio(posDe(a.i), posDe(a.viz[Math.floor(Math.random() * a.viz.length)]), '#cfe6ff', 0.8);
+          if (a && a.viz.length) raio(posDe(a.i), posDe(a.viz[Math.floor(Math.random() * a.viz.length)]), '#cfe6ff', 0.8, false);
         }
       }
     }
@@ -1315,30 +1789,15 @@ function quadro(t) {
   pulGeo.setDrawRange(0, n);
   pulGeo.attributes.position.needsUpdate = true; pulGeo.attributes.aCor.needsUpdate = true; pulGeo.attributes.aForca.needsUpdate = true;
 
-  // raios: linhas brancas cintilando + faíscas coloridas ao longo do caminho
-  let nl = 0, nf = 0;
-  for (let k = raios.length - 1; k >= 0; k--) {
-    const r = raios[k], u = (t - r.t0) / r.dur;
-    if (u >= 1) { raios.splice(k, 1); continue; }
-    const a = cintila(u) * r.forca;
-    for (const pts of r.linhas) {
-      for (let i = 1; i < pts.length && nl < MAX_RAIOS * PONTOS_RAIO; i++) {
-        const A = pts[i - 1], B = pts[i];
-        raioPos.set([A.x, A.y, A.z, B.x, B.y, B.z], nl * 6);
-        raioAlfa[nl * 2] = raioAlfa[nl * 2 + 1] = a;
-        nl++;
-        if (i % 2 === 0 && nf < MAX_FAISCAS) {
-          faiPos.set([B.x, B.y, B.z], nf * 3);
-          faiCor.set([r.cor.r, r.cor.g, r.cor.b], nf * 3);
-          faiForca[nf] = a * 0.55;
-          nf++;
-        }
-      }
-    }
+  // raios, estilhaços e gás da explosão
+  desenharRaios(t);
+  desenharExplosao(t);
+
+  if (realceDesde >= 0) {
+    const u = (t - realceDesde) / 3000;
+    realceMat.opacity = realceBase * Math.max(0, 1 - u);
+    if (u >= 1) { realceDesde = -1; realceGeo.setDrawRange(0, 0); }
   }
-  raioGeo.setDrawRange(0, nl * 2); faiGeo.setDrawRange(0, nf);
-  raioGeo.attributes.position.needsUpdate = true; raioGeo.attributes.aAlfa.needsUpdate = true;
-  faiGeo.attributes.position.needsUpdate = true; faiGeo.attributes.aCor.needsUpdate = true; faiGeo.attributes.aForca.needsUpdate = true;
 
   // voo: curva suave por cima, campo de visão abre no meio do caminho
   if (voo) {
@@ -1358,7 +1817,15 @@ function quadro(t) {
   }
 
   controls.update();
+  renderer.setRenderTarget(rtPoeira);
+  renderer.setClearColor(0x000000, 1); renderer.clear(true, false, false);
+  camera.position.add(desloc);
+  grupoCeu.position.copy(camera.position);
+  renderer.render(cenaPoeira, camera);
+  renderer.setRenderTarget(null);
+  renderer.setClearColor(0x070b16, 1);
   renderer.render(scene, camera);
+  camera.position.sub(desloc);
   desenharEEG(eegPendente); eegPendente = false;
 
   if (quadros.length >= 30 && Math.round(t / 500) !== Math.round((t - dt) / 500)) {
