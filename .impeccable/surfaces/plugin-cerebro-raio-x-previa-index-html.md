@@ -7,6 +7,8 @@ related_targets: []
 
 # Cérebro em raio X — plugin Obsidian (prévia)
 
+STATUS: ARCHIVED 2026-10-10 (owner replaced the world with a galaxy). Code moved to arquivo/plugin-cerebro-raio-x/; knowledge in conhecimento/cerebro-em-raio-x.md. Do not build from this contract.
+
 Mode: Experience. One user (the owner), Obsidian desktop, Windows 11, integrated GPU, own tab or side panel, left running all day. UI copy pt-BR. Read-only over the vault. Data: metadataCache.resolvedLinks in the plugin; `previa/grafo.json` (scripts/extrair-grafo) in the preview. Rendering chosen by owner: Three.js points + procedural cortex shell (fresnel), firing glow additive (no full-screen bloom pass). EEG history strip approved by owner.
 
 ## Direction contract
