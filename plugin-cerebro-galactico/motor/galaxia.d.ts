@@ -10,6 +10,11 @@ export interface OpcoesGalaxia {
   aoAbrir?: (id: string) => void;
   aoMudarConfig?: (config: Required<ConfigGalaxia>) => void;
   alvoTeclado?: EventTarget;
+  regioes?: Record<string, { nome: string; onde?: string }>;
+  nucleo?: string;
+  mostrarTipo?: boolean;
+  nomeCaptura?: string;
+  rotuloHalo?: string;
 }
 export interface Galaxia {
   indice(id: string): number;

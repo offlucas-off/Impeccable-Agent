@@ -9,6 +9,9 @@ const SIMULACAO = `<div id="simular" class="hud" role="group" aria-label="Simula
   <button id="demo" aria-pressed="true">Manhã de trabalho</button>
 </div>`;
 
+// texto vindo do cofre (nomes de pasta) entra escapado
+const esc = (t) => String(t).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+
 export function htmlHud(opcoes = {}) {
   const simulacao = opcoes.simulacao ? SIMULACAO : '';
   return `<div id="palco" aria-label="O cofre como galáxia em três dimensões. Arraste para girar, role para voar na direção do ponteiro, clique numa estrela para abrir a nota."></div>
@@ -34,7 +37,7 @@ export function htmlHud(opcoes = {}) {
     <div id="filtros" hidden>
       <h2>Mostrar</h2>
       <div>
-        <label class="chave">Esconder 99_ARQUIVO (halo) <input type="checkbox" id="f-arquivo"></label>
+        <label class="chave">${esc(opcoes.rotuloHalo || 'Esconder o halo (99_ARQUIVO)')} <input type="checkbox" id="f-arquivo"></label>
         <label class="chave">Atividade de fundo <input type="checkbox" id="f-fundo" checked></label>
         <label class="chave">Efeitos reduzidos <input type="checkbox" id="f-reduzidos"></label>
         <label class="chave">Som de trovão <input type="checkbox" id="f-som"></label>

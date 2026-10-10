@@ -1,7 +1,8 @@
 // Plugin "Cérebro Galáctico": a galáxia da prévia dentro do Obsidian, alimentada pelo
 // metadataCache (notas e links) e pelos eventos do workspace e do vault. Só lê o cofre.
-import { App, ItemView, Plugin, PluginSettingTab, Scope, Setting, TAbstractFile, TFile, WorkspaceLeaf } from 'obsidian';
-import { criarGalaxia, type Galaxia, type Grafo, type NoGrafo } from '../../motor/galaxia.js';
+import { AbstractInputSuggest, App, ItemView, Plugin, PluginSettingTab, Scope, Setting, TAbstractFile, TFile, WorkspaceLeaf } from 'obsidian';
+import { criarGalaxia, type Galaxia, type Grafo } from '../../motor/galaxia.js';
+import { bonito, mapear, nomesDasRegioes, noDe, POSICOES, type Mapa, type Regiao } from './regioes';
 
 const TIPO_VISAO = 'cerebro-galactico';
 const ICONE = 'orbit';
@@ -13,6 +14,10 @@ interface Configuracoes {
   esconderArquivo: boolean;
   novaAba: boolean;
   notaCaptura: string;
+  /** nota no centro da galáxia; se não existir, vale a nota mais ligada */
+  nucleo: string;
+  /** pasta de topo -> região escolhida pelo usuário (o resto é automático) */
+  pastas: Record<string, string>;
 }
 
 const PADRAO: Configuracoes = {
@@ -22,48 +27,22 @@ const PADRAO: Configuracoes = {
   esconderArquivo: false,
   novaAba: true,
   notaCaptura: '01_ENTRADA.md',
-};
-
-// pasta de topo -> (lobo, tipo de disparo); o mesmo mapa de scripts/extrair-grafo
-const LOBOS: Record<string, [string, string]> = {
-  '60_CONHECIMENTO': ['frontal', 'conhecimento'],
-  '10_PROJETOS': ['parietal', 'projeto'],
-  '20_REGRAS': ['temporal', 'regra'],
-  '50_METODOS': ['temporal', 'metodo'],
-  '30_INCIDENTES': ['occipital', 'incidente'],
-  '40_DECISOES': ['motor', 'decisao'],
-  '70_FONTES': ['cerebelo', 'fonte'],
-  '80_PESQUISA': ['cerebelo', 'pesquisa'],
-  '99_ARQUIVO': ['tronco', 'arquivo'],
-  '90_SISTEMA': ['talamo', 'sistema'],
+  nucleo: '00_PAINEL.md',
+  pastas: {},
 };
 
 const idDe = (caminho: string) => caminho.replace(/\.md$/i, '');
 const ehNota = (f: TAbstractFile | null): f is TFile => f instanceof TFile && f.extension === 'md';
 
-function noDe(caminho: string): NoGrafo {
-  const id = idDe(caminho);
-  const partes = id.split('/');
-  const topo = partes.length > 1 ? partes[0] : '';
-  const [l, k] = LOBOS[topo] ?? ['talamo', 'sistema'];
-  let s = '';
-  if (topo === '60_CONHECIMENTO' && partes.length > 2) {
-    s = partes[1];
-    if (s === 'VIDEO' && partes.length > 3) s = `VIDEO/${partes[2]}`;
-  } else if (topo === '10_PROJETOS' && partes.length > 2) {
-    s = partes[1];
-  }
-  return { id, t: partes[partes.length - 1], l, k, s };
-}
-
 export default class CerebroGalactico extends Plugin {
   config: Configuracoes = { ...PADRAO };
 
   async onload() {
-    this.config = { ...PADRAO, ...(await this.loadData()) };
+    const salvo = await this.loadData();
+    this.config = { ...PADRAO, ...salvo, pastas: { ...(salvo?.pastas ?? {}) } };
     this.registerView(TIPO_VISAO, (leaf) => new VisaoGalaxia(leaf, this));
     this.addRibbonIcon(ICONE, 'Abrir Cérebro Galáctico', () => this.abrirVisao());
-    this.addCommand({ id: 'abrir', name: 'Abrir Cérebro Galáctico', callback: () => this.abrirVisao() });
+    this.addCommand({ id: 'abrir', name: 'Abrir a galáxia', callback: () => this.abrirVisao() });
     this.addSettingTab(new AbaConfiguracoes(this.app, this));
     // eventos do cofre só depois do carregamento: na abertura o vault dispara "create" para tudo
     this.app.workspace.onLayoutReady(() => this.ouvirCofre());
@@ -110,6 +89,7 @@ class VisaoGalaxia extends ItemView {
   private pendentes = new Map<string, number>();
   private ultimoClique = { caminho: '', quando: 0 };
   private reconstruir = 0;
+  private mapa: Mapa | null = null;
 
   constructor(leaf: WorkspaceLeaf, private plugin: CerebroGalactico) {
     super(leaf);
@@ -152,19 +132,33 @@ class VisaoGalaxia extends ItemView {
     this.desmontar();
   }
 
-  remontar() { if (this.galaxia) this.montar(); }
+  remontar() { this.montar(); }
 
   private montar() {
     this.desmontar();
     this.contentEl.empty();
-    this.raiz = this.contentEl.createDiv();
     const config = this.plugin.config;
-    this.galaxia = criarGalaxia(this.raiz, this.lerGrafo(), {
+    const grafo = this.lerGrafo();
+    if (grafo.nos.length === 0) {
+      // cofre sem notas: nada para desenhar ainda
+      const vazio = this.contentEl.createDiv({ cls: 'cg-vazio' });
+      vazio.createEl('strong', { text: 'A galáxia nasce com a primeira nota.' });
+      vazio.createSpan({ text: 'Crie uma nota no cofre e ela acende aqui.' });
+      return;
+    }
+    const { regioes, rotuloHalo } = nomesDasRegioes(this.mapa!);
+    this.raiz = this.contentEl.createDiv();
+    this.galaxia = criarGalaxia(this.raiz, grafo, {
       config: { som: config.som, reduzidos: config.reduzidos, fundo: config.fundo, esconderArquivo: config.esconderArquivo },
       textoClique: config.novaAba ? 'Abriu numa aba nova' : 'Abriu',
       aoAbrir: (id) => this.abrirNota(id),
       aoMudarConfig: (c) => { void this.plugin.salvarConfig(c); },
       alvoTeclado: this.contentEl,
+      regioes,
+      rotuloHalo,
+      nucleo: idDe(config.nucleo),
+      mostrarTipo: this.mapa!.cerebro,
+      nomeCaptura: config.notaCaptura ? idDe(config.notaCaptura).split('/').pop() : undefined,
     });
     this.galaxia?.definirVisivel(this.contentEl.isShown());
   }
@@ -185,7 +179,8 @@ class VisaoGalaxia extends ItemView {
   private lerGrafo(): Grafo {
     const arquivos = this.app.vault.getMarkdownFiles().sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
     const indice = new Map(arquivos.map((f, i) => [f.path, i]));
-    const nos = arquivos.map((f) => noDe(f.path));
+    this.mapa = mapear(arquivos.map((f) => f.path), this.plugin.config.pastas);
+    const nos = arquivos.map((f) => noDe(f.path, this.mapa!));
     const pares = new Set<string>();
     const arestas: [number, number][] = [];
     this.links.clear();
@@ -227,12 +222,13 @@ class VisaoGalaxia extends ItemView {
 
   aoModificar(f: TFile) {
     if (!this.galaxia) return;
-    if (f.path === this.plugin.config.notaCaptura) this.galaxia.captura();
+    if (this.plugin.config.notaCaptura && f.path === this.plugin.config.notaCaptura) this.galaxia.captura();
     else this.galaxia.salvar(idDe(f.path));
   }
 
   aoCriar(f: TFile) {
-    if (!this.galaxia) return;
+    // primeira nota de um cofre vazio: monta a galáxia
+    if (!this.galaxia) { if (this.contentEl.querySelector('.cg-vazio')) this.remontarDepois(); return; }
     // espera o metadataCache ler os links; nota vazia (Ctrl+N) nasce sozinha em 2 s
     this.pendentes.set(f.path, window.setTimeout(() => this.nascer(f.path), 2000));
   }
@@ -264,7 +260,9 @@ class VisaoGalaxia extends ItemView {
     const saida = Object.keys(resolvidos[caminho] ?? {}).filter((d) => d !== caminho && galaxia.indice(idDe(d)) >= 0);
     const entrada = Object.keys(resolvidos).filter((o) => o !== caminho && resolvidos[o][caminho] && galaxia.indice(idDe(o)) >= 0);
     const ligadas = [...new Set([...saida, ...entrada])];
-    if (galaxia.nova(noDe(caminho), ligadas.map(idDe)) < 0) { this.remontarDepois(); return; }
+    // pasta de topo nova: o mapa automático muda, então a galáxia se remonta
+    if (!this.mapa || (caminho.includes('/') && !this.mapa.regiao.has(caminho.split('/')[0]))) { this.remontarDepois(); return; }
+    if (galaxia.nova(noDe(caminho, this.mapa), ligadas.map(idDe)) < 0) { this.remontarDepois(); return; }
     this.links.set(caminho, new Set(saida));
     for (const o of entrada) (this.links.get(o) ?? this.links.set(o, new Set()).get(o)!).add(caminho);
   }
@@ -283,15 +281,41 @@ class VisaoGalaxia extends ItemView {
     this.galaxia?.renomear(idDe(antigo), idDe(f.path), f.basename);
   }
 
+  /** pastas de topo do cofre com a região de cada uma, para a configuração */
+  mapaAtual(): Mapa {
+    return mapear(this.app.vault.getMarkdownFiles().map((f) => f.path), this.plugin.config.pastas);
+  }
+
   aplicarConfig() {
     const c = this.plugin.config;
     this.galaxia?.definirConfig({ som: c.som, reduzidos: c.reduzidos, fundo: c.fundo, esconderArquivo: c.esconderArquivo });
   }
 }
 
+// sugestões de notas do cofre para os campos de caminho
+class SugestaoNota extends AbstractInputSuggest<TFile> {
+  constructor(app: App, private campo: HTMLInputElement, private escolher: (f: TFile) => void) {
+    super(app, campo);
+  }
+  getSuggestions(busca: string) {
+    const q = busca.toLowerCase();
+    return this.app.vault.getMarkdownFiles().filter((f) => f.path.toLowerCase().includes(q)).slice(0, 30);
+  }
+  renderSuggestion(f: TFile, el: HTMLElement) { el.setText(f.path); }
+  selectSuggestion(f: TFile) { this.campo.value = f.path; this.escolher(f); this.close(); }
+}
+
 class AbaConfiguracoes extends PluginSettingTab {
+  private remontar = 0;
+
   constructor(app: App, private plugin: CerebroGalactico) {
     super(app, plugin);
+  }
+
+  // mudanças que alteram o desenho remontam a galáxia, uma vez só depois da última
+  private remontarGalaxia() {
+    window.clearTimeout(this.remontar);
+    this.remontar = window.setTimeout(() => this.plugin.visao()?.remontar(), 600);
   }
 
   display() {
@@ -302,22 +326,66 @@ class AbaConfiguracoes extends PluginSettingTab {
         .setValue(this.plugin.config[campo])
         .onChange(async (v) => {
           await this.plugin.salvarConfig({ [campo]: v });
-          if (campo === 'novaAba') this.plugin.visao()?.remontar();
+          if (campo === 'novaAba') this.remontarGalaxia();
           else this.plugin.visao()?.aplicarConfig();
         }));
 
     chave('Som de trovão', 'Cada raio e cada captura têm trovão sintetizado. Desligado por padrão.', 'som');
     chave('Efeitos reduzidos', 'Menos poeira e menos raios por evento. Ajuda em GPU integrada fraca.', 'reduzidos');
-    chave('Atividade de fundo', 'Pulsos suaves de neurônios quando nada acontece no cofre.', 'fundo');
-    chave('Esconder 99_ARQUIVO', 'Tira o halo do arquivo morto da galáxia.', 'esconderArquivo');
+    chave('Atividade de fundo', 'Pulsos suaves entre as estrelas quando nada acontece no cofre.', 'fundo');
+    chave('Esconder o halo', 'Tira da galáxia as pastas que estão no halo (o arquivo morto).', 'esconderArquivo');
     chave('Abrir em aba nova', 'Clique numa estrela abre a nota numa aba nova. Desligado, reaproveita a última aba de nota.', 'novaAba');
 
-    new Setting(containerEl)
-      .setName('Nota de captura')
-      .setDesc('Salvar esta nota dispara a tempestade a partir do núcleo. Caminho a partir da raiz do cofre.')
-      .addText((t) => t
-        .setPlaceholder(PADRAO.notaCaptura)
-        .setValue(this.plugin.config.notaCaptura)
-        .onChange(async (v) => { await this.plugin.salvarConfig({ notaCaptura: v.trim() || PADRAO.notaCaptura }); }));
+    this.notas();
+    this.regioes();
+  }
+
+  private campoNota(nome: string, desc: string, campo: 'nucleo' | 'notaCaptura') {
+    new Setting(this.containerEl).setName(nome).setDesc(desc).addSearch((t) => {
+      t.setPlaceholder(PADRAO[campo]).setValue(this.plugin.config[campo]);
+      const salvar = async (v: string) => { await this.plugin.salvarConfig({ [campo]: v.trim() }); this.remontarGalaxia(); };
+      new SugestaoNota(this.app, t.inputEl, (f) => void salvar(f.path));
+      t.onChange((v) => void salvar(v));
+    });
+  }
+
+  private notas() {
+    new Setting(this.containerEl).setName('Notas especiais').setHeading();
+    this.campoNota('Nota do núcleo', 'Fica no centro da galáxia, maior que as outras, e é de onde sai a tempestade. Se não existir, o núcleo é a nota com mais links.', 'nucleo');
+    this.campoNota('Nota de captura', 'Salvar esta nota dispara a tempestade a partir do núcleo. Vazio desliga.', 'notaCaptura');
+  }
+
+  private regioes() {
+    const { containerEl } = this;
+    new Setting(containerEl).setName('Regiões').setHeading()
+      .setDesc('Cada pasta de topo do cofre ocupa uma região da galáxia. No automático, as maiores pastas ficam com os braços longos e pastas de arquivo vão para o halo. Notas soltas na raiz ficam no núcleo.');
+    const mapa = this.plugin.visao()?.mapaAtual() ?? mapear(this.app.vault.getMarkdownFiles().map((f) => f.path), this.plugin.config.pastas);
+    if (mapa.contagem.size === 0) {
+      new Setting(containerEl).setDesc('O cofre ainda não tem pastas: todas as notas ficam no núcleo.');
+      return;
+    }
+    const regioes = Object.keys(POSICOES) as Regiao[];
+    for (const [pasta, qtd] of mapa.contagem) {
+      const auto = mapa.auto.get(pasta)!;
+      new Setting(containerEl)
+        .setName(pasta)
+        .setDesc(`${qtd.toLocaleString('pt-BR')} ${qtd === 1 ? 'nota' : 'notas'}${bonito(pasta) !== pasta ? ` · aparece como “${bonito(pasta)}”` : ''}`)
+        .addDropdown((d) => {
+          d.addOption('', `Automático: ${POSICOES[auto]}`);
+          for (const r of regioes) d.addOption(r, POSICOES[r]);
+          d.setValue(this.plugin.config.pastas[pasta] ?? '');
+          d.onChange(async (v) => {
+            const pastas = { ...this.plugin.config.pastas };
+            if (v) pastas[pasta] = v; else delete pastas[pasta];
+            await this.plugin.salvarConfig({ pastas });
+            this.remontarGalaxia();
+          });
+        });
+    }
+    new Setting(containerEl).addButton((b) => b.setButtonText('Voltar tudo ao automático').onClick(async () => {
+      await this.plugin.salvarConfig({ pastas: {} });
+      this.remontarGalaxia();
+      this.display();
+    }));
   }
 }

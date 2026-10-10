@@ -84,6 +84,16 @@ Capturas em `capturas/` (relógio virtual, fases exatas): 01 galáxia, 02a–c f
 - **Ctrl/Cmd+K** busca dentro da galáxia enquanto ela está ativa, sem disparar o atalho global do Obsidian.
 - **Verificação:** typecheck (`npm run typecheck`) limpo; o plugin rodou num simulador da API do Obsidian no Chromium com o cofre real (1.114 notas): visão, salvar, captura, nota nova, link novo, renomear, apagar, clique, configurações nos dois sentidos, pausa e fechamento, sem erros no console. Capturas 08 e 09. Falta o teste no Obsidian de verdade, na GPU integrada do dono (meta: 30 fps ou mais; o painel de filtros mostra o fps medido).
 
+## Pronto para qualquer cofre (2026-10-10)
+
+- **Regiões configuráveis:** cada pasta de topo cai numa região (braços 1 a 4, pontas dos braços 2 e 3, halo, núcleo). O automático usa o mapa do Cérebro quando reconhece as pastas; nos outros cofres dá os braços longos às maiores pastas, manda pastas de arquivo para o halo e reparte o resto pelo braço com menos notas. Na aba de configurações, um menu por pasta (com a escolha automática visível) e "Voltar tudo ao automático".
+- **Nomes de região vêm das pastas** ("60_CONHECIMENTO" vira "Conhecimento"; "Receitas · Viagens +2"). No cofre do Cérebro, nomes e tipos de nota continuam os originais.
+- **Nota do núcleo** configurável (padrão `00_PAINEL.md`; sem ela, a nota com mais links). **Nota de captura** com sugestões de notas; vazio desliga.
+- **Casos de borda:** cofre vazio mostra "A galáxia nasce com a primeira nota." e monta sozinho na primeira nota; pasta de topo nova remonta a galáxia; filtros só mostram regiões com notas; nomes de pasta entram escapados no HUD.
+- **Publicação:** `plugin/README.md`, `plugin/LICENSE` (MIT), `plugin/versions.json`, comando renomeado para "Abrir a galáxia" (o Obsidian já prefixa o nome do plugin).
+- **Verificado** no simulador da API com três cofres: o do Cérebro (igual a antes), um genérico com 11 pastas e subpastas, e um vazio. Sem erros. Capturas 10 e 11.
+- **Para entrar na lista da comunidade falta:** um repositório público só do plugin (com `manifest.json` na raiz), uma release com `main.js`, `manifest.json` e `styles.css`, e o pull request em `obsidianmd/obsidian-releases`. O `fundingUrl` do manifest entra quando as contas de apoio existirem.
+
 ## Decisões do dono (2026-10-10)
 
 1. **Clique numa estrela abre a nota numa aba nova.** Na prévia o aviso diz "Abriria numa aba nova"; no plugin, `workspace.getLeaf('tab').openFile()`.

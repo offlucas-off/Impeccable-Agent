@@ -7,7 +7,9 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { htmlHud } from './hud.js';
 
 // raiz: elemento vazio que recebe a galáxia; GRAFO: { nos, arestas, notas, sinapses }.
-// opcoes: carga, simulacao, config, textoClique, aoAbrir(id), aoMudarConfig(config), alvoTeclado.
+// opcoes: carga, simulacao, config, textoClique, aoAbrir(id), aoMudarConfig(config), alvoTeclado,
+//   regioes ({ id: { nome, onde } } por cima das do Cérebro), nucleo (id da nota central;
+//   sem ela, a mais ligada), mostrarTipo, nomeCaptura, rotuloHalo.
 export function criarGalaxia(raiz, GRAFO, opcoes = {}) {
 raiz.classList.add('cg-raiz');
 if (opcoes.simulacao) raiz.classList.add('com-simulacao');
@@ -48,6 +50,8 @@ const REGIOES = [
   { id: 'tronco', nome: 'Arquivo', curto: 'ARQ', onde: 'halo' },
   { id: 'talamo', nome: 'Núcleo', curto: 'NUC', onde: 'núcleo' },
 ];
+// outro cofre: as regiões ganham os nomes das pastas que caíram nelas
+for (const r of REGIOES) if (opcoes.regioes?.[r.id]) Object.assign(r, opcoes.regioes[r.id]);
 const REG_IDX = Object.fromEntries(REGIOES.map((l, i) => [l.id, i]));
 const NOME_TIPO = {
   regra: 'regra', incidente: 'incidente', decisao: 'decisão', metodo: 'método',
@@ -129,6 +133,9 @@ const N0 = GRAFO.nos.length;
 const CAP = N0 + 96;
 const nos = GRAFO.nos.map((n, i) => ({ ...n, i, viz: [] }));
 for (const [a, b] of GRAFO.arestas) { nos[a].viz.push(b); nos[b].viz.push(a); }
+// a nota do núcleo fica no centro e é a origem da tempestade; sem ela, vale a mais ligada
+let NUCLEO = nos.findIndex((n) => n.id === (opcoes.nucleo ?? '00_PAINEL'));
+if (NUCLEO < 0) NUCLEO = nos.reduce((m, n) => (n.viz.length > (nos[m]?.viz.length ?? -1) ? n.i : m), 0);
 const posicoes = new Float32Array(CAP * 3);
 
 // sub-regiões viram aglomerados ao longo do braço; comprimento ∝ √notas
@@ -149,12 +156,12 @@ function faixasDeSub(regiao) {
   }
   return faixas;
 }
-const FAIXAS = { frontal: faixasDeSub('frontal'), parietal: faixasDeSub('parietal') };
+const FAIXAS = Object.fromEntries(Object.keys(BRACOS).map((id) => [id, faixasDeSub(id)]));
 
 function posicionar(n) {
   const r = rng(hash(n.id));
   const out = new THREE.Vector3();
-  if (n.id === '00_PAINEL') return out.set(0, 0, 0);
+  if (n.i === NUCLEO) return out.set(0, 0, 0);
   if (n.l === 'talamo') {
     return out.set(gauss(r) * 0.035, gauss(r) * 0.022, gauss(r) * 0.035);
   }
@@ -731,8 +738,8 @@ const aTam = new Float32Array(CAP), aAtiv = new Float32Array(CAP), aCor = new Fl
 const corTmp = new THREE.Color();
 function configurarNo(n) {
   const grau = n.viz.length;
-  aTam[n.i] = n.id === '00_PAINEL' ? 5.0 : 1.3 + Math.min(3.2, Math.log2(1 + grau) * 0.5);
-  aEspinho[n.i] = (grau >= 40 || n.id === '00_PAINEL') ? 1 : 0;
+  aTam[n.i] = n.i === NUCLEO ? 5.0 : 1.3 + Math.min(3.2, Math.log2(1 + grau) * 0.5);
+  aEspinho[n.i] = (grau >= 40 || n.i === NUCLEO) ? 1 : 0;
   corTmp.set(COR[n.k] || COR.sistema);
   aCor.set([corTmp.r, corTmp.g, corTmp.b], n.i * 3);
   aVis[n.i] = 1;
@@ -1210,7 +1217,8 @@ function trovao({ estalo = 0, ronco = 0.5, atraso = 0, dur = 2.6, grave = 220 } 
 const corDe = (i) => COR[nos[i].k] || COR.sistema;
 const nomeRegiao = (i) => REGIOES[REG_IDX[nos[i].l] ?? 7];
 // "no braço…", "na ponta…", "no halo"
-const emRegiao = (i) => { const o = nomeRegiao(i).onde; return (o.startsWith('ponta') ? 'na ' : 'no ') + o; };
+const emRegiao = (i) => { const o = nomeRegiao(i).onde; return (/^(ponta|região)/.test(o) ? 'na ' : 'no ') + o; };
+const tipoDe = (n) => (opcoes.mostrarTipo === false ? '' : ` · ${NOME_TIPO[n.k] || n.k}`);
 const avisoEl = $('evento');
 let avisoTimer = 0;
 function aviso(texto, cor) {
@@ -1222,7 +1230,7 @@ function aviso(texto, cor) {
   clearTimeout(avisoTimer);
   avisoTimer = setTimeout(() => { avisoEl.style.opacity = 0; }, 6000);
 }
-const painel = Math.max(0, nos.findIndex((n) => n.id === '00_PAINEL'));
+const painel = NUCLEO;
 const INTERVALO_RAIO = 15000, ultimoRaio = new Map();
 const nascendo = [];
 const porId = new Map(nos.map((n) => [n.id, n.i]));
@@ -1258,7 +1266,7 @@ const eventos = {
     if (!vivo(i)) return;
     propagar(i, 1.0, 2, corDe(i), 12);
     clarao(posDe(i), corDe(i), 0.35, 0.08, 900);
-    if (origem) aviso(`${origem === 'clique' ? (opcoes.textoClique || 'Abriria numa aba nova') : 'Abriu'} **${nos[i].t}** · ${NOME_TIPO[nos[i].k]} ${emRegiao(i)}`, corDe(i));
+    if (origem) aviso(`${origem === 'clique' ? (opcoes.textoClique || 'Abriria numa aba nova') : 'Abriu'} **${nos[i].t}**${tipoDe(nos[i])} ${emRegiao(i)}`, corDe(i));
   },
   salvar(i) {
     if (!vivo(i)) return;
@@ -1355,7 +1363,7 @@ const eventos = {
     setTimeout(() => clarao(new THREE.Vector3(0, 0, 0), '#e0733a', 0.35, 0.5, 1800), estado.movimentoReduzido ? 0 : 260);
     if (!estado.movimentoReduzido && !estado.reduzidos) abalo = { t0: agora };
     trovao({ estalo: 0.35, ronco: 0.95, dur: 3.8, grave: 130 });
-    aviso('Captura nova no **01_ENTRADA** · tempestade a partir do núcleo', '#cfe6ff');
+    aviso(`Captura nova em **${opcoes.nomeCaptura || '01_ENTRADA'}** · tempestade a partir do núcleo`, '#cfe6ff');
   },
 };
 
@@ -1383,7 +1391,7 @@ function mostrarRotulo(i, x, y) {
   if (i < 0) { rotulo.classList.remove('visivel'); return; }
   const n = nos[i];
   rotulo.querySelector('strong').textContent = n.t;
-  rotulo.querySelector('span').textContent = `${nomeRegiao(i).nome} · ${NOME_TIPO[n.k]} · ${n.viz.length} ${n.viz.length === 1 ? 'sinapse' : 'sinapses'}`;
+  rotulo.querySelector('span').textContent = `${nomeRegiao(i).nome}${tipoDe(n)} · ${n.viz.length} ${n.viz.length === 1 ? 'sinapse' : 'sinapses'}`;
   const w = rotulo.offsetWidth, caixa = raiz.getBoundingClientRect();
   rotulo.style.left = `${Math.min(x - caixa.left, caixa.width - w - 20)}px`;
   rotulo.style.top = `${y - caixa.top}px`;
@@ -1522,7 +1530,8 @@ ouvir(document, 'pointerdown', (e) => {
   if (!painelFiltros.hidden && !painelFiltros.contains(e.target) && !botaoFiltros.contains(e.target)) fecharFiltros();
 });
 const regioesEl = $('lobos');
-[{ id: null, nome: 'Todas' }, ...REGIOES].forEach((l) => {
+// só as regiões que têm notas viram filtro
+[{ id: null, nome: 'Todas' }, ...REGIOES.filter((r) => nos.some((n) => n.l === r.id))].forEach((l) => {
   const b = document.createElement('button');
   b.textContent = l.nome; b.title = l.onde ? `${l.nome}: ${l.onde}` : 'Todas as regiões';
   b.setAttribute('aria-pressed', l.id === null ? 'true' : 'false');

@@ -30,6 +30,13 @@ const encaixe = `
   padding: 0; overflow: hidden; position: relative; background: #070b16; outline: none;
 }
 .cg-visao > .cg-raiz { position: absolute; inset: 0; }
+/* cofre sem notas */
+.cg-visao .cg-vazio {
+  position: absolute; inset: 0; display: grid; place-content: center; gap: 6px; padding: 24px; text-align: center;
+  color: #8d97b3; font: 400 13px/1.45 'Manrope', 'Inter', system-ui, sans-serif;
+  background: radial-gradient(closest-side, #0c1630, #070b16);
+}
+.cg-visao .cg-vazio strong { color: #eef1fa; font-size: 15px; font-weight: 700; }
 `;
 writeFileSync(join(raiz, 'plugin/styles.css'),
   `/* Cérebro Galáctico — gerado por scripts/montar-plugin.mjs. Não edite à mão; edite motor/galaxia.css. */\n${fontes}\n${encaixe}\n${ler('motor/galaxia.css')}`);
