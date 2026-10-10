@@ -1,0 +1,15 @@
+{
+  "name": "plugin-cerebro-raio-x",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Prévia do plugin Obsidian Cérebro em raio X",
+  "type": "module",
+  "scripts": {
+    "grafo": "python3 scripts/extrair-grafo ../../SkynetBrain-leitura previa/grafo.json",
+    "previa": "node scripts/montar-previa.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "three": "0.185.1"
+  }
+}

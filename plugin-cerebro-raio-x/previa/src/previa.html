@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cérebro em raio X</title>
+<style>
+{{FONTES}}
+:root {
+  --cb-bg: #070b16;
+  --cb-bg-halo: #0c1630;
+  --cb-surface: #0d1428;
+  --cb-surface-2: #131c38;
+  --cb-line: rgba(255, 255, 255, .09);
+  --cb-edge: rgba(126, 162, 255, .22);
+  --cb-fg: #eef1fa;
+  --cb-muted: #8d97b3;
+  --cb-faint: #58627e;
+  --cb-blue: #2f6bff;
+  --cb-blue-soft: #7ea2ff;
+  --cb-node: #569cff;
+  --cb-orange: #ff8a3d;
+  --cb-sans: 'Manrope', 'Inter', system-ui, sans-serif;
+  --ease: cubic-bezier(0.16, 1, 0.3, 1);
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  background: var(--cb-bg);
+  color: var(--cb-fg);
+  font: 400 13px/1.45 var(--cb-sans);
+  font-feature-settings: "tnum" 1;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+::selection { background: rgba(86, 156, 255, .35); color: var(--cb-fg); }
+:focus-visible { outline: 1.5px solid var(--cb-orange); outline-offset: 2px; border-radius: 4px; }
+
+#palco { position: fixed; inset: 0; }
+#palco canvas { display: block; width: 100%; height: 100%; cursor: grab; touch-action: none; }
+#palco canvas.sobre-no { cursor: pointer; }
+#palco canvas:active { cursor: grabbing; }
+/* grão de filme radiográfico, quase invisível */
+#grao {
+  position: fixed; inset: 0; pointer-events: none; opacity: .05; mix-blend-mode: screen;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .5 0 0 0 0 .62 0 0 0 0 1 0 0 0 1 0'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23g)'/%3E%3C/svg%3E");
+}
+
+/* ---------- HUD ---------- */
+.hud { position: fixed; z-index: 2; }
+#marca { top: 18px; left: 22px; pointer-events: none; }
+#marca h1 { margin: 0; font-size: 15px; font-weight: 700; letter-spacing: -0.01em; }
+#marca p { margin: 2px 0 0; color: var(--cb-muted); font-size: 12px; }
+#marca p b { color: var(--cb-fg); font-weight: 500; }
+
+#comandos { top: 14px; right: 16px; display: flex; gap: 8px; align-items: flex-start; }
+#busca { position: relative; }
+#busca-campo {
+  width: 240px; height: 32px; padding: 0 64px 0 32px;
+  background: rgba(13, 20, 40, .62); color: var(--cb-fg);
+  border: 1px solid var(--cb-line); border-radius: 8px;
+  font: 500 13px var(--cb-sans);
+  backdrop-filter: blur(6px);
+  transition: border-color .2s var(--ease), width .3s var(--ease), background .2s var(--ease);
+}
+#busca-campo::placeholder { color: var(--cb-faint); }
+#busca-campo:hover { border-color: var(--cb-edge); }
+#busca-campo:focus { outline: none; border-color: rgba(126, 162, 255, .55); width: 300px; background: rgba(13, 20, 40, .9); }
+#busca .lupa { position: absolute; z-index: 1; left: 10px; top: 9px; width: 14px; height: 14px; color: var(--cb-faint); pointer-events: none; }
+#busca kbd {
+  position: absolute; right: 8px; top: 7px; height: 18px; padding: 0 6px;
+  font: 500 10.5px/18px var(--cb-sans); color: var(--cb-faint);
+  border: 1px solid var(--cb-line); border-radius: 4px; pointer-events: none;
+}
+#busca-campo:focus ~ kbd { opacity: 0; }
+#resultados {
+  position: absolute; right: 0; top: 38px; width: 360px; max-height: 60vh; overflow: auto;
+  margin: 0; padding: 4px; list-style: none;
+  background: rgba(13, 20, 40, .96); border: 1px solid var(--cb-edge); border-radius: 10px;
+  box-shadow: 0 18px 40px -12px rgba(0, 0, 0, .7);
+}
+#resultados[hidden] { display: none; }
+#resultados li { display: flex; gap: 10px; align-items: baseline; padding: 7px 10px; border-radius: 6px; cursor: pointer; }
+#resultados li[aria-selected="true"], #resultados li:hover { background: var(--cb-surface-2); }
+#resultados .ponto { flex: none; width: 7px; height: 7px; border-radius: 50%; transform: translateY(-1px); }
+#resultados .titulo { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+#resultados .lobo { flex: none; color: var(--cb-faint); font-size: 11.5px; }
+#resultados .vazio { color: var(--cb-muted); cursor: default; }
+#resultados .vazio:hover { background: none; }
+
+.botao-icone {
+  width: 32px; height: 32px; display: grid; place-items: center;
+  background: rgba(13, 20, 40, .62); color: var(--cb-muted);
+  border: 1px solid var(--cb-line); border-radius: 8px; cursor: pointer;
+  backdrop-filter: blur(6px);
+  transition: color .15s var(--ease), border-color .15s var(--ease);
+}
+.botao-icone:hover { color: var(--cb-fg); border-color: var(--cb-edge); }
+.botao-icone[aria-expanded="true"] { color: var(--cb-fg); border-color: rgba(126, 162, 255, .55); }
+.botao-icone svg { width: 16px; height: 16px; }
+
+#filtros {
+  position: absolute; right: 0; top: 40px; width: 268px; padding: 14px 14px 12px;
+  background: rgba(13, 20, 40, .96); border: 1px solid var(--cb-edge); border-radius: 10px;
+  box-shadow: 0 18px 40px -12px rgba(0, 0, 0, .7);
+}
+#filtros[hidden] { display: none; }
+#filtros h2 { margin: 0 0 8px; font-size: 12px; font-weight: 700; color: var(--cb-fg); }
+#filtros h2 + * { margin-bottom: 14px; }
+.chave { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 5px 0; cursor: pointer; color: var(--cb-muted); }
+.chave:hover { color: var(--cb-fg); }
+.chave input { appearance: none; flex: none; width: 28px; height: 16px; margin: 0; border-radius: 8px; background: var(--cb-surface-2); border: 1px solid var(--cb-line); position: relative; cursor: pointer; transition: background .15s var(--ease); }
+.chave input::after { content: ""; position: absolute; top: 2px; left: 2px; width: 10px; height: 10px; border-radius: 50%; background: var(--cb-muted); transition: transform .2s var(--ease), background .15s var(--ease); }
+.chave input:checked { background: rgba(47, 107, 255, .55); border-color: rgba(126, 162, 255, .5); }
+.chave input:checked::after { transform: translateX(12px); background: var(--cb-fg); }
+#lobos { display: flex; flex-wrap: wrap; gap: 4px; }
+#lobos button {
+  height: 24px; padding: 0 9px; border-radius: 12px; cursor: pointer;
+  background: transparent; color: var(--cb-muted); border: 1px solid var(--cb-line);
+  font: 500 11.5px var(--cb-sans);
+  transition: color .15s var(--ease), border-color .15s var(--ease), background .15s var(--ease);
+}
+#lobos button:hover { color: var(--cb-fg); border-color: var(--cb-edge); }
+#lobos button[aria-pressed="true"] { color: var(--cb-fg); background: var(--cb-surface-2); border-color: rgba(126, 162, 255, .5); }
+#desempenho { margin: 10px 0 0; padding-top: 10px; border-top: 1px solid var(--cb-line); color: var(--cb-faint); font-size: 11.5px; }
+
+#rotulo {
+  position: fixed; z-index: 3; pointer-events: none; max-width: 340px;
+  padding: 6px 9px; border-radius: 6px;
+  background: rgba(7, 11, 22, .88); border: 1px solid var(--cb-edge);
+  transform: translate(14px, -50%); opacity: 0; transition: opacity .12s;
+}
+#rotulo.visivel { opacity: 1; }
+#rotulo strong { display: block; font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#rotulo span { color: var(--cb-muted); font-size: 11.5px; }
+
+/* ---------- EEG ---------- */
+#eeg { left: 0; right: 0; bottom: 0; height: 132px; pointer-events: none; }
+#eeg canvas { width: 100%; height: 100%; display: block; pointer-events: auto; }
+
+/* ---------- prévia: simulação ---------- */
+#simular {
+  right: 16px; bottom: 140px; display: flex; align-items: center; gap: 4px; flex-wrap: wrap; justify-content: flex-end;
+  max-width: calc(100vw - 32px);
+}
+#simular .legenda { color: var(--cb-faint); font-size: 11.5px; margin-right: 4px; }
+#simular button {
+  height: 26px; padding: 0 10px; border-radius: 13px; cursor: pointer;
+  background: rgba(13, 20, 40, .62); color: var(--cb-muted); border: 1px solid var(--cb-line);
+  font: 500 11.5px var(--cb-sans);
+  transition: color .15s var(--ease), border-color .15s var(--ease);
+}
+#simular button:hover { color: var(--cb-fg); border-color: var(--cb-edge); }
+#simular button[aria-pressed="true"] { color: var(--cb-fg); border-color: rgba(126, 162, 255, .5); }
+#evento {
+  left: 22px; bottom: 144px; max-width: min(520px, calc(100vw - 44px)); pointer-events: none;
+  color: var(--cb-muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  transition: opacity .4s var(--ease);
+}
+#evento b { color: var(--cb-fg); font-weight: 500; }
+#evento i { font-style: normal; display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 7px; transform: translateY(-1px); }
+
+#sem-webgl { position: fixed; inset: 0; display: grid; place-items: center; text-align: center; padding: 24px; color: var(--cb-muted); }
+#sem-webgl[hidden] { display: none; }
+#sem-webgl strong { display: block; color: var(--cb-fg); font-size: 15px; margin-bottom: 6px; }
+
+/* painel lateral estreito */
+@media (max-width: 560px) {
+  #marca { top: 14px; left: 14px; }
+  #comandos { top: 10px; right: 10px; }
+  #busca-campo { width: 36px; padding: 0 0 0 32px; color: transparent; cursor: pointer; }
+  #busca-campo::placeholder { color: transparent; }
+  #busca-campo:focus { width: calc(100vw - 72px); color: var(--cb-fg); cursor: text; padding-right: 10px; }
+  #busca kbd { display: none; }
+  #resultados { width: calc(100vw - 20px); right: -42px; }
+  #simular .legenda { display: none; }
+  #simular { right: 10px; bottom: 128px; }
+  #evento { left: 14px; bottom: 164px; }
+  #eeg { height: 120px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  * { transition-duration: 0s !important; }
+}
+</style>
+</head>
+<body>
+<div id="palco" aria-label="Cérebro do cofre em três dimensões. Arraste para girar, role para aproximar, clique num neurônio para abrir a nota."></div>
+<div id="grao" aria-hidden="true"></div>
+
+<header id="marca" class="hud">
+  <h1>Cérebro</h1>
+  <p><b id="n-notas">0</b> neurônios · <b id="n-sinapses">0</b> sinapses</p>
+</header>
+
+<div id="comandos" class="hud">
+  <div id="busca" role="search">
+    <svg class="lupa" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="7" cy="7" r="4.75"/><path d="m10.6 10.6 3.4 3.4" stroke-linecap="round"/></svg>
+    <input id="busca-campo" type="search" placeholder="Buscar nota…" aria-label="Buscar nota pelo título" autocomplete="off" spellcheck="false" role="combobox" aria-controls="resultados" aria-expanded="false">
+    <kbd>Ctrl K</kbd>
+    <ul id="resultados" role="listbox" aria-label="Notas encontradas" hidden></ul>
+  </div>
+  <div style="position:relative">
+    <button id="botao-filtros" class="botao-icone" aria-expanded="false" aria-controls="filtros" title="Filtros">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M2 4.5h7M12.5 4.5H14M2 11.5h2M7.5 11.5H14"/><circle cx="10.75" cy="4.5" r="1.75"/><circle cx="5.75" cy="11.5" r="1.75"/></svg>
+      <span class="sr" hidden>Filtros</span>
+    </button>
+    <div id="filtros" hidden>
+      <h2>Mostrar</h2>
+      <div>
+        <label class="chave">Esconder 99_ARQUIVO <input type="checkbox" id="f-arquivo"></label>
+        <label class="chave">Atividade de fundo <input type="checkbox" id="f-fundo" checked></label>
+        <label class="chave">Efeitos reduzidos <input type="checkbox" id="f-reduzidos"></label>
+        <label class="chave">Histórico (EEG) <input type="checkbox" id="f-eeg" checked></label>
+      </div>
+      <h2>Só um lobo</h2>
+      <div id="lobos"></div>
+      <p id="desempenho">Medindo desempenho…</p>
+    </div>
+  </div>
+</div>
+
+<div id="rotulo" class="hud" role="tooltip"><strong></strong><span></span></div>
+<p id="evento" class="hud" aria-live="polite"></p>
+
+<div id="simular" class="hud" role="group" aria-label="Simular eventos do Obsidian (só na prévia)">
+  <span class="legenda">Prévia · simular</span>
+  <button data-evento="abrir">Abrir nota</button>
+  <button data-evento="salvar">Salvar</button>
+  <button data-evento="nova">Nota nova</button>
+  <button data-evento="captura">Captura no 01_ENTRADA</button>
+  <button id="demo" aria-pressed="true">Manhã de trabalho</button>
+</div>
+
+<div id="eeg" class="hud"><canvas aria-label="Histórico de atividade por lobo, últimos 5 minutos. Clique num pico para ir à nota."></canvas></div>
+
+<div id="sem-webgl" hidden><div><strong>O cérebro precisa de WebGL.</strong>Este computador ou navegador não liberou a aceleração gráfica.</div></div>
+
+<script id="grafo" type="application/json">{{GRAFO}}</script>
+<script>{{JS}}</script>
+</body>
+</html>
