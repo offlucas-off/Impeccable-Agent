@@ -79,7 +79,7 @@
 - **Pausa:** para tudo quando a aba fica oculta (`visibilitychange`). No plugin, também quando a folha não está visível.
 - **`prefers-reduced-motion`:** sem giro automático; pulsos chegam na hora, sem viajar; o EEG atualiza 1×/s; transições zeradas.
 - **Medido aqui:** só em Chromium headless com **SwiftShader (GPU por software, sem placa)**: 16 a 32 fps com 1.114 neurônios, caindo para ~1 fps quando o container ficou sem CPU (a build anterior caiu igual, então não é regressão). Não representa a GPU integrada.
-- **Para medir no notebook:** abra `previa/index.html?carga=1300` e veja a linha de desempenho no painel de filtros. Ela completa o grafo com 186 notas sintéticas e avisa "carga de teste".
+- **Para medir no notebook:** abra `previa/index.html?carga=1300` (ou, na versão hospedada, o link com `#carga1300`) e veja a linha de desempenho no painel de filtros. Ela completa o grafo com 186 notas sintéticas e avisa "carga de teste".
 
 ## 9. Depois do ok (limite 2 do pedido)
 

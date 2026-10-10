@@ -6,9 +6,10 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
 const GRAFO = JSON.parse(document.getElementById('grafo').textContent);
-// ?carga=1300 completa o grafo com notas sintéticas (cópias de pasta e grau das reais)
+// carga de teste: completa o grafo com notas sintéticas (cópias de pasta e grau das reais)
 // só para medir fps no tamanho pedido; o painel de filtros avisa que há carga de teste
-const CARGA = Math.min(5000, parseInt(new URLSearchParams(location.search).get('carga') || '0', 10) || 0);
+// aceita ?carga=1300 (arquivo local) ou #carga1300 (página hospedada, que só repassa a âncora)
+const CARGA = Math.min(5000, parseInt(new URLSearchParams(location.search).get('carga') || (location.hash.match(/^#carga(\d+)$/) || [])[1] || '0', 10) || 0);
 const SINTETICAS = Math.max(0, CARGA - GRAFO.nos.length);
 if (SINTETICAS) {
   const reais = GRAFO.nos.length, porNo = (GRAFO.arestas.length * 2) / reais;

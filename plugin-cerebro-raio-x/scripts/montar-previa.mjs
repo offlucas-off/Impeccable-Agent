@@ -31,4 +31,11 @@ if (/https?:\/\//.test(html.replace(/http:\/\/www\.w3\.org\/2000\/svg/g, ''))) {
   if (achado.length) console.warn('aviso: URLs no arquivo (texto, não carregadas):', [...new Set(achado)].slice(0, 5));
 }
 writeFileSync(join(raiz, 'previa/index.html'), html);
+// versão para Artifact do claude.ai: o host já envolve a página em doctype/head/body
+const artifact = html
+  .replace(/^<!doctype html>\s*<html[^>]*>\s*<head>\s*/i, '')
+  .replace(/<meta charset="utf-8">\s*<meta name="viewport"[^>]*>\s*/i, '')
+  .replace(/<\/head>\s*<body>\s*/i, '')
+  .replace(/\s*<\/body>\s*<\/html>\s*$/i, '\n');
+writeFileSync(join(raiz, 'previa/artifact.html'), artifact);
 console.log(`previa/index.html: ${(html.length / 1024).toFixed(0)} KB`);
