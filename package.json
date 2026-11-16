@@ -5,6 +5,7 @@
   "type": "module",
   "description": "Real-time 3D-to-Pixel-Art WebGL2/Three.js engine & interactive studio inspired by ProPixelizer",
   "scripts": {
+    "start": "vite --open",
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
