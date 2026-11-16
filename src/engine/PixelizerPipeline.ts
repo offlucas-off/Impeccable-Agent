@@ -89,7 +89,7 @@ export class PixelizerPipeline {
 
   // Active GPU lookup resources
   private ditherMap = new Map<string, { config: DitherPattern4x4; tex: THREE.DataTexture }>();
-  private paletteMap = new Map<string, { config: ColorPaletteConfig; lut: PaletteLutPair }>();
+  private paletteMap = new Map<string, { config: ColorPaletteConfig; lut: PaletteLutPair | null }>();
   private rampMap = new Map<string, { config: LightingRampConfig; tex: THREE.DataTexture }>();
 
   public activePaletteId = 'endesga32';
@@ -244,8 +244,19 @@ export class PixelizerPipeline {
       this.rampMap.set(r.id, { config: r, tex: createLightingRampTexture(r) });
     }
     for (const p of BUILTIN_PALETTES) {
-      this.paletteMap.set(p.id, { config: p, lut: buildPaletteLutPair(p) });
+      const lut = p.id === this.activePaletteId ? buildPaletteLutPair(p) : null;
+      this.paletteMap.set(p.id, { config: p, lut });
     }
+  }
+
+  private ensurePaletteLut(entry: {
+    config: ColorPaletteConfig;
+    lut: PaletteLutPair | null;
+  }): { config: ColorPaletteConfig; lut: PaletteLutPair } {
+    if (!entry.lut) {
+      entry.lut = buildPaletteLutPair(entry.config);
+    }
+    return { config: entry.config, lut: entry.lut };
   }
 
   public getDitherPatterns(): DitherPattern4x4[] {
@@ -264,14 +275,14 @@ export class PixelizerPipeline {
     const existing = this.ditherMap.get(pattern.id);
     if (existing) existing.tex.dispose();
     this.ditherMap.set(pattern.id, {
-      config: { ...pattern, thresholds: [...pattern.thresholds] },
+      config: { ...pattern, size: pattern.size === 8 ? 8 : 4, thresholds: [...pattern.thresholds] },
       tex: createDitherTexture(pattern),
     });
   }
 
   public upsertPalette(config: ColorPaletteConfig): PaletteLutPair {
     const existing = this.paletteMap.get(config.id);
-    if (existing) {
+    if (existing?.lut) {
       existing.lut.primaryTex.dispose();
       existing.lut.secondaryTex.dispose();
     }
@@ -284,10 +295,10 @@ export class PixelizerPipeline {
   }
 
   public getActivePaletteEntry(): { config: ColorPaletteConfig; lut: PaletteLutPair } {
-    return (
+    const entry =
       this.paletteMap.get(this.activePaletteId) ??
-      this.paletteMap.values().next().value!
-    );
+      this.paletteMap.values().next().value!;
+    return this.ensurePaletteLut(entry);
   }
 
   public getActiveDitherEntry(): { config: DitherPattern4x4; tex: THREE.DataTexture } {
@@ -308,9 +319,11 @@ export class PixelizerPipeline {
     paletteId?: string,
     ditherId?: string
   ): PixelizerMaterialResources {
-    const pal =
+    const rawPal =
       (paletteId ? this.paletteMap.get(paletteId) : undefined) ??
-      this.getActivePaletteEntry();
+      this.paletteMap.get(this.activePaletteId) ??
+      this.paletteMap.values().next().value!;
+    const pal = this.ensurePaletteLut(rawPal);
     const dith =
       (ditherId ? this.ditherMap.get(ditherId) : undefined) ??
       this.getActiveDitherEntry();
@@ -322,6 +335,7 @@ export class PixelizerPipeline {
       paletteSecondaryTex: pal.lut.secondaryTex,
       paletteLutSize: pal.lut.size,
       ditherTex: dith.tex,
+      ditherSize: dith.config.size === 8 ? 8 : 4,
     };
   }
 
@@ -559,10 +573,12 @@ export class PixelizerPipeline {
     // 3. Synchronize materials with active palette, dither, ramp, grid origin, and mode
     let maxPixelSize = 1;
     const isSeedDebug = cfg.debugView === 'seed_dither';
+    const isCelHard = cfg.filterMode === 'cel_hard';
     const expansionAllowed =
-      (cfg.usePixelExpansion && cfg.filterMode === 'only_pixelized') ||
-      (cfg.usePixelExpansion && cfg.filterMode === 'full_scene' && camCfg.downscaleRatio <= 2) ||
-      isSeedDebug;
+      !isCelHard &&
+      ((cfg.usePixelExpansion && cfg.filterMode === 'only_pixelized') ||
+        (cfg.usePixelExpansion && cfg.filterMode === 'full_scene' && camCfg.downscaleRatio <= 2) ||
+        isSeedDebug);
 
     const tempVec = new THREE.Vector3();
 
@@ -575,15 +591,23 @@ export class PixelizerPipeline {
       m.applySharedResources(res);
 
       const isPix = cfg.filterMode === 'full_scene' ? true : item.origPixelated;
-      const effectiveP =
-        cfg.filterMode === 'full_scene'
-          ? (cfg.usePixelExpansion ? Math.min(3, item.origPixelated ? m.options.pixelSize : 1) : 1)
-          : (isPix ? m.options.pixelSize : 0);
+      const effectiveP = isCelHard
+        ? isPix
+          ? 1
+          : 0
+        : cfg.filterMode === 'full_scene'
+        ? cfg.usePixelExpansion
+          ? Math.min(3, item.origPixelated ? m.options.pixelSize : 1)
+          : 1
+        : isPix
+        ? m.options.pixelSize
+        : 0;
 
       if (effectiveP > maxPixelSize) maxPixelSize = effectiveP;
 
       m.uniforms.uPixelated.value = isPix ? 1 : 0;
       m.uniforms.uPixelSize.value = Math.max(1, effectiveP);
+      m.uniforms.uForceFlatDither.value = isCelHard ? 1 : 0;
       m.uniforms.uUsePixelExpansion.value = expansionAllowed && effectiveP > 1 ? 1 : 0;
       m.uniforms.uCameraNear.value =
         (camera as THREE.OrthographicCamera | THREE.PerspectiveCamera).near ?? 0.1;
@@ -626,10 +650,11 @@ export class PixelizerPipeline {
     for (const item of materialsList) {
       item.mat.uniforms.uPixelated.value = item.origPixelated ? 1 : 0;
       item.mat.uniforms.uUsePixelExpansion.value = item.origExpand;
+      item.mat.uniforms.uForceFlatDither.value = 0;
     }
 
-    // 5. Pass 2: Pixel Expansion (Attempt #3)
-    const searchRadius = Math.min(4, Math.max(1, Math.ceil(maxPixelSize * 0.5) + 1));
+    // 5. Pass 2: Pixel Expansion (Attempt #3, supports up to 10x10 macropixels)
+    const searchRadius = Math.min(6, Math.max(1, Math.ceil(maxPixelSize * 0.5) + 1));
     this.expansionMat.uniforms.tColor.value = this.mrtTarget.textures[0];
     this.expansionMat.uniforms.tOutline.value = this.mrtTarget.textures[1];
     this.expansionMat.uniforms.tMeta.value = this.mrtTarget.textures[2];
@@ -724,8 +749,10 @@ export class PixelizerPipeline {
     for (const d of this.ditherMap.values()) d.tex.dispose();
     for (const r of this.rampMap.values()) r.tex.dispose();
     for (const p of this.paletteMap.values()) {
-      p.lut.primaryTex.dispose();
-      p.lut.secondaryTex.dispose();
+      if (p.lut) {
+        p.lut.primaryTex.dispose();
+        p.lut.secondaryTex.dispose();
+      }
     }
   }
 }

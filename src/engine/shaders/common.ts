@@ -45,8 +45,13 @@ vec3 octDecode(vec2 f) {
   return normalize(n);
 }
 
-float sampleDither4x4(sampler2D ditherTex, vec2 pixelCoord) {
-  vec2 uv = (mod(floor(pixelCoord), 4.0) + 0.5) / 4.0;
+float sampleDitherMatrix(sampler2D ditherTex, vec2 pixelCoord, float ditherSize) {
+  float sz = max(1.0, ditherSize);
+  vec2 uv = (mod(floor(pixelCoord), sz) + 0.5) / sz;
   return texture(ditherTex, uv).r;
+}
+
+float sampleDither4x4(sampler2D ditherTex, vec2 pixelCoord) {
+  return sampleDitherMatrix(ditherTex, pixelCoord, 4.0);
 }
 `;

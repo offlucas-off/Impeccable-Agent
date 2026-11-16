@@ -18,14 +18,15 @@ export interface PixelizerMaterialResources {
   paletteSecondaryTex: THREE.Texture;
   paletteLutSize: number;
   ditherTex: THREE.Texture;
+  ditherSize?: number;
 }
 
 /**
  * Custom WebGL2 GLSL3 MRT Material replicating ProPixelizer's UberShader:
- * - Sparse Pixel Expansion seed clipping (Attempt #3)
+ * - Sparse Pixel Expansion seed clipping (Attempt #3, 1x1 up to 10x10)
  * - Cel shading via HSV Value sampled through 1D Lighting Ramp
  * - Specular or Metallic workflow + Shadow tint + Constant/Scene Ambient blend
- * - Dual Palette LUT color grading + 4x4 Ordered Dithering & Dithered Transparency
+ * - Dual Palette LUT color grading + 4x4/8x8 Ordered Dithering & Dithered Transparency
  * - Per-object ID, Outline Color/Alpha, Edge Highlight & Bevel Weight metadata output
  */
 export class PixelizerMaterial extends THREE.ShaderMaterial {
@@ -75,7 +76,7 @@ export class PixelizerMaterial extends THREE.ShaderMaterial {
       THREE.UniformsLib.lights,
       {
         uPixelated: { value: resolved.pixelated ? 1 : 0 },
-        uPixelSize: { value: resolved.pixelSize },
+        uPixelSize: { value: Math.max(1, Math.min(10, Math.round(resolved.pixelSize))) },
         uUsePixelExpansion: { value: 1 },
         uPixelGridOriginPx: { value: new THREE.Vector2(0, 0) },
         uObjectId: { value: resolved.objectId },
@@ -117,6 +118,8 @@ export class PixelizerMaterial extends THREE.ShaderMaterial {
         uPaletteSecondaryTex: { value: sharedResources?.paletteSecondaryTex ?? white },
         uPaletteLutSize: { value: sharedResources?.paletteLutSize ?? 16 },
         uDitherTex: { value: sharedResources?.ditherTex ?? white },
+        uDitherSize: { value: sharedResources?.ditherSize ?? 4.0 },
+        uForceFlatDither: { value: 0.0 },
 
         uCameraNear: { value: 0.1 },
         uCameraFar: { value: 100.0 },
@@ -155,6 +158,7 @@ export class PixelizerMaterial extends THREE.ShaderMaterial {
     this.uniforms.uPaletteSecondaryTex.value = resources.paletteSecondaryTex;
     this.uniforms.uPaletteLutSize.value = resources.paletteLutSize;
     this.uniforms.uDitherTex.value = resources.ditherTex;
+    this.uniforms.uDitherSize.value = resources.ditherSize ?? 4.0;
   }
 
   public syncUniforms(): void {
@@ -162,7 +166,7 @@ export class PixelizerMaterial extends THREE.ShaderMaterial {
     const white = getFallbackWhiteTexture();
 
     this.uniforms.uPixelated.value = o.pixelated ? 1 : 0;
-    this.uniforms.uPixelSize.value = o.pixelSize;
+    this.uniforms.uPixelSize.value = Math.max(1, Math.min(10, Math.round(o.pixelSize)));
     this.uniforms.uObjectId.value = o.objectId;
 
     const outCol = new THREE.Color(o.outlineColor);

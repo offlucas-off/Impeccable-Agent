@@ -42,8 +42,11 @@ export function mountPaletteEditorTab(
           <label class="field-label" for="sel-color-metric">Matching Metric</label>
           <select id="sel-color-metric" class="select-ctrl select-ctrl-sm">
             <option value="hsv_weighted">HSV Weighted (ProPixelizer)</option>
-            <option value="rgb_euclidean">RGB Euclidean</option>
-            <option value="value_nearest">Luminance / Value Nearest</option>
+            <option value="oklab_perceptual">Oklab Perceptual (Smooth)</option>
+            <option value="hue_priority">Hue Priority (Vivid)</option>
+            <option value="rgb_euclidean">RGB Redmean Euclidean</option>
+            <option value="value_nearest">Luminance / Value Ramp</option>
+            <option value="posterize_quant">Posterize Bit-Depth Quant</option>
           </select>
         </div>
         <div class="field-row">
@@ -93,7 +96,7 @@ export function mountPaletteEditorTab(
 
     <div class="ctrl-section">
       <div class="ctrl-section-head">
-        <span>4×4 Ordered Dither Matrix</span>
+        <span id="dither-matrix-title">4×4 Ordered Dither Matrix</span>
       </div>
       <div class="ctrl-section-body">
         <div class="field-row">
@@ -102,11 +105,10 @@ export function mountPaletteEditorTab(
             ${dithers.map((d) => `<option value="${d.id}">${d.name}</option>`).join('')}
           </select>
         </div>
-        <div style="display:flex;align-items:flex-start;gap:14px;">
+        <div style="display:flex;flex-direction:column;gap:8px;">
           <div id="dither-matrix-grid" class="dither-grid"></div>
-          <div style="font-size:11px;color:var(--text-secondary);line-height:1.45;">
-            <p style="margin:0 0 6px;">Click a cell to cycle threshold <strong>0..16</strong> (Shift+Click to decrement).</p>
-            <p style="margin:0;color:var(--text-muted);">Used across Color Grading LUT pairs and Dithered Transparency cutout.</p>
+          <div id="dither-matrix-hint" style="font-size:11px;color:var(--text-secondary);line-height:1.45;">
+            Click cell to cycle threshold <strong>0..16</strong> (Shift+Click decrements).
           </div>
         </div>
       </div>
@@ -130,6 +132,8 @@ export function mountPaletteEditorTab(
   const canvasPreview = container.querySelector<HTMLCanvasElement>('#canvas-lut-preview')!;
   const selDitherPattern = container.querySelector<HTMLSelectElement>('#sel-dither-pattern')!;
   const ditherMatrixGrid = container.querySelector<HTMLDivElement>('#dither-matrix-grid')!;
+  const ditherMatrixTitle = container.querySelector<HTMLElement>('#dither-matrix-title')!;
+  const ditherMatrixHint = container.querySelector<HTMLElement>('#dither-matrix-hint')!;
 
   function cloneConfig(c: ColorPaletteConfig): ColorPaletteConfig {
     return {
@@ -217,21 +221,31 @@ export function mountPaletteEditorTab(
   }
 
   function renderDitherGrid(dither: DitherPattern4x4): void {
+    const is8 = dither.size === 8;
+    const maxVal = is8 ? 64 : 16;
+    const step = is8 ? 4 : 1;
+    ditherMatrixGrid.classList.toggle('is-8x8', is8);
+    ditherMatrixTitle.textContent = is8
+      ? '8×8 Ordered Dither Matrix'
+      : '4×4 Ordered Dither Matrix';
+    ditherMatrixHint.innerHTML = `Click cell to cycle threshold <strong>0..${maxVal}</strong> (Shift+Click decrements).`;
+
     ditherMatrixGrid.innerHTML = '';
     dither.thresholds.forEach((tVal, i) => {
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'dither-cell';
-      const lum = Math.round((tVal / 16) * 210 + 20);
+      const lum = Math.round((tVal / maxVal) * 210 + 20);
       btn.style.background = `rgb(${lum}, ${lum}, ${lum})`;
-      btn.style.color = tVal > 8 ? '#111' : '#f1f4f8';
+      btn.style.color = tVal > maxVal * 0.5 ? '#111' : '#f1f4f8';
       btn.textContent = String(tVal);
       btn.addEventListener('click', (e) => {
         const current = pipeline.getActiveDitherEntry().config;
         const nextThresholds = [...current.thresholds];
+        const mod = maxVal + 1;
         nextThresholds[i] = e.shiftKey
-          ? (nextThresholds[i] + 16) % 17
-          : (nextThresholds[i] + 1) % 17;
+          ? (nextThresholds[i] + mod - step) % mod
+          : (nextThresholds[i] + step) % mod;
         pipeline.upsertDitherPattern({ ...current, thresholds: nextThresholds });
         refresh();
         callbacks.onPaletteOrDitherChanged();

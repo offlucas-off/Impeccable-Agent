@@ -5,13 +5,19 @@ import {
   PixelizerPipeline,
   type PixelizerObjectAttachment,
 } from '../../engine/PixelizerPipeline';
-import type { SnapOptions } from '../../engine/types';
 import {
   captureSingleFrameDataUrl,
   exportTurntableSpriteSheet,
   type SpriteSheetExportResult,
 } from '../../engine/SpriteSheetExporter';
 import { SteppedAnimationController } from '../../engine/steppedAnimation';
+import {
+  buildVoxelMeshGroup,
+  exportVoxelGridToGlb,
+  exportVoxelGridToObj,
+  exportVoxelGridToVox,
+  voxelizeObject3D,
+} from '../../engine/Voxelizer';
 import type {
   AngleSnapMode,
   DebugViewMode,
@@ -19,8 +25,15 @@ import type {
   PixelizationFilterMode,
   ResolutionMode,
   ShadingWorkflow,
+  SnapOptions,
+  VoxelGridResult,
 } from '../../engine/types';
-import { loadModelFromFile } from '../loaders/modelLoader';
+import {
+  loadModelFromFile,
+  loadModelFromUrl,
+  pickPreferredClipIndex,
+  type LoadedModelResult,
+} from '../loaders/modelLoader';
 import {
   buildDemoScene,
   type BuiltDemoScene,
@@ -38,6 +51,49 @@ interface ActiveStage {
   items: SceneItemEntry[];
   updateAnimation: (quantizedTime: number, motionTest: boolean) => void;
 }
+
+interface ActiveVoxelPreview {
+  grid: VoxelGridResult;
+  group: THREE.Group;
+}
+
+interface CharacterPresetDef {
+  url: string;
+  filename: string;
+  title: string;
+  description: string;
+}
+
+const CHARACTER_PRESETS: Record<string, CharacterPresetDef> = {
+  char_knight: {
+    url: './models/Knight.glb',
+    filename: 'Knight.glb',
+    title: 'RPG Knight Warrior (CC0)',
+    description:
+      'KayKit articulated rig (15 meshes, 76 skeletal animations, texture atlas) using unified Object ID silhouettes.',
+  },
+  char_robot: {
+    url: './models/RobotExpressive.glb',
+    filename: 'RobotExpressive.glb',
+    title: 'Expressive Robot (MIT)',
+    description:
+      'PBR rigged robot with blendshape morph targets & 14 clips rendered through dual palette LUT & bevel edges.',
+  },
+  char_soldier: {
+    url: './models/Soldier.glb',
+    filename: 'Soldier.glb',
+    title: 'Tactical Soldier (MIT)',
+    description:
+      'High-detail Three.js SkinnedMesh soldier with Walk/Run/Idle clips & baked PBR armor textures.',
+  },
+  char_fox: {
+    url: './models/Fox.glb',
+    filename: 'Fox.glb',
+    title: 'Quadruped Wild Fox (CC0)',
+    description:
+      'Low-poly skeletal creature with Survey/Walk/Run clips — great for 3×3 / 7×7 macropixel and 3D voxel testing.',
+  },
+};
 
 function disposeGroupResources(root: THREE.Object3D): void {
   root.traverse((obj) => {
@@ -88,11 +144,19 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
           </div>
         </div>
         <select id="sel-demo-scene" class="select-ctrl" aria-label="Demo Scene Preset">
-          <option value="rover">Preset: Hover Rover &amp; Drone</option>
-          <option value="knight">Preset: Pixel Knight &amp; Gear</option>
-          <option value="creep_lab">Preset: Creep &amp; Edge Lab</option>
-          <option value="relic_chest">Preset: Relic Chest &amp; Crystal</option>
-          <option value="hybrid_diorama">Preset: Hybrid 3D + Pixel</option>
+          <optgroup label="Procedural Demos">
+            <option value="rover">Preset: Hover Rover &amp; Drone</option>
+            <option value="knight">Preset: Pixel Knight &amp; Gear</option>
+            <option value="creep_lab">Preset: Creep &amp; Edge Lab</option>
+            <option value="relic_chest">Preset: Relic Chest &amp; Crystal</option>
+            <option value="hybrid_diorama">Preset: Hybrid 3D + Pixel</option>
+          </optgroup>
+          <optgroup label="Articulated 3D Characters (GLB)">
+            <option value="char_knight">Char: RPG Knight (CC0 · 76 Clips)</option>
+            <option value="char_robot">Char: Expressive Bot (MIT · 14 Clips)</option>
+            <option value="char_soldier">Char: Tactical Soldier (MIT · 4 Clips)</option>
+            <option value="char_fox">Char: Wild Fox (CC0 · 3 Clips)</option>
+          </optgroup>
         </select>
         <label class="btn" title="Import .glb, .gltf, .obj, .fbx or .stl">
           ${ICONS.upload}
@@ -152,33 +216,35 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
           <div class="split-handle-knob">||</div>
         </div>
 
-        <div id="viewport-hud" class="viewport-hud">
-          <span class="hud-metric">BUF <strong id="hud-buf">320×180</strong></span>
-          <span class="hud-metric">PX <strong id="hud-wpx">0.012</strong>u</span>
-          <span class="hud-metric">CAM <strong id="hud-cam">ORTHO</strong></span>
-          <span class="hud-metric">STEP <strong id="hud-step">8 FPS</strong></span>
-        </div>
+        <div class="viewport-bottom-bar">
+          <div id="viewport-hud" class="viewport-hud">
+            <span class="hud-metric">BUF <strong id="hud-buf">320×180</strong></span>
+            <span class="hud-metric">PX <strong id="hud-wpx">0.012</strong>u</span>
+            <span class="hud-metric">CAM <strong id="hud-cam">ORTHO</strong></span>
+            <span class="hud-metric">STEP <strong id="hud-step">8 FPS</strong></span>
+          </div>
 
-        <div class="viewport-dock">
-          <button class="btn btn-sm" id="btn-cam-iso" type="button">Iso 2:1</button>
-          <button class="btn btn-sm" id="btn-cam-front" type="button">Front</button>
-          <button class="btn btn-sm" id="btn-cam-side" type="button">Side</button>
-          <button class="btn btn-sm" id="btn-cam-top" type="button">Top</button>
-          <div class="dock-sep"></div>
-          <button class="btn btn-sm is-active" id="btn-toggle-proj" type="button">Ortho</button>
-          <div class="dock-sep"></div>
-          <button class="btn btn-sm btn-icon" id="btn-anim-play" type="button" title="Play / Pause Stepped Animation">
-            ${ICONS.pause}
-          </button>
-          <select id="sel-step-fps" class="select-ctrl select-ctrl-sm" aria-label="Stepped FPS">
-            <option value="0">Smooth (60+ FPS)</option>
-            <option value="6">Stepped 6 FPS</option>
-            <option value="8" selected>Stepped 8 FPS</option>
-            <option value="12">Stepped 12 FPS</option>
-            <option value="16">Stepped 16 FPS</option>
-            <option value="24">Stepped 24 FPS</option>
-          </select>
-          <select id="sel-anim-clip" class="select-ctrl select-ctrl-sm" style="display:none;" aria-label="Animation Clip"></select>
+          <div class="viewport-dock">
+            <button class="btn btn-sm" id="btn-cam-iso" type="button">Iso 2:1</button>
+            <button class="btn btn-sm" id="btn-cam-front" type="button">Front</button>
+            <button class="btn btn-sm" id="btn-cam-side" type="button">Side</button>
+            <button class="btn btn-sm" id="btn-cam-top" type="button">Top</button>
+            <div class="dock-sep"></div>
+            <button class="btn btn-sm is-active" id="btn-toggle-proj" type="button">Ortho</button>
+            <div class="dock-sep"></div>
+            <button class="btn btn-sm btn-icon" id="btn-anim-play" type="button" title="Play / Pause Stepped Animation">
+              ${ICONS.pause}
+            </button>
+            <select id="sel-step-fps" class="select-ctrl select-ctrl-sm" aria-label="Stepped FPS">
+              <option value="0">Smooth (60+ FPS)</option>
+              <option value="6">Stepped 6 FPS</option>
+              <option value="8" selected>Stepped 8 FPS</option>
+              <option value="12">Stepped 12 FPS</option>
+              <option value="16">Stepped 16 FPS</option>
+              <option value="24">Stepped 24 FPS</option>
+            </select>
+            <select id="sel-anim-clip" class="select-ctrl select-ctrl-sm" style="display:none;" aria-label="Animation Clip"></select>
+          </div>
         </div>
       </section>
 
@@ -196,11 +262,16 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
             <div class="ctrl-section">
               <div class="ctrl-section-head"><span>Render Path &amp; Camera Grid</span></div>
               <div class="ctrl-section-body">
-                <div class="field-row">
-                  <span class="field-label">Filter Mode</span>
-                  <div class="segmented" style="width:185px;">
+                <div class="slider-row">
+                  <div class="slider-head">
+                    <span>Conversion Mode</span>
+                    <span id="val-conv-mode" class="slider-val">Hybrid</span>
+                  </div>
+                  <div class="segmented" style="width:100%;">
                     <button type="button" class="seg-btn is-active" data-filter="only_pixelized">Hybrid</button>
                     <button type="button" class="seg-btn" data-filter="full_scene">Full Scene</button>
+                    <button type="button" class="seg-btn" data-filter="cel_hard">Cel Hard</button>
+                    <button type="button" class="seg-btn" id="btn-mode-voxel" data-voxel="1">Voxel 3D</button>
                   </div>
                 </div>
                 <div class="field-row">
@@ -363,7 +434,10 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
             <div class="ctrl-section">
               <div class="ctrl-section-head">
                 <span>Scene Items</span>
-                <button id="btn-apply-all-obj" class="btn btn-sm" type="button" title="Copy pixel size, outline & lighting ramp to all pixelized items">Apply Style to All</button>
+                <div style="display:flex;gap:4px;">
+                  <button id="btn-toggle-id-mode" class="btn btn-sm" type="button" title="Toggle shared character ID vs per-mesh split IDs">Unify/Split IDs</button>
+                  <button id="btn-apply-all-obj" class="btn btn-sm" type="button" title="Copy pixel size, outline & lighting ramp to all pixelized items">Apply All</button>
+                </div>
               </div>
               <div class="ctrl-section-body">
                 <div id="scene-item-list" class="scene-item-list"></div>
@@ -382,7 +456,15 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
                     <span>Macropixel Size</span>
                     <span id="val-obj-pxsize" class="slider-val">3×3</span>
                   </div>
-                  <input id="rng-obj-pxsize" type="range" min="1" max="6" step="1" value="3" />
+                  <input id="rng-obj-pxsize" type="range" min="1" max="10" step="1" value="3" />
+                  <div class="preset-chip-row" id="px-preset-chips">
+                    <button type="button" class="chip-btn" data-px="1">1×1</button>
+                    <button type="button" class="chip-btn" data-px="2">2×2</button>
+                    <button type="button" class="chip-btn is-active" data-px="3">3×3</button>
+                    <button type="button" class="chip-btn" data-px="5">5×5</button>
+                    <button type="button" class="chip-btn" data-px="7">7×7</button>
+                    <button type="button" class="chip-btn" data-px="8">8×8</button>
+                  </div>
                 </div>
                 <div class="slider-row">
                   <div class="slider-head">
@@ -523,10 +605,42 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
           <!-- TAB 3: PALETTE & DITHER -->
           <div class="tab-pane" data-pane="palette" id="pane-palette-host"></div>
 
-          <!-- TAB 4: SPRITE EXPORT -->
+          <!-- TAB 4: EXPORT (SPRITES + 3D VOXEL MESH) -->
           <div class="tab-pane" data-pane="export">
             <div class="ctrl-section">
-              <div class="ctrl-section-head"><span>Single Frame Capture</span></div>
+              <div class="ctrl-section-head"><span>3D Voxel Mesh Generator &amp; Export</span></div>
+              <div class="ctrl-section-body">
+                <div class="slider-row">
+                  <div class="slider-head">
+                    <span>Voxel Grid Resolution</span>
+                    <span id="val-voxel-res" class="slider-val">32 voxels</span>
+                  </div>
+                  <input id="rng-voxel-res" type="range" min="12" max="64" step="2" value="32" />
+                </div>
+                <div class="field-row">
+                  <label class="field-label" for="chk-voxel-pal">Quantize to Active Palette</label>
+                  <input id="chk-voxel-pal" type="checkbox" checked />
+                </div>
+                <div class="field-row">
+                  <label class="field-label" for="chk-voxel-dither">3D Ordered Checker Dither</label>
+                  <input id="chk-voxel-dither" type="checkbox" checked />
+                </div>
+                <div class="voxel-stats-box">
+                  <span id="voxel-export-stats">Grid Ready — click Preview or Export</span>
+                </div>
+                <button id="btn-voxel-preview" class="btn" type="button">
+                  <span>Preview Voxel 3D in Viewport</span>
+                </button>
+                <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;">
+                  <button id="btn-export-glb" class="btn btn-primary btn-sm" type="button">Export .GLB</button>
+                  <button id="btn-export-obj" class="btn btn-sm" type="button">Export .OBJ</button>
+                  <button id="btn-export-vox" class="btn btn-sm" type="button">Export .VOX</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="ctrl-section">
+              <div class="ctrl-section-head"><span>Single Frame Capture (2D)</span></div>
               <div class="ctrl-section-body">
                 <div class="field-row">
                   <span class="field-label">Dimensions (px)</span>
@@ -539,6 +653,10 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
                 <div class="field-row">
                   <label class="field-label" for="chk-exp-alpha">Transparent Background</label>
                   <input id="chk-exp-alpha" type="checkbox" checked />
+                </div>
+                <div class="field-row">
+                  <label class="field-label" for="chk-exp-isolate">Isolate Subject (Hide Floor)</label>
+                  <input id="chk-exp-isolate" type="checkbox" checked />
                 </div>
                 <button id="btn-export-single" class="btn btn-primary" type="button">
                   ${ICONS.download}
@@ -700,6 +818,9 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
 
   const animCtrl = new SteppedAnimationController();
   let activeStage: ActiveStage | null = null;
+  let activeVoxel: ActiveVoxelPreview | null = null;
+  let isVoxelMode = false;
+  let loadRequestToken = 0;
   let selectedItemId = '';
   let motionCreepTest = false;
   let sheetResult: SpriteSheetExportResult | null = null;
@@ -710,6 +831,15 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
   const selAnimClip = rootElement.querySelector<HTMLSelectElement>('#sel-anim-clip')!;
   const sceneItemList = rootElement.querySelector<HTMLDivElement>('#scene-item-list')!;
   const selLightingRamp = rootElement.querySelector<HTMLSelectElement>('#sel-lighting-ramp')!;
+  const valConvMode = rootElement.querySelector<HTMLElement>('#val-conv-mode')!;
+  const filterBtns = rootElement.querySelectorAll<HTMLButtonElement>('[data-filter]');
+  const btnModeVoxel = rootElement.querySelector<HTMLButtonElement>('#btn-mode-voxel')!;
+  const rngVoxelRes = rootElement.querySelector<HTMLInputElement>('#rng-voxel-res')!;
+  const valVoxelRes = rootElement.querySelector<HTMLElement>('#val-voxel-res')!;
+  const chkVoxelPal = rootElement.querySelector<HTMLInputElement>('#chk-voxel-pal')!;
+  const chkVoxelDither = rootElement.querySelector<HTMLInputElement>('#chk-voxel-dither')!;
+  const voxelStatsEl = rootElement.querySelector<HTMLElement>('#voxel-export-stats')!;
+  const btnVoxelPreview = rootElement.querySelector<HTMLButtonElement>('#btn-voxel-preview')!;
 
   // Populate Lighting Ramps dropdown
   for (const r of pipeline.getLightingRamps()) {
@@ -720,7 +850,94 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
   }
   selLightingRamp.value = pipeline.activeRampId;
 
+  function syncConversionModeUi(): void {
+    const mode = pipeline.pipelineConfig.filterMode;
+    const modeLabel =
+      mode === 'full_scene'
+        ? 'Full Scene'
+        : mode === 'cel_hard'
+        ? 'Cel Hard'
+        : 'Hybrid';
+    valConvMode.textContent = isVoxelMode ? 'Voxel 3D' : modeLabel;
+    filterBtns.forEach((b) =>
+      b.classList.toggle('is-active', !isVoxelMode && b.dataset.filter === mode)
+    );
+    btnModeVoxel.classList.toggle('is-active', isVoxelMode);
+    btnVoxelPreview.classList.toggle('is-active', isVoxelMode);
+    btnVoxelPreview.textContent = isVoxelMode
+      ? 'Exit Voxel 3D Preview'
+      : 'Preview Voxel 3D in Viewport';
+  }
+
+  function disposeVoxelPreview(): void {
+    if (activeVoxel) {
+      activeVoxel.group.removeFromParent();
+      disposeGroupResources(activeVoxel.group);
+      activeVoxel.grid.geometry.dispose();
+      activeVoxel = null;
+    }
+    if (activeStage) {
+      activeStage.subjectRoot.visible = true;
+    }
+  }
+
+  function generateCurrentVoxelGrid(): VoxelGridResult | null {
+    if (!activeStage) return null;
+    const prevVis = activeStage.subjectRoot.visible;
+    activeStage.subjectRoot.visible = true;
+    if (animCtrl.getClips().length > 0) {
+      animCtrl.setTime(animCtrl.getQuantizedTime());
+    }
+    activeStage.subjectRoot.updateMatrixWorld(true);
+
+    const resolution = Number(rngVoxelRes.value) || 32;
+    const usePal = chkVoxelPal.checked;
+    const dither3d = chkVoxelDither.checked;
+    const grid = voxelizeObject3D(activeStage.subjectRoot, {
+      resolution,
+      palette: usePal ? pipeline.getActivePaletteEntry().config : null,
+      dither3d,
+      fillSolidInterior: true,
+      preserveWorldScale: true,
+    });
+
+    activeStage.subjectRoot.visible = prevVis;
+    voxelStatsEl.textContent = `${grid.dimensions.join('×')} · ${grid.voxels.length.toLocaleString()} voxels · ${grid.faceCount.toLocaleString()} faces`;
+    return grid;
+  }
+
+  function rebuildVoxelPreview(): void {
+    if (!activeStage) return;
+    disposeVoxelPreview();
+    const grid = generateCurrentVoxelGrid();
+    if (!grid) return;
+
+    const { group } = buildVoxelMeshGroup(grid, pipeline.getSharedResourcesForMaterial());
+    group.position.copy(activeStage.subjectRoot.position);
+    group.rotation.copy(activeStage.subjectRoot.rotation);
+    group.scale.copy(activeStage.subjectRoot.scale);
+    activeStage.sceneRoot.add(group);
+    activeStage.subjectRoot.visible = false;
+    activeVoxel = { grid, group };
+  }
+
+  function setVoxelMode(active: boolean): void {
+    if (active) {
+      if (pipeline.pipelineConfig.filterMode === 'full_scene') {
+        pipeline.pipelineConfig.filterMode = 'only_pixelized';
+      }
+      isVoxelMode = true;
+      rebuildVoxelPreview();
+    } else {
+      isVoxelMode = false;
+      disposeVoxelPreview();
+    }
+    syncConversionModeUi();
+  }
+
   function applyStage(next: ActiveStage): void {
+    isVoxelMode = false;
+    disposeVoxelPreview();
     if (activeStage) {
       scene.remove(activeStage.sceneRoot);
       disposeGroupResources(activeStage.sceneRoot);
@@ -729,97 +946,146 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
     scene.add(next.sceneRoot);
     captionTitle.textContent = next.name;
     captionDesc.textContent = next.description;
-    selectedItemId = next.items.find((i) => i.materials[0]?.options.pixelated)?.id ?? next.items[0]?.id ?? '';
+    voxelStatsEl.textContent = 'Grid Ready — click Preview or Export';
+    selectedItemId =
+      next.items.find((i) => i.materials[0]?.options.pixelated)?.id ?? next.items[0]?.id ?? '';
     renderSceneItemList();
     syncObjectInspector();
+    syncConversionModeUi();
+  }
+
+  function mountLoadedModel(
+    loaded: LoadedModelResult,
+    titleOverride?: string,
+    descOverride?: string
+  ): void {
+    const wrapScene = new THREE.Group();
+    const items: SceneItemEntry[] = [];
+
+    // Subtle unpixelated showcase floor so cast shadows read crisply
+    const floorMat = new PixelizerMaterial(
+      {
+        pixelated: false,
+        objectId: 0,
+        outlineAlpha: 0,
+        edgeBevelWeight: 0,
+        baseColor: '#485266',
+        useColorGrading: false,
+        smoothness: 0.08,
+      },
+      pipeline.getSharedResourcesForMaterial()
+    );
+    const floorMesh = new THREE.Mesh(
+      new THREE.CylinderGeometry(4.5, 4.7, 0.2, 32),
+      floorMat
+    );
+    floorMesh.position.set(0, -0.115, 0);
+    floorMesh.receiveShadow = true;
+    wrapScene.add(floorMesh, loaded.root);
+
+    loaded.meshes.forEach((m, idx) => {
+      const mats = Array.isArray(m.material) ? m.material : [m.material];
+      const pixMats = mats.filter((x): x is PixelizerMaterial => x instanceof PixelizerMaterial);
+      if (pixMats.length > 0) {
+        items.push({
+          id: `mesh_${idx}`,
+          label: m.name || `Mesh Part #${idx + 1}`,
+          object: m,
+          materials: pixMats,
+          snapTarget: loaded.root,
+        });
+      }
+    });
+
+    if (items.length === 0) {
+      items.push({
+        id: 'root',
+        label: loaded.name,
+        object: loaded.root,
+        materials: loaded.materials,
+        snapTarget: loaded.root,
+      });
+    }
+
+    animCtrl.bindModel(loaded.root, loaded.animations);
+    if (loaded.animations.length > 0) {
+      const bestIdx = pickPreferredClipIndex(loaded.animations);
+      selAnimClip.innerHTML = loaded.animations
+        .map((clip, i) => `<option value="${i}">${clip.name || `Clip ${i + 1}`}</option>`)
+        .join('');
+      selAnimClip.value = String(bestIdx);
+      animCtrl.playClip(bestIdx);
+      selAnimClip.style.display = 'inline-block';
+    } else {
+      selAnimClip.style.display = 'none';
+    }
+
+    applyStage({
+      name: titleOverride ?? `Imported: ${loaded.name}`,
+      description:
+        descOverride ??
+        `${loaded.meshes.length} mesh(es) converted to PixelizerMaterial · ${loaded.animations.length} animation clip(s).`,
+      subjectRoot: loaded.root,
+      sceneRoot: wrapScene,
+      items,
+      updateAnimation: (t, motionTest) => {
+        if (motionTest) {
+          loaded.root.position.x = Math.sin(t * 1.1) * 1.25;
+          loaded.root.rotation.y = t * 0.45;
+        } else {
+          loaded.root.position.x = 0;
+          if (loaded.animations.length === 0) {
+            loaded.root.rotation.y = t * 0.4;
+          }
+        }
+      },
+    });
   }
 
   function loadDemoPreset(presetId: DemoPresetId): void {
+    loadRequestToken++;
     animCtrl.dispose();
     selAnimClip.style.display = 'none';
     const built: BuiltDemoScene = buildDemoScene(presetId, pipeline.getSharedResourcesForMaterial());
     applyStage(built);
   }
 
-  async function handleModelImport(file: File): Promise<void> {
+  async function loadPresetSelection(value: string): Promise<void> {
+    const charDef = CHARACTER_PRESETS[value];
+    if (!charDef) {
+      loadDemoPreset(value as DemoPresetId);
+      return;
+    }
+    const token = ++loadRequestToken;
+    captionTitle.textContent = `Loading ${charDef.title}...`;
+    captionDesc.textContent = `Fetching articulated GLB (${charDef.filename})...`;
     try {
-      const loaded = await loadModelFromFile(file, pipeline.getSharedResourcesForMaterial());
-      const wrapScene = new THREE.Group();
-      const items: SceneItemEntry[] = [];
-
-      // Subtle unpixelated showcase floor so cast shadows read crisply
-      const floorMat = new PixelizerMaterial(
-        {
-          pixelated: false,
-          objectId: 0,
-          outlineAlpha: 0,
-          edgeBevelWeight: 0,
-          baseColor: '#485266',
-          useColorGrading: false,
-          smoothness: 0.08,
-        },
+      const loaded = await loadModelFromUrl(
+        charDef.url,
+        charDef.filename,
         pipeline.getSharedResourcesForMaterial()
       );
-      const floorMesh = new THREE.Mesh(
-        new THREE.CylinderGeometry(4.5, 4.7, 0.2, 32),
-        floorMat
-      );
-      floorMesh.position.set(0, -0.115, 0);
-      floorMesh.receiveShadow = true;
-      wrapScene.add(floorMesh, loaded.root);
-
-      loaded.meshes.forEach((m, idx) => {
-        const mats = Array.isArray(m.material) ? m.material : [m.material];
-        const pixMats = mats.filter((x): x is PixelizerMaterial => x instanceof PixelizerMaterial);
-        if (pixMats.length > 0) {
-          items.push({
-            id: `mesh_${idx}`,
-            label: m.name || `Mesh Part #${idx + 1} (ID ${pixMats[0].options.objectId})`,
-            object: m,
-            materials: pixMats,
-            snapTarget: loaded.root,
-          });
-        }
-      });
-
-      if (items.length === 0) {
-        items.push({
-          id: 'root',
-          label: loaded.name,
-          object: loaded.root,
-          materials: loaded.materials,
-          snapTarget: loaded.root,
-        });
+      if (token !== loadRequestToken) {
+        disposeGroupResources(loaded.root);
+        return;
       }
+      mountLoadedModel(loaded, charDef.title, charDef.description);
+    } catch (err) {
+      if (token !== loadRequestToken) return;
+      captionTitle.textContent = `Failed to load ${charDef.title}`;
+      captionDesc.textContent = err instanceof Error ? err.message : 'Model load error';
+    }
+  }
 
-      animCtrl.bindModel(loaded.root, loaded.animations);
-      if (loaded.animations.length > 0) {
-        selAnimClip.innerHTML = loaded.animations
-          .map((clip, i) => `<option value="${i}">${clip.name || `Clip ${i + 1}`}</option>`)
-          .join('');
-        selAnimClip.style.display = 'inline-block';
-      } else {
-        selAnimClip.style.display = 'none';
+  async function handleModelImport(file: File): Promise<void> {
+    const token = ++loadRequestToken;
+    try {
+      const loaded = await loadModelFromFile(file, pipeline.getSharedResourcesForMaterial());
+      if (token !== loadRequestToken) {
+        disposeGroupResources(loaded.root);
+        return;
       }
-
-      applyStage({
-        name: `Imported: ${loaded.name}`,
-        description: `${loaded.meshes.length} mesh(es) converted to PixelizerMaterial · ${loaded.animations.length} animation clip(s).`,
-        subjectRoot: loaded.root,
-        sceneRoot: wrapScene,
-        items,
-        updateAnimation: (t, motionTest) => {
-          if (motionTest) {
-            loaded.root.position.x = Math.sin(t * 1.1) * 1.25;
-            loaded.root.rotation.y = t * 0.45;
-          } else {
-            loaded.root.position.x = 0;
-            if (loaded.animations.length === 0) {
-              loaded.root.rotation.y = t * 0.4;
-            }
-          }
-        },
-      });
+      mountLoadedModel(loaded);
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Failed to load 3D file');
     }
@@ -837,7 +1103,9 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
       btn.type = 'button';
       btn.className = `scene-item-btn ${item.id === selectedItemId ? 'is-selected' : ''}`;
       const primary = item.materials[0];
-      const badge = primary?.options.pixelated ? `${primary.options.pixelSize}×` : 'RAW';
+      const badge = primary?.options.pixelated
+        ? `ID${primary.options.objectId} · ${primary.options.pixelSize}×`
+        : 'RAW';
       btn.innerHTML = `<span>${item.label}</span><span style="font-family:var(--font-mono);font-size:10px;color:var(--cyan-tech);">${badge}</span>`;
       btn.addEventListener('click', () => {
         selectedItemId = item.id;
@@ -882,6 +1150,17 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
   const texAlbedoName = rootElement.querySelector<HTMLElement>('#tex-albedo-name')!;
   const texNormalName = rootElement.querySelector<HTMLElement>('#tex-normal-name')!;
   const texEmitName = rootElement.querySelector<HTMLElement>('#tex-emit-name')!;
+  const pxChipBtns = rootElement.querySelectorAll<HTMLButtonElement>('#px-preset-chips .chip-btn');
+
+  let voxelRebuildTimer: ReturnType<typeof setTimeout> | null = null;
+  function scheduleVoxelRebuild(): void {
+    if (!isVoxelMode) return;
+    if (voxelRebuildTimer) clearTimeout(voxelRebuildTimer);
+    voxelRebuildTimer = setTimeout(() => {
+      voxelRebuildTimer = null;
+      if (isVoxelMode) rebuildVoxelPreview();
+    }, 90);
+  }
 
   function syncObjectInspector(): void {
     const item = getSelectedItem();
@@ -892,6 +1171,9 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
     chkObjPix.checked = o.pixelated;
     rngObjPxSize.value = String(o.pixelSize);
     valObjPxSize.textContent = `${o.pixelSize}×${o.pixelSize}`;
+    pxChipBtns.forEach((b) =>
+      b.classList.toggle('is-active', Number(b.dataset.px) === o.pixelSize)
+    );
     rngObjId.value = String(o.objectId);
     valObjId.textContent = String(o.objectId);
     colObjOutline.value = o.outlineColor;
@@ -964,7 +1246,17 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
   rngObjPxSize.addEventListener('input', () => {
     const v = Number(rngObjPxSize.value);
     valObjPxSize.textContent = `${v}×${v}`;
+    pxChipBtns.forEach((b) => b.classList.toggle('is-active', Number(b.dataset.px) === v));
     patchSelectedMaterials({ pixelSize: v });
+  });
+  pxChipBtns.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const px = Number(btn.dataset.px) || 3;
+      rngObjPxSize.value = String(px);
+      valObjPxSize.textContent = `${px}×${px}`;
+      pxChipBtns.forEach((b) => b.classList.toggle('is-active', b === btn));
+      patchSelectedMaterials({ pixelSize: px });
+    });
   });
   rngObjId.addEventListener('input', () => {
     const v = Number(rngObjId.value);
@@ -1024,6 +1316,23 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
     patchSelectedSnap({ angleResolutionDeg: v });
   });
 
+  // Toggle unified silhouette Object ID vs split per-mesh Object IDs
+  rootElement.querySelector('#btn-toggle-id-mode')!.addEventListener('click', () => {
+    if (!activeStage) return;
+    const pixItems = activeStage.items.filter((i) => i.materials.some((m) => m.options.pixelated));
+    if (pixItems.length === 0) return;
+    const ids = new Set(pixItems.map((i) => i.materials[0]?.options.objectId ?? 1));
+    const shouldSplit = ids.size <= 1;
+    pixItems.forEach((item, idx) => {
+      const nextId = shouldSplit ? 10 + (idx % 240) : 10;
+      for (const m of item.materials) {
+        if (m.options.pixelated) m.updateOptions({ objectId: nextId });
+      }
+    });
+    renderSceneItemList();
+    syncObjectInspector();
+  });
+
   // Apply style to all pixelized meshes
   rootElement.querySelector('#btn-apply-all-obj')!.addEventListener('click', () => {
     const src = getSelectedItem()?.materials[0];
@@ -1041,6 +1350,12 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
           });
         }
       }
+      const attach = item.snapTarget.userData.pixelizer as PixelizerObjectAttachment | undefined;
+      if (attach) attach.snap.alignmentPixelSize = src.options.pixelSize;
+      item.object.traverse((c) => {
+        const a = c.userData.pixelizer as PixelizerObjectAttachment | undefined;
+        if (a) a.snap.alignmentPixelSize = src.options.pixelSize;
+      });
     }
     renderSceneItemList();
   });
@@ -1078,7 +1393,9 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
   // Palette & Dither Tab
   mountPaletteEditorTab(rootElement.querySelector<HTMLElement>('#pane-palette-host')!, pipeline, {
     onPaletteOrDitherChanged: () => {
-      // Shared LUTs re-bind automatically during pipeline.render()
+      if (isVoxelMode && chkVoxelPal.checked) {
+        scheduleVoxelRebuild();
+      }
     },
   });
 
@@ -1095,12 +1412,14 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
 
   // Topbar Controls
   const selDemo = rootElement.querySelector<HTMLSelectElement>('#sel-demo-scene')!;
-  selDemo.addEventListener('change', () => loadDemoPreset(selDemo.value as DemoPresetId));
+  selDemo.addEventListener('change', () => {
+    void loadPresetSelection(selDemo.value);
+  });
 
   const fileModelInput = rootElement.querySelector<HTMLInputElement>('#file-model-input')!;
   fileModelInput.addEventListener('change', () => {
     const f = fileModelInput.files?.[0];
-    if (f) handleModelImport(f);
+    if (f) void handleModelImport(f);
     fileModelInput.value = '';
   });
 
@@ -1114,7 +1433,7 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
     e.preventDefault();
     dropOverlay.classList.remove('is-visible');
     const f = e.dataTransfer?.files?.[0];
-    if (f) handleModelImport(f);
+    if (f) void handleModelImport(f);
   };
   stageEl.addEventListener('dragover', onDragOver);
   stageEl.addEventListener('dragleave', onDragLeave);
@@ -1158,13 +1477,19 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
     pipeline.pipelineConfig.debugView = selDebugView.value as DebugViewMode;
   });
 
-  // Pipeline Tab Controls
-  const filterBtns = rootElement.querySelectorAll<HTMLButtonElement>('[data-filter]');
+  // Pipeline Tab Conversion Mode Controls (Hybrid, Full Scene, Cel Hard, Voxel 3D)
   filterBtns.forEach((btn) => {
     btn.addEventListener('click', () => {
-      filterBtns.forEach((b) => b.classList.toggle('is-active', b === btn));
       pipeline.pipelineConfig.filterMode = btn.dataset.filter as PixelizationFilterMode;
+      if (isVoxelMode) {
+        setVoxelMode(false);
+      } else {
+        syncConversionModeUi();
+      }
     });
+  });
+  btnModeVoxel.addEventListener('click', () => {
+    setVoxelMode(!isVoxelMode);
   });
 
   const bindCheck = (id: string, fn: (checked: boolean) => void) => {
@@ -1279,9 +1604,10 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
   });
   selAnimClip.addEventListener('change', () => {
     animCtrl.playClip(Number(selAnimClip.value));
+    if (isVoxelMode) scheduleVoxelRebuild();
   });
 
-  // Export Actions
+  // Export & 3D Voxelizer Actions
   function triggerDownload(href: string, filename: string): void {
     const a = document.createElement('a');
     a.href = href;
@@ -1289,13 +1615,87 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
     a.click();
   }
 
+  function downloadBlob(blob: Blob, filename: string): void {
+    const url = URL.createObjectURL(blob);
+    triggerDownload(url, filename);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  function getExportSlug(): string {
+    const raw = (activeStage?.name || selDemo.value || 'pixelizer_model')
+      .toLowerCase()
+      .replace(/^imported:\s*/i, '')
+      .replace(/\.[a-z0-9]+$/i, '')
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '');
+    return raw || 'pixelizer_model';
+  }
+
+  function acquireGridForExport(): { grid: VoxelGridResult; isTemp: boolean; res: number } | null {
+    const res = Number(rngVoxelRes.value) || 32;
+    if (isVoxelMode && activeVoxel) {
+      return { grid: activeVoxel.grid, isTemp: false, res };
+    }
+    const grid = generateCurrentVoxelGrid();
+    if (!grid) return null;
+    return { grid, isTemp: true, res };
+  }
+
+  rngVoxelRes.addEventListener('input', () => {
+    valVoxelRes.textContent = `${rngVoxelRes.value} voxels`;
+    scheduleVoxelRebuild();
+  });
+  chkVoxelPal.addEventListener('change', () => scheduleVoxelRebuild());
+  chkVoxelDither.addEventListener('change', () => scheduleVoxelRebuild());
+  btnVoxelPreview.addEventListener('click', () => {
+    setVoxelMode(!isVoxelMode);
+  });
+
+  rootElement.querySelector('#btn-export-obj')!.addEventListener('click', () => {
+    const acquired = acquireGridForExport();
+    if (!acquired) return;
+    const slug = getExportSlug();
+    const objText = exportVoxelGridToObj(acquired.grid, slug);
+    downloadBlob(
+      new Blob([objText], { type: 'text/plain;charset=utf-8' }),
+      `${slug}_voxel_${acquired.res}.obj`
+    );
+    if (acquired.isTemp) acquired.grid.geometry.dispose();
+  });
+
+  rootElement.querySelector('#btn-export-glb')!.addEventListener('click', () => {
+    void (async () => {
+      const acquired = acquireGridForExport();
+      if (!acquired) return;
+      const slug = getExportSlug();
+      const buf = await exportVoxelGridToGlb(acquired.grid, slug);
+      downloadBlob(
+        new Blob([buf], { type: 'model/gltf-binary' }),
+        `${slug}_voxel_${acquired.res}.glb`
+      );
+      if (acquired.isTemp) acquired.grid.geometry.dispose();
+    })();
+  });
+
+  rootElement.querySelector('#btn-export-vox')!.addEventListener('click', () => {
+    const acquired = acquireGridForExport();
+    if (!acquired) return;
+    const slug = getExportSlug();
+    const bytes = exportVoxelGridToVox(acquired.grid);
+    downloadBlob(
+      new Blob([bytes.slice().buffer], { type: 'application/octet-stream' }),
+      `${slug}_voxel_${acquired.res}.vox`
+    );
+    if (acquired.isTemp) acquired.grid.geometry.dispose();
+  });
+
   function withIsolatedSubject<T>(fn: () => T): T {
     const isolate =
       rootElement.querySelector<HTMLInputElement>('#chk-exp-isolate')?.checked ?? true;
     const hidden: { obj: THREE.Object3D; vis: boolean }[] = [];
     if (isolate && activeStage) {
       for (const child of activeStage.sceneRoot.children) {
-        if (child !== activeStage.subjectRoot) {
+        if (child !== activeStage.subjectRoot && child !== activeVoxel?.group) {
           hidden.push({ obj: child, vis: child.visible });
           child.visible = false;
         }
@@ -1339,13 +1739,15 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
     const framesPerDir = Number(rngSheetFrames.value);
     const tile = Number(rootElement.querySelector<HTMLSelectElement>('#sel-sheet-size')!.value);
     const alpha = rootElement.querySelector<HTMLInputElement>('#chk-exp-alpha')!.checked;
+    const turntableTarget =
+      isVoxelMode && activeVoxel ? activeVoxel.group : activeStage.subjectRoot;
 
     const result = withIsolatedSubject(() =>
       exportTurntableSpriteSheet(
         pipeline,
         scene,
         activeCamera,
-        activeStage!.subjectRoot,
+        turntableTarget,
         {
           directions: dirs,
           framesPerDirection: framesPerDir,
@@ -1354,7 +1756,7 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
           transparentBackground: alpha,
           startYawDeg: 0,
         },
-        animCtrl.getClips().length > 0 ? animCtrl : undefined
+        !isVoxelMode && animCtrl.getClips().length > 0 ? animCtrl : undefined
       )
     );
 
@@ -1410,6 +1812,11 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
 
     const qTime = animCtrl.update(dt);
     activeStage?.updateAnimation(qTime, motionCreepTest);
+    if (activeVoxel && activeStage) {
+      activeVoxel.group.position.copy(activeStage.subjectRoot.position);
+      activeVoxel.group.rotation.copy(activeStage.subjectRoot.rotation);
+      activeVoxel.group.scale.copy(activeStage.subjectRoot.scale);
+    }
     controls.update();
 
     pipeline.render(scene, activeCamera);
@@ -1457,6 +1864,8 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
 
   return () => {
     cancelAnimationFrame(rafId);
+    if (voxelRebuildTimer) clearTimeout(voxelRebuildTimer);
+    disposeVoxelPreview();
     ro.disconnect();
     stageEl.removeEventListener('dragover', onDragOver);
     stageEl.removeEventListener('dragleave', onDragLeave);

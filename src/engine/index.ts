@@ -7,3 +7,4 @@ export * from './steppedAnimation';
 export * from './PixelizerMaterial';
 export * from './PixelizerPipeline';
 export * from './SpriteSheetExporter';
+export * from './Voxelizer';

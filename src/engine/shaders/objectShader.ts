@@ -2,6 +2,7 @@ import { GLSL_COMMON_HELPERS } from './common';
 
 export const OBJECT_VERTEX_SHADER = /* glsl */ `
 #include <common>
+#include <morphtarget_pars_vertex>
 #include <skinning_pars_vertex>
 #include <shadowmap_pars_vertex>
 
@@ -27,6 +28,7 @@ void main() {
     vec3 objectTangent = vec3(tangent.xyz);
   #endif
 
+  #include <morphnormal_vertex>
   #include <skinbase_vertex>
   #include <skinnormal_vertex>
 
@@ -52,6 +54,7 @@ void main() {
   #endif
 
   vec3 transformed = vec3(position);
+  #include <morphtarget_vertex>
   #include <skinning_vertex>
 
   vec4 worldPosition = vec4(transformed, 1.0);
@@ -133,6 +136,8 @@ uniform sampler2D uPalettePrimaryTex;
 uniform sampler2D uPaletteSecondaryTex;
 uniform float uPaletteLutSize;
 uniform sampler2D uDitherTex;
+uniform float uDitherSize;
+uniform float uForceFlatDither;
 
 uniform float uCameraNear;
 uniform float uCameraFar;
@@ -153,7 +158,9 @@ vec3 samplePaletteDualLut(vec3 srgbColor, vec2 ditherCoord) {
   vec4 prim = texture(uPalettePrimaryTex, uv);
   vec3 sec = texture(uPaletteSecondaryTex, uv).rgb;
 
-  float threshold = sampleDither4x4(uDitherTex, ditherCoord);
+  float threshold = (uForceFlatDither > 0.5)
+    ? 0.5
+    : sampleDitherMatrix(uDitherTex, ditherCoord, uDitherSize);
   return (prim.a > threshold) ? sec : prim.rgb;
 }
 
@@ -186,7 +193,7 @@ void main() {
   }
 
   if (uUseDitheredTransparency > 0.5 && finalAlpha < 0.995) {
-    float alphaThresh = sampleDither4x4(uDitherTex, ditherCoord);
+    float alphaThresh = sampleDitherMatrix(uDitherTex, ditherCoord, uDitherSize);
     if (finalAlpha <= alphaThresh) {
       discard;
     }

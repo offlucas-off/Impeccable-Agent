@@ -28,15 +28,41 @@ const DEFAULT_SNAP: SnapOptions = {
 };
 
 /**
- * Normalizes any imported 3D model to fit neatly inside a ~2.8 unit bounding box,
+ * Picks a lively showcase animation clip index (preferring Walk/Run/Dance/Survey over static poses).
+ */
+export function pickPreferredClipIndex(clips: THREE.AnimationClip[]): number {
+  if (clips.length === 0) return 0;
+  const preferred = [
+    /^walking_a$/i,
+    /^walk$/i,
+    /^walking$/i,
+    /^running_a$/i,
+    /^run$/i,
+    /^running$/i,
+    /^dance$/i,
+    /^survey$/i,
+    /^idle$/i,
+  ];
+  for (const re of preferred) {
+    const idx = clips.findIndex((c) => re.test(c.name.trim()));
+    if (idx >= 0) return idx;
+  }
+  return 0;
+}
+
+/**
+ * Normalizes any imported 3D model to fit neatly inside a ~2.6 unit bounding box,
  * resting with its base near y = 0, and converts its materials into PixelizerMaterials.
+ * When unifyObjectId is true (default for character rigs), all sub-meshes share one objectId
+ * so silhouettes merge without interior limb boundary scars.
  */
 export function prepareLoadedObject(
   object: THREE.Object3D,
   name: string,
   animations: THREE.AnimationClip[],
   sharedResources: PixelizerMaterialResources,
-  defaults: PixelizerMaterialOptions = {}
+  defaults: PixelizerMaterialOptions = {},
+  unifyObjectId = true
 ): LoadedModelResult {
   const wrapper = new THREE.Group();
   wrapper.name = name;
@@ -61,6 +87,11 @@ export function prepareLoadedObject(
 
   const meshes: THREE.Mesh[] = [];
   const materials: PixelizerMaterial[] = [];
+  const basePx = defaults.pixelSize ?? 3;
+  const snapCfg: SnapOptions = {
+    ...DEFAULT_SNAP,
+    alignmentPixelSize: basePx,
+  };
 
   let meshCounter = 0;
   wrapper.traverse((child) => {
@@ -68,6 +99,10 @@ export function prepareLoadedObject(
       meshCounter++;
       child.castShadow = true;
       child.receiveShadow = true;
+      // Preserve deformed bounding box reliability on SkinnedMeshes
+      if (child instanceof THREE.SkinnedMesh) {
+        child.frustumCulled = false;
+      }
 
       const geo = child.geometry;
       if (geo && !geo.attributes.normal) {
@@ -80,13 +115,17 @@ export function prepareLoadedObject(
         : [child.material];
       const converted: PixelizerMaterial[] = [];
 
+      const assignedId = unifyObjectId
+        ? defaults.objectId ?? 10
+        : 10 + (meshCounter % 240);
+
       for (const sm of srcMats) {
         const pm = convertStandardMaterialToPixelizer(
           sm,
           {
             pixelated: true,
-            pixelSize: 3,
-            objectId: 10 + (meshCounter % 240),
+            pixelSize: basePx,
+            objectId: assignedId,
             outlineColor: '#14101c',
             outlineAlpha: 1.0,
             edgeHighlight: 0.35,
@@ -103,7 +142,7 @@ export function prepareLoadedObject(
 
       child.material = converted.length === 1 ? converted[0] : converted;
       child.userData.pixelizer = {
-        snap: { ...DEFAULT_SNAP },
+        snap: { ...snapCfg },
         gridReference: wrapper,
       } satisfies PixelizerObjectAttachment;
       meshes.push(child);
@@ -111,70 +150,82 @@ export function prepareLoadedObject(
   });
 
   wrapper.userData.pixelizer = {
-    snap: { ...DEFAULT_SNAP },
+    snap: { ...snapCfg },
     gridReference: wrapper,
   } satisfies PixelizerObjectAttachment;
 
   return { root: wrapper, animations, meshes, materials, name };
 }
 
+export async function loadModelFromUrl(
+  url: string,
+  name: string,
+  sharedResources: PixelizerMaterialResources,
+  defaults: PixelizerMaterialOptions = {},
+  unifyObjectId = true
+): Promise<LoadedModelResult> {
+  const ext = (name.split('.').pop() || url.split('.').pop() || 'glb').toLowerCase();
+
+  if (ext === 'glb' || ext === 'gltf') {
+    const loader = new GLTFLoader();
+    const gltf = await loader.loadAsync(url);
+    return prepareLoadedObject(
+      gltf.scene,
+      name,
+      gltf.animations ?? [],
+      sharedResources,
+      defaults,
+      unifyObjectId
+    );
+  }
+
+  if (ext === 'obj') {
+    const loader = new OBJLoader();
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status} loading ${name}`);
+    const text = await res.text();
+    const group = loader.parse(text);
+    return prepareLoadedObject(group, name, [], sharedResources, defaults, unifyObjectId);
+  }
+
+  if (ext === 'fbx') {
+    const loader = new FBXLoader();
+    const fbx = await loader.loadAsync(url);
+    return prepareLoadedObject(
+      fbx,
+      name,
+      fbx.animations ?? [],
+      sharedResources,
+      defaults,
+      unifyObjectId
+    );
+  }
+
+  if (ext === 'stl') {
+    const loader = new STLLoader();
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status} loading ${name}`);
+    const buffer = await res.arrayBuffer();
+    const geo = loader.parse(buffer);
+    geo.computeVertexNormals();
+    const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: '#c4cdd9' }));
+    const group = new THREE.Group();
+    group.add(mesh);
+    return prepareLoadedObject(group, name, [], sharedResources, defaults, unifyObjectId);
+  }
+
+  throw new Error(`Formato ".${ext}" não suportado. Use .glb, .gltf, .obj, .fbx ou .stl.`);
+}
+
 export async function loadModelFromFile(
   file: File,
   sharedResources: PixelizerMaterialResources,
-  defaults: PixelizerMaterialOptions = {}
+  defaults: PixelizerMaterialOptions = {},
+  unifyObjectId = true
 ): Promise<LoadedModelResult> {
-  const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
   const url = URL.createObjectURL(file);
-
   try {
-    if (ext === 'glb' || ext === 'gltf') {
-      const loader = new GLTFLoader();
-      const gltf = await loader.loadAsync(url);
-      return prepareLoadedObject(
-        gltf.scene,
-        file.name,
-        gltf.animations ?? [],
-        sharedResources,
-        defaults
-      );
-    }
-
-    if (ext === 'obj') {
-      const loader = new OBJLoader();
-      const text = await file.text();
-      const group = loader.parse(text);
-      return prepareLoadedObject(group, file.name, [], sharedResources, defaults);
-    }
-
-    if (ext === 'fbx') {
-      const loader = new FBXLoader();
-      const fbx = await loader.loadAsync(url);
-      return prepareLoadedObject(
-        fbx,
-        file.name,
-        fbx.animations ?? [],
-        sharedResources,
-        defaults
-      );
-    }
-
-    if (ext === 'stl') {
-      const loader = new STLLoader();
-      const buffer = await file.arrayBuffer();
-      const geo = loader.parse(buffer);
-      geo.computeVertexNormals();
-      const mesh = new THREE.Mesh(
-        geo,
-        new THREE.MeshStandardMaterial({ color: '#c4cdd9' })
-      );
-      const group = new THREE.Group();
-      group.add(mesh);
-      return prepareLoadedObject(group, file.name, [], sharedResources, defaults);
-    }
-
-    throw new Error(
-      `Formato ".${ext}" não suportado. Use .glb, .gltf, .obj, .fbx ou .stl.`
-    );
+    return await loadModelFromUrl(url, file.name, sharedResources, defaults, unifyObjectId);
   } finally {
     URL.revokeObjectURL(url);
   }

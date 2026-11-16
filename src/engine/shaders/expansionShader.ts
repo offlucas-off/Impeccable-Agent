@@ -10,8 +10,8 @@ void main() {
 /**
  * Pass 2: Pixel Expansion (Elliot Bentine Attempt #3).
  * Expands sparse macropixel seeds into exact PxP screen-space blocks using nearest depth,
- * enabling mixed per-object pixel sizes (1x..6x), sub-macropixel motion, and unpixelated
- * hybrid foreground/background depth sorting.
+ * enabling mixed per-object pixel sizes (1x..10x, incl. 3x3, 7x7, 8x8), sub-macropixel motion,
+ * and unpixelated hybrid foreground/background depth sorting.
  */
 export const EXPANSION_FRAGMENT_SHADER = /* glsl */ `
 precision highp float;
@@ -28,7 +28,7 @@ uniform sampler2D tMeta;
 uniform sampler2D tNormalDepth;
 
 uniform ivec2 uResolution;
-uniform int uSearchRadius; // e.g. 2 for P<=5 (5x5), 3 for P<=7 (7x7)
+uniform int uSearchRadius; // up to 6 for P<=12 (e.g. 4 for 7x7, 5 for 8x8..9x9)
 uniform float uEnabled;
 
 void main() {
@@ -41,10 +41,10 @@ void main() {
   vec4 cNormalDepth = texelFetch(tNormalDepth, p, 0);
 
   if (uEnabled < 0.5) {
-    // Pass through without expansion (encode 0 offset = (4,4) -> 68/255)
+    // Pass through without expansion (encode 0 offset = (7,7) -> 119/255)
     outColor = cColor;
     outOutline = cOutline;
-    outMeta = vec4(cMeta.r, cMeta.g, (4.0 * 16.0 + 4.0) / 255.0, cMeta.a);
+    outMeta = vec4(cMeta.r, cMeta.g, (7.0 * 16.0 + 7.0) / 255.0, cMeta.a);
     outNormalDepth = cNormalDepth;
     return;
   }
@@ -54,9 +54,9 @@ void main() {
   bool pickedSeed = (cMeta.b > 0.5);
 
   // If current pixel is already a valid seed, still check if a closer seed covers it
-  for (int dy = -4; dy <= 4; dy++) {
+  for (int dy = -6; dy <= 6; dy++) {
     if (abs(dy) > uSearchRadius) continue;
-    for (int dx = -4; dx <= 4; dx++) {
+    for (int dx = -6; dx <= 6; dx++) {
       if (abs(dx) > uSearchRadius) continue;
 
       ivec2 q = p + ivec2(dx, dy);
@@ -90,11 +90,11 @@ void main() {
   vec4 winMeta = (bestCoord == p) ? cMeta : texelFetch(tMeta, bestCoord, 0);
   vec4 winNormalDepth = (bestCoord == p) ? cNormalDepth : texelFetch(tNormalDepth, bestCoord, 0);
 
-  ivec2 delta = clamp(bestCoord - p, ivec2(-4), ivec2(4));
+  ivec2 delta = clamp(bestCoord - p, ivec2(-7), ivec2(7));
   if (!pickedSeed) {
     delta = ivec2(0, 0);
   }
-  float packedDelta = float((delta.x + 4) * 16 + (delta.y + 4)) / 255.0;
+  float packedDelta = float((delta.x + 7) * 16 + (delta.y + 7)) / 255.0;
 
   outColor = winColor;
   outOutline = winOutline;

@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 
-export type PixelizationFilterMode = 'only_pixelized' | 'full_scene';
+export type PixelizationFilterMode = 'only_pixelized' | 'full_scene' | 'cel_hard';
 
 export type ResolutionMode =
   | 'world_space_pixel_size'
@@ -16,7 +16,10 @@ export type ShadingWorkflow = 'specular' | 'metallic';
 export type ColorReductionMethod =
   | 'rgb_euclidean'
   | 'hsv_weighted'
-  | 'value_nearest';
+  | 'oklab_perceptual'
+  | 'hue_priority'
+  | 'value_nearest'
+  | 'posterize_quant';
 
 export type DebugViewMode =
   | 'final'
@@ -27,12 +30,16 @@ export type DebugViewMode =
   | 'depth'
   | 'edges';
 
-export interface DitherPattern4x4 {
+export interface DitherPattern {
   id: string;
   name: string;
-  /** 16 threshold integers in row-major 4x4 order (range 0..16) */
+  /** Grid size: 4 (4x4 = 16 entries) or 8 (8x8 = 64 entries) */
+  size?: 4 | 8;
+  /** Threshold integers in row-major order (0..16 for 4x4, 0..64 for 8x8) */
   thresholds: number[];
 }
+
+export type DitherPattern4x4 = DitherPattern;
 
 export interface ColorPaletteConfig {
   id: string;
@@ -61,7 +68,7 @@ export interface LightingRampConfig {
 export interface PixelizerMaterialOptions {
   /** Whether this object participates in per-object pixelization */
   pixelated?: boolean;
-  /** Macropixel size in base pixels (1..6) */
+  /** Macropixel size in base pixels (1..10, e.g. 1x1, 3x3, 7x7) */
   pixelSize?: number;
   /** Unique integer ID in 0..255; matching IDs merge silhouettes without inner outline */
   objectId?: number;
@@ -164,4 +171,36 @@ export interface SpriteSheetExportOptions {
   frameHeight: number;
   transparentBackground: boolean;
   startYawDeg: number;
+}
+
+export interface VoxelizerOptions {
+  /** Voxels along the longest bounding-box axis (8..80) */
+  resolution: number;
+  /** Optional palette quantization of voxel colors */
+  palette?: ColorPaletteConfig | null;
+  /** Apply 3D ordered checkerboard dithering when quantizing to palette */
+  dither3d?: boolean;
+  /** Fill hollow interiors slightly to avoid pinholes */
+  fillSolidInterior?: boolean;
+  /** Center bottom at y=0 and preserve input bounding scale */
+  preserveWorldScale?: boolean;
+}
+
+export interface VoxelEntry {
+  ix: number;
+  iy: number;
+  iz: number;
+  r: number; // 0..255
+  g: number; // 0..255
+  b: number; // 0..255
+}
+
+export interface VoxelGridResult {
+  dimensions: [number, number, number];
+  voxelSize: number;
+  origin: THREE.Vector3;
+  voxels: VoxelEntry[];
+  faceCount: number;
+  triangleCount: number;
+  geometry: THREE.BufferGeometry;
 }

@@ -35,8 +35,8 @@ uniform float uDebugView; // 0=final, 1=raw_3d(handled elsewhere), 2=seed_dither
 
 ivec2 decodeSeedCoord(ivec2 p, vec4 meta) {
   int packed = int(floor(meta.b * 255.0 + 0.5));
-  int dx = (packed / 16) - 4;
-  int dy = (packed % 16) - 4;
+  int dx = (packed / 16) - 7;
+  int dy = (packed % 16) - 7;
   return clamp(p + ivec2(dx, dy), ivec2(0), uResolution - ivec2(1));
 }
 
