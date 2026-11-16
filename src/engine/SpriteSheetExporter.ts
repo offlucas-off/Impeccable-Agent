@@ -198,3 +198,196 @@ export function exportTurntableSpriteSheet(
     frames,
   };
 }
+
+export interface NwlIsometricSheetOptions {
+  targetCharHeightPx?: number; // default 40
+  boxSizePx?: number;          // auto >= max(96, round(charH * 2.4)) to prevent Death01 clipping
+  framesPerDirection?: number; // default 8
+  alphaThreshold?: number;     // default 110 -> binary hard alpha 0 / 255
+  directions?: readonly string[];
+}
+
+export const NWL_8_DIRECTIONS = ['S', 'SE', 'E', 'NE', 'N', 'NW', 'W', 'SW'] as const;
+
+/**
+ * Exports a strict non-mirrored 8-direction (S, SE, E, NE, N, NW, W, SW) isometric spritesheet
+ * calibrated for NWL target height (40px default) with binary hard alpha (`0`/`255`) and safe padding
+ * so extended clips (e.g., Death01) never clip against tile edges (`edge_clipping_count == 0`).
+ */
+export function exportNwlIsometricSheet(
+  pipeline: PixelizerPipeline,
+  scene: THREE.Scene,
+  targetObject: THREE.Object3D,
+  options: NwlIsometricSheetOptions = {},
+  animController?: SteppedAnimationController
+): SpriteSheetExportResult & { clippedFrames: number } {
+  const charH = Math.max(24, Math.min(256, Math.round(options.targetCharHeightPx ?? 40)));
+  const boxPx = Math.max(96, Math.round(options.boxSizePx ?? charH * 2.4));
+  const cols = Math.max(1, options.framesPerDirection ?? 8);
+  const dirs = options.directions ?? NWL_8_DIRECTIONS;
+  const rows = dirs.length;
+  const alphaThresh = options.alphaThreshold ?? 110;
+
+  // Isometric orthographic camera looking down at pitch ~35.264°
+  // Calibrated so a ~1.83m UAL humanoid (~1.494m projected height at 35.264° pitch) occupies `charH` pixels inside `boxPx`
+  const orthoSpan = 1.494 * (boxPx / charH);
+  const camDist = 12;
+  const pitchRad = Math.atan(1 / Math.SQRT2); // ~35.264°
+  const isoCam = new THREE.OrthographicCamera(
+    -orthoSpan * 0.5,
+    orthoSpan * 0.5,
+    orthoSpan * 0.5,
+    -orthoSpan * 0.5,
+    0.1,
+    50
+  );
+  isoCam.position.set(
+    0,
+    0.88 + camDist * Math.sin(pitchRad),
+    camDist * Math.cos(pitchRad)
+  );
+  isoCam.lookAt(0, 0.88, 0);
+  isoCam.updateProjectionMatrix();
+
+  const sheetW = cols * boxPx;
+  const sheetH = rows * boxPx;
+  const sheetCanvas = document.createElement('canvas');
+  sheetCanvas.width = sheetW;
+  sheetCanvas.height = sheetH;
+  const sheetCtx = sheetCanvas.getContext('2d')!;
+
+  const frameCanvas = document.createElement('canvas');
+  frameCanvas.width = boxPx;
+  frameCanvas.height = boxPx;
+  const frameCtx = frameCanvas.getContext('2d')!;
+  const imgData = frameCtx.createImageData(boxPx, boxPx);
+
+  const rt = new THREE.WebGLRenderTarget(boxPx, boxPx, {
+    minFilter: THREE.NearestFilter,
+    magFilter: THREE.NearestFilter,
+    format: THREE.RGBAFormat,
+    type: THREE.UnsignedByteType,
+  });
+
+  const prevBg = pipeline.pipelineConfig.backgroundTransparent;
+  const prevSplit = pipeline.pipelineConfig.splitCompare;
+  const prevCamCfg = { ...pipeline.cameraConfig };
+  const origYaw = targetObject.rotation.y;
+  const origTime = animController?.getContinuousTime() ?? 0;
+
+  // Save & temporarily force crisp 1px pixelization for ~40px target sprite height
+  const savedPixelSizes: { mat: { options: { pixelSize: number }; updateOptions: (p: { pixelSize: number }) => void }; px: number }[] = [];
+  targetObject.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    if (mesh.isMesh && mesh.material) {
+      const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      for (const m of mats) {
+        const pm = m as unknown as { options?: { pixelSize?: number }; updateOptions?: (p: { pixelSize: number }) => void };
+        if (pm.options && typeof pm.options.pixelSize === 'number' && pm.updateOptions && pm.options.pixelSize !== 1) {
+          savedPixelSizes.push({ mat: pm as { options: { pixelSize: number }; updateOptions: (p: { pixelSize: number }) => void }, px: pm.options.pixelSize });
+          pm.updateOptions({ pixelSize: 1 });
+        }
+      }
+    }
+  });
+
+  pipeline.pipelineConfig.backgroundTransparent = true;
+  pipeline.pipelineConfig.splitCompare = false;
+  pipeline.cameraConfig.orthographic = true;
+  pipeline.cameraConfig.resolutionMode = 'fixed_downscale_ratio';
+  pipeline.cameraConfig.downscaleRatio = 1;
+  pipeline.cameraConfig.orthoHeight = orthoSpan;
+  pipeline.cameraConfig.upscaleMode = 'nearest';
+  pipeline.cameraConfig.snapCameraPosition = false;
+
+  const frames: SpriteSheetAtlasFrame[] = [];
+  const pixels = new Uint8Array(boxPx * boxPx * 4);
+  const clipDuration = animController?.getActiveClip()?.duration || 1.0;
+  let clippedFrames = 0;
+
+  try {
+    for (let d = 0; d < rows; d++) {
+      const yawDeg = (d / rows) * 360;
+      targetObject.rotation.y = origYaw + THREE.MathUtils.degToRad(yawDeg);
+
+      for (let f = 0; f < cols; f++) {
+        if (animController) {
+          const t = cols > 1 ? (f / cols) * clipDuration : origTime;
+          animController.setTime(t);
+        }
+
+        pipeline.render(scene, isoCam, rt);
+        pipeline.renderer.readRenderTargetPixels(rt, 0, 0, boxPx, boxPx, pixels);
+
+        let touchesEdge = false;
+        for (let y = 0; y < boxPx; y++) {
+          const srcRow = (boxPx - 1 - y) * boxPx * 4;
+          const dstRow = y * boxPx * 4;
+          for (let x = 0; x < boxPx; x++) {
+            const si = srcRow + x * 4;
+            const di = dstRow + x * 4;
+            const a = pixels[si + 3] >= alphaThresh ? 255 : 0;
+            if (a === 255 && (x === 0 || x === boxPx - 1 || y === 0 || y === boxPx - 1)) {
+              touchesEdge = true;
+            }
+            imgData.data[di + 0] = pixels[si + 0];
+            imgData.data[di + 1] = pixels[si + 1];
+            imgData.data[di + 2] = pixels[si + 2];
+            imgData.data[di + 3] = a;
+          }
+        }
+        if (touchesEdge) clippedFrames++;
+
+        frameCtx.putImageData(imgData, 0, 0);
+        const x = f * boxPx;
+        const y = d * boxPx;
+        sheetCtx.drawImage(frameCanvas, x, y);
+
+        frames.push({
+          name: `${dirs[d]}_frame_${f}`,
+          directionIndex: d,
+          yawDeg: Math.round(yawDeg % 360),
+          frameIndex: f,
+          x,
+          y,
+          w: boxPx,
+          h: boxPx,
+        });
+      }
+    }
+  } finally {
+    targetObject.rotation.y = origYaw;
+    if (animController) animController.setTime(origTime);
+    pipeline.pipelineConfig.backgroundTransparent = prevBg;
+    pipeline.pipelineConfig.splitCompare = prevSplit;
+    Object.assign(pipeline.cameraConfig, prevCamCfg);
+    for (const s of savedPixelSizes) s.mat.updateOptions({ pixelSize: s.px });
+    rt.dispose();
+  }
+
+  const atlasPayload = {
+    meta: {
+      generator: 'Pixelizer 3D Engine (NWL 8-Dir Non-Mirrored Isometric)',
+      targetCharacterHeightPx: charH,
+      directions: dirs,
+      mirrored: false,
+      hardAlphaThreshold: alphaThresh,
+      clippedFrames,
+      size: { w: sheetW, h: sheetH },
+      frameSize: { w: boxPx, h: boxPx },
+    },
+    frames,
+  };
+
+  return {
+    imageDataUrl: sheetCanvas.toDataURL('image/png'),
+    atlasJson: JSON.stringify(atlasPayload, null, 2),
+    cols,
+    rows,
+    width: sheetW,
+    height: sheetH,
+    frames,
+    clippedFrames,
+  };
+}
+

@@ -6,7 +6,18 @@ import {
   type PixelizerObjectAttachment,
 } from '../../engine/PixelizerPipeline';
 import {
+  buildProceduralUalCharacter,
+  type GeneratedCharacterResult,
+} from '../../engine/procedural/CharacterBuilder';
+import { type GeneratedPropResult } from '../../engine/procedural/PropBuilder';
+import {
+  buildProceduralStructure,
+  type GeneratedStructureResult,
+} from '../../engine/procedural/TilesetStructureSolver';
+import { AnimationLibraryBank } from '../../engine/rigging/AnimationLibraryBank';
+import {
   captureSingleFrameDataUrl,
+  exportNwlIsometricSheet,
   exportTurntableSpriteSheet,
   type SpriteSheetExportResult,
 } from '../../engine/SpriteSheetExporter';
@@ -17,6 +28,7 @@ import {
   exportVoxelGridToObj,
   exportVoxelGridToVox,
   voxelizeObject3D,
+  voxelizeObject3DRigged,
 } from '../../engine/Voxelizer';
 import type {
   AngleSnapMode,
@@ -40,6 +52,8 @@ import {
   type DemoPresetId,
   type SceneItemEntry,
 } from '../presets/demoScenes';
+import { mountAnimViewerPanel, type AnimViewerPanelHandle } from './animViewerPanel';
+import { mountGeneratorPanel } from './generatorPanel';
 import { ICONS } from './icons';
 import { mountPaletteEditorTab } from './paletteEditor';
 
@@ -151,6 +165,12 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
             <option value="relic_chest">Preset: Relic Chest &amp; Crystal</option>
             <option value="hybrid_diorama">Preset: Hybrid 3D + Pixel</option>
           </optgroup>
+          <optgroup label="UAL 65-Bone Autonomous (85 Anims)">
+            <option value="ual_knight">UAL: Knight (Skinned + Sword)</option>
+            <option value="ual_knight_rigid">UAL: NWL Rigid Knight (0 Skin)</option>
+            <option value="ual_zombie">UAL: Zombie (Voxel Rigged)</option>
+            <option value="ual_dungeon">WFC: Procedural Dungeon 4×4</option>
+          </optgroup>
           <optgroup label="Articulated 3D Characters (GLB)">
             <option value="char_knight">Char: RPG Knight (CC0 · 76 Clips)</option>
             <option value="char_robot">Char: Expressive Bot (MIT · 14 Clips)</option>
@@ -253,6 +273,8 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
           <button class="tab-btn is-active" data-tab="pipeline" type="button">Pipeline</button>
           <button class="tab-btn" data-tab="object" type="button">Object</button>
           <button class="tab-btn" data-tab="palette" type="button">Palette</button>
+          <button class="tab-btn" data-tab="anim" type="button">Anim/Rig</button>
+          <button class="tab-btn" data-tab="generate" type="button">Generate</button>
           <button class="tab-btn" data-tab="export" type="button">Export</button>
         </nav>
 
@@ -312,7 +334,7 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
                     <span>Camera Zoom / Ortho Height</span>
                     <span id="val-ortho-h" class="slider-val">5.8</span>
                   </div>
-                  <input id="rng-ortho-h" type="range" min="2.2" max="14.0" step="0.2" value="5.8" />
+                  <input id="rng-ortho-h" type="range" min="2.2" max="22.0" step="0.2" value="5.8" />
                 </div>
                 <div class="field-row">
                   <label class="field-label" for="sel-upscale">Upscale Filter</label>
@@ -605,8 +627,33 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
           <!-- TAB 3: PALETTE & DITHER -->
           <div class="tab-pane" data-pane="palette" id="pane-palette-host"></div>
 
-          <!-- TAB 4: EXPORT (SPRITES + 3D VOXEL MESH) -->
+          <!-- TAB 4: ANIMVIEWER & RIGGING -->
+          <div class="tab-pane" data-pane="anim" id="pane-anim-host"></div>
+
+          <!-- TAB 5: AUTONOMOUS GENERATORS -->
+          <div class="tab-pane" data-pane="generate" id="pane-generate-host"></div>
+
+          <!-- TAB 6: EXPORT (SPRITES + NWL + 3D VOXEL MESH) -->
           <div class="tab-pane" data-pane="export">
+            <div class="ctrl-section">
+              <div class="ctrl-section-head"><span>NWL 40px Isometric Sheet (8 Real Dirs)</span></div>
+              <div class="ctrl-section-body">
+                <div class="field-row">
+                  <span class="field-label">Target Height / Frames</span>
+                  <div class="field-control">
+                    <input id="num-nwl-h" class="input-ctrl" type="number" min="24" max="128" value="40" style="width:66px;height:26px;" title="Target Character Height (px)" />
+                    <input id="num-nwl-frames" class="input-ctrl" type="number" min="1" max="16" value="8" style="width:66px;height:26px;" title="Frames per direction" />
+                  </div>
+                </div>
+                <button id="btn-generate-nwl-sheet" class="btn btn-primary" type="button">
+                  <span>Export NWL 8-Dir Sheet (Zero Clipping)</span>
+                </button>
+                <div id="nwl-sheet-stats" class="voxel-stats-box">
+                  <span>8 Real Dirs (No flipX) · Binary Hard Alpha · ≥96px Safe Box</span>
+                </div>
+              </div>
+            </div>
+
             <div class="ctrl-section">
               <div class="ctrl-section-head"><span>3D Voxel Mesh Generator &amp; Export</span></div>
               <div class="ctrl-section-body">
@@ -817,6 +864,13 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
   setCameraPose(30, 45);
 
   const animCtrl = new SteppedAnimationController();
+  const overlayScene = new THREE.Scene();
+  let skeletonHelper: THREE.SkeletonHelper | null = null;
+  let skeletonOverlayEnabled = false;
+  let animViewerHandle: AnimViewerPanelHandle | null = null;
+  let nativeModelClips: THREE.AnimationClip[] = [];
+  let activeStructureRoot: THREE.Object3D | null = null;
+
   let activeStage: ActiveStage | null = null;
   let activeVoxel: ActiveVoxelPreview | null = null;
   let isVoxelMode = false;
@@ -849,6 +903,40 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
     selLightingRamp.appendChild(opt);
   }
   selLightingRamp.value = pipeline.activeRampId;
+
+  function syncSkeletonHelper(): void {
+    if (skeletonHelper) {
+      skeletonHelper.removeFromParent();
+      skeletonHelper.dispose();
+      skeletonHelper = null;
+    }
+    if (!skeletonOverlayEnabled || !activeStage) return;
+    let hasBone = false;
+    activeStage.subjectRoot.traverse((o) => {
+      if (o instanceof THREE.Bone) hasBone = true;
+    });
+    if (!hasBone) return;
+    skeletonHelper = new THREE.SkeletonHelper(activeStage.subjectRoot);
+    const mat = skeletonHelper.material as THREE.LineBasicMaterial;
+    mat.color.set('#45e6ff');
+    mat.depthTest = false;
+    mat.transparent = true;
+    mat.opacity = 0.92;
+    overlayScene.add(skeletonHelper);
+  }
+
+  function syncAnimClipSelector(clips: THREE.AnimationClip[], activeIdx: number): void {
+    if (clips.length > 0) {
+      selAnimClip.innerHTML = clips
+        .map((clip, i) => `<option value="${i}">${clip.name || `Clip ${i + 1}`}</option>`)
+        .join('');
+      selAnimClip.value = String(Math.max(0, Math.min(clips.length - 1, activeIdx)));
+      selAnimClip.style.display = 'inline-block';
+    } else {
+      selAnimClip.innerHTML = '';
+      selAnimClip.style.display = 'none';
+    }
+  }
 
   function syncConversionModeUi(): void {
     const mode = pipeline.pipelineConfig.filterMode;
@@ -935,6 +1023,43 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
     syncConversionModeUi();
   }
 
+  function applyStageCameraFraming(subjectRoot: THREE.Object3D, isLargeStructure: boolean): void {
+    const rngOrtho = rootElement.querySelector<HTMLInputElement>('#rng-ortho-h');
+    const valOrtho = rootElement.querySelector<HTMLElement>('#val-ortho-h');
+    if (isLargeStructure) {
+      subjectRoot.updateMatrixWorld(true);
+      const box = new THREE.Box3().setFromObject(subjectRoot);
+      const size = new THREE.Vector3();
+      const center = new THREE.Vector3();
+      box.getSize(size);
+      box.getCenter(center);
+      const nextH = Number(
+        Math.max(8.5, Math.min(20.0, Math.max(size.x, size.z) * 0.72 + size.y * 0.88)).toFixed(1)
+      );
+      pipeline.cameraConfig.orthoHeight = nextH;
+      if (rngOrtho) rngOrtho.value = String(nextH);
+      if (valOrtho) valOrtho.textContent = nextH.toFixed(1);
+      orbitTarget.set(center.x, Math.max(1.2, center.y * 0.78), center.z);
+      dirLight.shadow.camera.left = -12;
+      dirLight.shadow.camera.right = 12;
+      dirLight.shadow.camera.top = 12;
+      dirLight.shadow.camera.bottom = -12;
+      dirLight.shadow.camera.updateProjectionMatrix();
+      setCameraPose(30, 45, 22);
+    } else {
+      pipeline.cameraConfig.orthoHeight = 5.8;
+      if (rngOrtho) rngOrtho.value = '5.8';
+      if (valOrtho) valOrtho.textContent = '5.8';
+      orbitTarget.set(0, 1.0, 0);
+      dirLight.shadow.camera.left = -6;
+      dirLight.shadow.camera.right = 6;
+      dirLight.shadow.camera.top = 6;
+      dirLight.shadow.camera.bottom = -6;
+      dirLight.shadow.camera.updateProjectionMatrix();
+      setCameraPose(30, 45, 12);
+    }
+  }
+
   function applyStage(next: ActiveStage): void {
     isVoxelMode = false;
     disposeVoxelPreview();
@@ -944,6 +1069,7 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
     }
     activeStage = next;
     scene.add(next.sceneRoot);
+    applyStageCameraFraming(next.subjectRoot, activeStructureRoot === next.subjectRoot);
     captionTitle.textContent = next.name;
     captionDesc.textContent = next.description;
     voxelStatsEl.textContent = 'Grid Ready — click Preview or Export';
@@ -952,17 +1078,17 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
     renderSceneItemList();
     syncObjectInspector();
     syncConversionModeUi();
+    syncSkeletonHelper();
+    animViewerHandle?.refreshFromActiveStage();
   }
 
-  function mountLoadedModel(
-    loaded: LoadedModelResult,
-    titleOverride?: string,
-    descOverride?: string
-  ): void {
+  function buildStageWrapAndItems(
+    subjectRoot: THREE.Object3D,
+    fallbackName: string,
+    fallbackMats: PixelizerMaterial[],
+    floorRadius = 5.5
+  ): { wrapScene: THREE.Group; items: SceneItemEntry[] } {
     const wrapScene = new THREE.Group();
-    const items: SceneItemEntry[] = [];
-
-    // Subtle unpixelated showcase floor so cast shadows read crisply
     const floorMat = new PixelizerMaterial(
       {
         pixelated: false,
@@ -976,48 +1102,64 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
       pipeline.getSharedResourcesForMaterial()
     );
     const floorMesh = new THREE.Mesh(
-      new THREE.CylinderGeometry(4.5, 4.7, 0.2, 32),
+      new THREE.CylinderGeometry(floorRadius, floorRadius + 0.2, 0.2, 36),
       floorMat
     );
     floorMesh.position.set(0, -0.115, 0);
     floorMesh.receiveShadow = true;
-    wrapScene.add(floorMesh, loaded.root);
+    wrapScene.add(floorMesh, subjectRoot);
 
-    loaded.meshes.forEach((m, idx) => {
-      const mats = Array.isArray(m.material) ? m.material : [m.material];
-      const pixMats = mats.filter((x): x is PixelizerMaterial => x instanceof PixelizerMaterial);
-      if (pixMats.length > 0) {
-        items.push({
-          id: `mesh_${idx}`,
-          label: m.name || `Mesh Part #${idx + 1}`,
-          object: m,
-          materials: pixMats,
-          snapTarget: loaded.root,
-        });
+    const items: SceneItemEntry[] = [];
+    let meshIdx = 0;
+    subjectRoot.traverse((m) => {
+      if (m instanceof THREE.Mesh) {
+        const mats = Array.isArray(m.material) ? m.material : [m.material];
+        const pixMats = mats.filter((x): x is PixelizerMaterial => x instanceof PixelizerMaterial);
+        if (pixMats.length > 0) {
+          items.push({
+            id: `mesh_${meshIdx}`,
+            label: m.name || `Mesh Part #${meshIdx + 1}`,
+            object: m,
+            materials: pixMats,
+            snapTarget: subjectRoot,
+          });
+          meshIdx++;
+        }
       }
     });
 
     if (items.length === 0) {
       items.push({
         id: 'root',
-        label: loaded.name,
-        object: loaded.root,
-        materials: loaded.materials,
-        snapTarget: loaded.root,
+        label: fallbackName,
+        object: subjectRoot,
+        materials: fallbackMats,
+        snapTarget: subjectRoot,
       });
     }
+    return { wrapScene, items };
+  }
+
+  function mountLoadedModel(
+    loaded: LoadedModelResult,
+    titleOverride?: string,
+    descOverride?: string
+  ): void {
+    activeStructureRoot = null;
+    nativeModelClips = loaded.animations;
+    const { wrapScene, items } = buildStageWrapAndItems(
+      loaded.root,
+      loaded.name,
+      loaded.materials
+    );
 
     animCtrl.bindModel(loaded.root, loaded.animations);
     if (loaded.animations.length > 0) {
       const bestIdx = pickPreferredClipIndex(loaded.animations);
-      selAnimClip.innerHTML = loaded.animations
-        .map((clip, i) => `<option value="${i}">${clip.name || `Clip ${i + 1}`}</option>`)
-        .join('');
-      selAnimClip.value = String(bestIdx);
       animCtrl.playClip(bestIdx);
-      selAnimClip.style.display = 'inline-block';
+      syncAnimClipSelector(loaded.animations, bestIdx);
     } else {
-      selAnimClip.style.display = 'none';
+      syncAnimClipSelector([], 0);
     }
 
     applyStage({
@@ -1034,7 +1176,7 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
           loaded.root.rotation.y = t * 0.45;
         } else {
           loaded.root.position.x = 0;
-          if (loaded.animations.length === 0) {
+          if (animCtrl.getClips().length === 0) {
             loaded.root.rotation.y = t * 0.4;
           }
         }
@@ -1042,15 +1184,152 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
     });
   }
 
+  function bindUalClipsToSubject(subjectRoot: THREE.Object3D, preferredName = 'Idle_Loop'): void {
+    const bank = AnimationLibraryBank.getInstance();
+    const applyBankClips = () => {
+      if (activeStage?.subjectRoot !== subjectRoot) return;
+      const allClips = bank.getAll().map((x) => x.clip.clone());
+      if (allClips.length === 0) return;
+      nativeModelClips = allClips;
+      animCtrl.bindModel(subjectRoot, allClips);
+      let idx = allClips.findIndex((c) => c.name === preferredName);
+      if (idx < 0) idx = pickPreferredClipIndex(allClips);
+      animCtrl.playClip(idx);
+      syncAnimClipSelector(allClips, idx);
+      animViewerHandle?.refreshFromActiveStage();
+    };
+
+    if (bank.isLoaded()) {
+      applyBankClips();
+    } else {
+      void bank.ensureLoaded().then(applyBankClips);
+    }
+  }
+
+  function mountGeneratedCharacter(
+    res: GeneratedCharacterResult,
+    preferredClip = 'Sword_Regular_A'
+  ): void {
+    activeStructureRoot = null;
+    nativeModelClips = [];
+    const { wrapScene, items } = buildStageWrapAndItems(res.root, res.name, res.materials);
+    animCtrl.dispose();
+    syncAnimClipSelector([], 0);
+
+    applyStage({
+      name: `UAL ${res.archetype.toUpperCase()} (${res.rigMode === 'rigid_segments' ? 'NWL Rigid' : 'Skinned'})`,
+      description: `Canonical 65-bone Quaternius UAL Rig (${res.rig.profile}) · ${res.visualStyle} · Ready for 85 UAL clips & .GLB export.`,
+      subjectRoot: res.root,
+      sceneRoot: wrapScene,
+      items,
+      updateAnimation: (t, motionTest) => {
+        if (motionTest) {
+          res.root.position.x = Math.sin(t * 1.1) * 1.25;
+          res.root.rotation.y = t * 0.45;
+        } else {
+          res.root.position.x = 0;
+        }
+      },
+    });
+
+    const pref = res.archetype === 'zombie' ? 'Zombie_Walk_Fwd_Loop' : preferredClip;
+    bindUalClipsToSubject(res.root, pref);
+  }
+
+  function mountGeneratedProp(res: GeneratedPropResult): void {
+    activeStructureRoot = null;
+    nativeModelClips = [];
+    animCtrl.dispose();
+    syncAnimClipSelector([], 0);
+    const { wrapScene, items } = buildStageWrapAndItems(res.root, res.kind, res.materials);
+    applyStage({
+      name: `Prop: ${res.kind.toUpperCase()}`,
+      description: `Autonomous CC0-calibrated prop (${res.dimensions.map((d) => d.toFixed(2)).join('×')}m · socket: ${res.recommendedSocket}).`,
+      subjectRoot: res.root,
+      sceneRoot: wrapScene,
+      items,
+      updateAnimation: (t, motionTest) => {
+        res.root.rotation.y = t * 0.55;
+        res.root.position.x = motionTest ? Math.sin(t * 1.1) * 1.25 : 0;
+      },
+    });
+  }
+
+  function mountGeneratedStructure(res: GeneratedStructureResult): void {
+    activeStructureRoot = res.root;
+    nativeModelClips = [];
+    animCtrl.dispose();
+    syncAnimClipSelector([], 0);
+    const { wrapScene, items } = buildStageWrapAndItems(
+      res.root,
+      res.name,
+      res.materials,
+      Math.max(7.5, res.gridCols * 2.2)
+    );
+    applyStage({
+      name: `WFC Structure: ${res.biome.toUpperCase()} (${res.gridCols}×${res.gridRows})`,
+      description: `Connected architectural layout (${res.cells.length} rooms/corridors) distilled from KayKit CC0 structural grammar.`,
+      subjectRoot: res.root,
+      sceneRoot: wrapScene,
+      items,
+      updateAnimation: (t, motionTest) => {
+        if (motionTest) {
+          res.root.position.x = Math.sin(t * 0.8) * 1.1;
+        } else {
+          res.root.position.x = 0;
+        }
+      },
+    });
+  }
+
   function loadDemoPreset(presetId: DemoPresetId): void {
     loadRequestToken++;
+    activeStructureRoot = null;
+    nativeModelClips = [];
     animCtrl.dispose();
-    selAnimClip.style.display = 'none';
+    syncAnimClipSelector([], 0);
     const built: BuiltDemoScene = buildDemoScene(presetId, pipeline.getSharedResourcesForMaterial());
     applyStage(built);
   }
 
   async function loadPresetSelection(value: string): Promise<void> {
+    if (value === 'ual_knight') {
+      loadRequestToken++;
+      const res = buildProceduralUalCharacter(
+        { archetype: 'knight', rigMode: 'skinned_mesh', visualStyle: 'lowpoly', seed: 42 },
+        pipeline.getSharedResourcesForMaterial()
+      );
+      mountGeneratedCharacter(res, 'Sword_Regular_A');
+      return;
+    }
+    if (value === 'ual_knight_rigid') {
+      loadRequestToken++;
+      const res = buildProceduralUalCharacter(
+        { archetype: 'knight', rigMode: 'rigid_segments', visualStyle: 'lowpoly', seed: 108 },
+        pipeline.getSharedResourcesForMaterial()
+      );
+      mountGeneratedCharacter(res, 'Jog_Fwd_Loop');
+      return;
+    }
+    if (value === 'ual_zombie') {
+      loadRequestToken++;
+      const res = buildProceduralUalCharacter(
+        { archetype: 'zombie', rigMode: 'skinned_mesh', visualStyle: 'voxel', voxelResolution: 24, seed: 99 },
+        pipeline.getSharedResourcesForMaterial()
+      );
+      mountGeneratedCharacter(res, 'Zombie_Walk_Fwd_Loop');
+      return;
+    }
+    if (value === 'ual_dungeon') {
+      loadRequestToken++;
+      const struct = buildProceduralStructure(
+        { biome: 'dungeon', cols: 4, rows: 4, floors: 1, seed: 77 },
+        pipeline.getSharedResourcesForMaterial()
+      );
+      mountGeneratedStructure(struct);
+      return;
+    }
+
     const charDef = CHARACTER_PRESETS[value];
     if (!charDef) {
       loadDemoPreset(value as DemoPresetId);
@@ -1603,7 +1882,8 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
     animCtrl.config.fps = fps;
   });
   selAnimClip.addEventListener('change', () => {
-    animCtrl.playClip(Number(selAnimClip.value));
+    animCtrl.playClip(Number(selAnimClip.value), 0.18);
+    animViewerHandle?.refreshFromActiveStage();
     if (isVoxelMode) scheduleVoxelRebuild();
   });
 
@@ -1630,6 +1910,94 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
       .replace(/^_+|_+$/g, '');
     return raw || 'pixelizer_model';
   }
+
+  function refreshStageSceneItems(): void {
+    if (!activeStage) return;
+    const { items } = buildStageWrapAndItems(activeStage.subjectRoot, activeStage.name, []);
+    // Keep only non-floor meshes
+    activeStage.items.splice(0, activeStage.items.length, ...items);
+    renderSceneItemList();
+    syncObjectInspector();
+  }
+
+  // Mount AnimViewer & Generator Tabs (after downloadBlob/getExportSlug exist)
+  animViewerHandle = mountAnimViewerPanel(
+    rootElement.querySelector<HTMLElement>('#pane-anim-host')!,
+    {
+      getSubjectRoot: () => activeStage?.subjectRoot ?? null,
+      getNativeClips: () => nativeModelClips,
+      setModelClips: (clips, activeName) => {
+        if (!activeStage) return;
+        animCtrl.bindModel(activeStage.subjectRoot, clips);
+        let idx = activeName ? clips.findIndex((c) => c.name === activeName) : -1;
+        if (idx < 0) idx = pickPreferredClipIndex(clips);
+        animCtrl.playClip(idx);
+        syncAnimClipSelector(clips, idx);
+        animViewerHandle?.refreshFromActiveStage();
+      },
+      setActiveClipByIndex: (index, crossFadeSec = 0) => {
+        animCtrl.playClip(index, crossFadeSec);
+        selAnimClip.value = String(index);
+        if (isVoxelMode) scheduleVoxelRebuild();
+      },
+      getActiveClipName: () => animCtrl.getActiveClip()?.name ?? '',
+      getSkeletonOverlayEnabled: () => skeletonOverlayEnabled,
+      setSkeletonOverlayEnabled: (enabled) => {
+        skeletonOverlayEnabled = enabled;
+        syncSkeletonHelper();
+      },
+      onVoxelizeRiggedRequested: () => {
+        if (!activeStage) return;
+        const resolution = Number(rngVoxelRes.value) || 24;
+        const usePal = chkVoxelPal.checked;
+        const dither3d = chkVoxelDither.checked;
+        const voxRes = voxelizeObject3DRigged(
+          activeStage.subjectRoot,
+          {
+            resolution,
+            palette: usePal ? pipeline.getActivePaletteEntry().config : null,
+            dither3d,
+            fillSolidInterior: true,
+          },
+          pipeline.getSharedResourcesForMaterial()
+        );
+        const { wrapScene, items } = buildStageWrapAndItems(
+          voxRes.root,
+          'Voxelized UAL Rig',
+          [voxRes.material]
+        );
+        animCtrl.dispose();
+        applyStage({
+          name: `Voxel Rigged: ${activeStage.name}`,
+          description: `${voxRes.grid.dimensions.join('×')} (${voxRes.grid.voxels.length} voxels) auto-rigged onto 65-bone UAL Skeleton.`,
+          subjectRoot: voxRes.root,
+          sceneRoot: wrapScene,
+          items,
+          updateAnimation: (t, motionTest) => {
+            voxRes.root.position.x = motionTest ? Math.sin(t * 1.1) * 1.25 : 0;
+          },
+        });
+        bindUalClipsToSubject(voxRes.root, 'Idle_Loop');
+      },
+      getSharedMaterialResources: () => pipeline.getSharedResourcesForMaterial(),
+      onPropAttachedToSubject: () => {
+        refreshStageSceneItems();
+        syncSkeletonHelper();
+      },
+      getExportSlug,
+      downloadBlob,
+      animCtrl,
+    }
+  );
+
+  mountGeneratorPanel(rootElement.querySelector<HTMLElement>('#pane-generate-host')!, {
+    getSharedMaterialResources: () => pipeline.getSharedResourcesForMaterial(),
+    mountGeneratedCharacter: (res) => mountGeneratedCharacter(res, 'Sword_Regular_A'),
+    mountGeneratedProp,
+    mountGeneratedStructure,
+    getCurrentStructureRoot: () => activeStructureRoot,
+    downloadBlob,
+  });
 
   function acquireGridForExport(): { grid: VoxelGridResult; isTemp: boolean; res: number } | null {
     const res = Number(rngVoxelRes.value) || 32;
@@ -1732,6 +2100,48 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
   const sheetThumbImg = rootElement.querySelector<HTMLImageElement>('#sheet-thumb-img')!;
   const spriteAnimPreview = rootElement.querySelector<HTMLCanvasElement>('#sprite-anim-preview')!;
   const rngPreviewDir = rootElement.querySelector<HTMLInputElement>('#rng-preview-dir')!;
+  const nwlStatsEl = rootElement.querySelector<HTMLElement>('#nwl-sheet-stats')!;
+
+  function showSheetPreview(result: SpriteSheetExportResult, tile: number, label: string): void {
+    sheetResult = result;
+    sheetResultCard.style.display = 'block';
+    sheetResultMeta.textContent = label;
+    sheetThumbImg.src = result.imageDataUrl;
+    rngPreviewDir.max = String(Math.max(0, result.rows - 1));
+    rngPreviewDir.value = '0';
+    spriteAnimPreview.width = tile;
+    spriteAnimPreview.height = tile;
+
+    const img = new Image();
+    img.onload = () => {
+      sheetImgEl = img;
+    };
+    img.src = result.imageDataUrl;
+  }
+
+  rootElement.querySelector('#btn-generate-nwl-sheet')!.addEventListener('click', () => {
+    if (!activeStage) return;
+    const targetH = Number(rootElement.querySelector<HTMLInputElement>('#num-nwl-h')!.value) || 40;
+    const frames = Number(rootElement.querySelector<HTMLInputElement>('#num-nwl-frames')!.value) || 8;
+    const target = isVoxelMode && activeVoxel ? activeVoxel.group : activeStage.subjectRoot;
+
+    const res = withIsolatedSubject(() =>
+      exportNwlIsometricSheet(
+        pipeline,
+        scene,
+        target,
+        {
+          targetCharHeightPx: targetH,
+          framesPerDirection: frames,
+        },
+        !isVoxelMode && animCtrl.getClips().length > 0 ? animCtrl : undefined
+      )
+    );
+
+    const tile = res.frames[0]?.w ?? 96;
+    nwlStatsEl.textContent = `${res.width}×${res.height}px (${tile}×${tile} box, 8 non-mirrored dirs) · clippedFrames=${res.clippedFrames}`;
+    showSheetPreview(res, tile, `NWL ${targetH}px (${res.rows}×${res.cols} · clip=${res.clippedFrames})`);
+  });
 
   rootElement.querySelector('#btn-generate-sheet')!.addEventListener('click', () => {
     if (!activeStage) return;
@@ -1760,30 +2170,17 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
       )
     );
 
-    sheetResult = result;
-    sheetResultCard.style.display = 'block';
-    sheetResultMeta.textContent = `Sheet: ${result.width}×${result.height}px (${result.rows}×${result.cols})`;
-    sheetThumbImg.src = result.imageDataUrl;
-    rngPreviewDir.max = String(Math.max(0, result.rows - 1));
-    rngPreviewDir.value = '0';
-    spriteAnimPreview.width = tile;
-    spriteAnimPreview.height = tile;
-
-    const img = new Image();
-    img.onload = () => {
-      sheetImgEl = img;
-    };
-    img.src = result.imageDataUrl;
+    showSheetPreview(result, tile, `Sheet: ${result.width}×${result.height}px (${result.rows}×${result.cols})`);
   });
 
   rootElement.querySelector('#btn-dl-sheet-png')!.addEventListener('click', () => {
-    if (sheetResult) triggerDownload(sheetResult.imageDataUrl, 'pixelizer-spritesheet.png');
+    if (sheetResult) triggerDownload(sheetResult.imageDataUrl, `${getExportSlug()}_spritesheet.png`);
   });
   rootElement.querySelector('#btn-dl-sheet-json')!.addEventListener('click', () => {
     if (!sheetResult) return;
     const blob = new Blob([sheetResult.atlasJson], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
-    triggerDownload(url, 'pixelizer-atlas.json');
+    triggerDownload(url, `${getExportSlug()}_atlas.json`);
     URL.revokeObjectURL(url);
   });
 
@@ -1820,6 +2217,13 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
     controls.update();
 
     pipeline.render(scene, activeCamera);
+    if (skeletonOverlayEnabled && skeletonHelper) {
+      renderer.setRenderTarget(null);
+      renderer.autoClear = false;
+      renderer.clearDepth();
+      renderer.render(overlayScene, activeCamera);
+      renderer.autoClear = true;
+    }
 
     // Update Telemetry HUD
     const grid = pipeline.getLastGrid();
@@ -1865,6 +2269,10 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
   return () => {
     cancelAnimationFrame(rafId);
     if (voxelRebuildTimer) clearTimeout(voxelRebuildTimer);
+    if (skeletonHelper) {
+      skeletonHelper.removeFromParent();
+      skeletonHelper.dispose();
+    }
     disposeVoxelPreview();
     ro.disconnect();
     stageEl.removeEventListener('dragover', onDragOver);

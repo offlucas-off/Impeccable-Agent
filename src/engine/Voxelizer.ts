@@ -5,6 +5,12 @@ import {
   PixelizerMaterial,
   type PixelizerMaterialResources,
 } from './PixelizerMaterial';
+import { bindGeometryToUalSkeleton } from './rigging/AutoRigBinder';
+import {
+  createCanonicalUalRig,
+  type CanonicalUalRig,
+  type UalGenderProfile,
+} from './rigging/UalRigSpec';
 import type {
   PixelizerMaterialOptions,
   VoxelEntry,
@@ -33,6 +39,7 @@ const _cp = new THREE.Vector3();
 const _pointVec = new THREE.Vector3();
 const _triBox = new THREE.Box3();
 const _srgbHelper = new THREE.Color();
+const _vcolSrgb = new THREE.Color();
 
 function createTextureSampler(tex: THREE.Texture | null | undefined): TextureSampler | null {
   if (!tex || !tex.image || typeof document === 'undefined') return null;
@@ -378,9 +385,11 @@ export function voxelizeObject3D(
               const cr = vCols[vo + 0] * b0 + vCols[vo + 3] * b1 + vCols[vo + 6] * b2;
               const cg = vCols[vo + 1] * b0 + vCols[vo + 4] * b1 + vCols[vo + 7] * b2;
               const cb = vCols[vo + 2] * b0 + vCols[vo + 5] * b1 + vCols[vo + 8] * b2;
-              r = Math.round(r * cr);
-              g = Math.round(g * cg);
-              b = Math.round(b * cb);
+              _vcolSrgb.setRGB(cr, cg, cb, THREE.LinearSRGBColorSpace);
+              _vcolSrgb.getRGB(_vcolSrgb, THREE.SRGBColorSpace);
+              r = Math.round(r * Math.min(1, Math.max(0, _vcolSrgb.r)));
+              g = Math.round(g * Math.min(1, Math.max(0, _vcolSrgb.g)));
+              b = Math.round(b * Math.min(1, Math.max(0, _vcolSrgb.b)));
             }
 
             r = Math.min(255, r + emissiveAddSrgb[0]);
@@ -774,3 +783,151 @@ export function exportVoxelGridToVox(grid: VoxelGridResult): Uint8Array {
 
   return out;
 }
+
+export interface RiggedVoxelResult {
+  grid: VoxelGridResult;
+  rig: CanonicalUalRig;
+  skinnedMesh: THREE.SkinnedMesh;
+  material: PixelizerMaterial;
+  root: THREE.Group;
+}
+
+/**
+ * Finds the dominant bone for each voxel of an existing Object3D (supporting SkinnedMesh weights,
+ * rigid bone-parented meshes, or static geometry via canonical UAL capsule auto-rigging)
+ * and produces a live animated Voxel SkinnedMesh on the canonical 65-bone UAL Skeleton.
+ */
+export function voxelizeObject3DRigged(
+  root: THREE.Object3D,
+  options: VoxelizerOptions & {
+    profile?: UalGenderProfile;
+    targetUalRig?: CanonicalUalRig;
+  },
+  sharedResources?: PixelizerMaterialResources,
+  matOptions: Partial<PixelizerMaterialOptions> = {}
+): RiggedVoxelResult {
+  // Temporarily restore any source SkinnedMesh or Bone hierarchy to its bind/rest pose before sampling
+  const savedRotations: { obj: THREE.Object3D; q: THREE.Quaternion; p: THREE.Vector3 }[] = [];
+  root.traverse((obj) => {
+    if (obj instanceof THREE.SkinnedMesh && obj.skeleton) {
+      for (const b of obj.skeleton.bones) {
+        savedRotations.push({ obj: b, q: b.quaternion.clone(), p: b.position.clone() });
+      }
+      obj.skeleton.pose();
+    }
+  });
+  root.updateMatrixWorld(true);
+
+  const rig = options.targetUalRig ?? createCanonicalUalRig(options.profile ?? 'male', 1.0);
+  const boneIndexByName = new Map<string, number>();
+  rig.bones.forEach((b, idx) => boneIndexByName.set(b.name, idx));
+
+  // Extract rest-pose bone center hints if the source has rigid bone-parented meshes on UAL bone names
+  const boneWeightedSamplePoints: { worldPos: THREE.Vector3; boneIndex: number }[] = [];
+  root.traverse((obj) => {
+    if (obj instanceof THREE.Mesh && obj.parent instanceof THREE.Bone) {
+      const bIdx = boneIndexByName.get(obj.parent.name);
+      if (bIdx !== undefined) {
+        const center = new THREE.Vector3();
+        obj.geometry.computeBoundingBox();
+        if (obj.geometry.boundingBox) {
+          obj.geometry.boundingBox.getCenter(center);
+          obj.localToWorld(center);
+          boneWeightedSamplePoints.push({ worldPos: center, boneIndex: bIdx });
+        }
+      }
+    }
+  });
+
+  // Build static surface grid in Rest Pose
+  const grid = voxelizeObject3D(root, { ...options, preserveWorldScale: true });
+
+  // Restore source bone poses
+  for (const s of savedRotations) {
+    s.obj.quaternion.copy(s.q);
+    s.obj.position.copy(s.p);
+  }
+  root.updateMatrixWorld(true);
+
+  // Align voxel vertices cleanly onto the canonical UAL height (~1.83m) with feet at y = 0
+  const geo = grid.geometry;
+  geo.computeBoundingBox();
+  const rawBb = geo.boundingBox ? geo.boundingBox.clone() : null;
+  if (rawBb && !rawBb.isEmpty()) {
+    const h = rawBb.max.y - rawBb.min.y;
+    const targetH = rig.profile === 'female' ? 1.808 : 1.829;
+    const scaleFactor = h > 0.05 ? targetH / h : 1.0;
+    const cx = (rawBb.min.x + rawBb.max.x) * 0.5;
+    const cz = (rawBb.min.z + rawBb.max.z) * 0.5;
+    geo.translate(-cx, -rawBb.min.y, -cz);
+    if (Math.abs(scaleFactor - 1.0) > 1e-3) {
+      geo.scale(scaleFactor, scaleFactor, scaleFactor);
+    }
+    for (const sp of boneWeightedSamplePoints) {
+      sp.worldPos.x = (sp.worldPos.x - cx) * scaleFactor;
+      sp.worldPos.y = (sp.worldPos.y - rawBb.min.y) * scaleFactor;
+      sp.worldPos.z = (sp.worldPos.z - cz) * scaleFactor;
+    }
+    geo.computeBoundingBox();
+    geo.computeBoundingSphere();
+  }
+
+  let perVertexBoneIndices: Uint16Array | undefined;
+  if (boneWeightedSamplePoints.length >= 4 && rawBb) {
+    const posAttr = geo.getAttribute('position');
+    if (posAttr) {
+      perVertexBoneIndices = new Uint16Array(posAttr.count);
+      const vp = new THREE.Vector3();
+      for (let i = 0; i < posAttr.count; i++) {
+        vp.set(posAttr.getX(i), posAttr.getY(i), posAttr.getZ(i));
+        let bestIdx = boneWeightedSamplePoints[0].boneIndex;
+        let bestDist = Infinity;
+        for (const sp of boneWeightedSamplePoints) {
+          const d = vp.distanceToSquared(sp.worldPos);
+          if (d < bestDist) {
+            bestDist = d;
+            bestIdx = sp.boneIndex;
+          }
+        }
+        perVertexBoneIndices[i] = bestIdx;
+      }
+    }
+  }
+
+  const { mesh: skinnedMesh, material } = bindGeometryToUalSkeleton(
+    geo,
+    rig,
+    {
+      pixelated: true,
+      pixelSize: 1,
+      objectId: 10,
+      outlineColor: '#12101a',
+      outlineAlpha: 0.92,
+      edgeHighlight: 0.4,
+      edgeBevelWeight: 0.55,
+      useColorGrading: false,
+      diffuseVertexColorWeight: 1.0,
+      smoothness: 0.14,
+      ...matOptions,
+    },
+    sharedResources,
+    {
+      name: 'Voxelized_Rigged_Character',
+      smoothnessFalloff: 0.045,
+      perVertexBoneIndices,
+    }
+  );
+
+  const outRoot = new THREE.Group();
+  outRoot.name = 'Voxelized Rigged Root';
+  outRoot.add(rig.armature);
+
+  return {
+    grid,
+    rig,
+    skinnedMesh,
+    material,
+    root: outRoot,
+  };
+}
+

@@ -42,15 +42,25 @@ export class SteppedAnimationController {
     return this.activeClipIndex;
   }
 
-  public playClip(index: number): void {
+  public getActiveClip(): THREE.AnimationClip | null {
+    return this.clips[this.activeClipIndex] ?? null;
+  }
+
+  public playClip(index: number, crossFadeSeconds = 0): void {
     if (!this.mixer || index < 0 || index >= this.clips.length) return;
-    if (this.activeAction) {
-      this.activeAction.stop();
-    }
+    const prevAction = this.activeAction;
     this.activeClipIndex = index;
-    this.activeAction = this.mixer.clipAction(this.clips[index]);
-    this.activeAction.reset();
-    this.activeAction.play();
+    const nextAction = this.mixer.clipAction(this.clips[index]);
+    nextAction.reset();
+    nextAction.play();
+    if (prevAction && prevAction !== nextAction) {
+      if (crossFadeSeconds > 0.01) {
+        prevAction.crossFadeTo(nextAction, crossFadeSeconds, true);
+      } else {
+        prevAction.stop();
+      }
+    }
+    this.activeAction = nextAction;
     this.mixer.setTime(this.quantizedTime);
   }
 
