@@ -80,7 +80,10 @@ function createCheckerFloorTexture(): THREE.CanvasTexture {
 
 let cachedFloorTex: THREE.CanvasTexture | null = null;
 function getFloorTex(): THREE.CanvasTexture {
-  if (!cachedFloorTex) cachedFloorTex = createCheckerFloorTexture();
+  if (!cachedFloorTex) {
+    cachedFloorTex = createCheckerFloorTexture();
+    cachedFloorTex.userData = { ...cachedFloorTex.userData, pooled: true };
+  }
   return cachedFloorTex;
 }
 

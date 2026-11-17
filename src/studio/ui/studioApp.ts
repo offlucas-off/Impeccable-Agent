@@ -26,6 +26,7 @@ import {
   type PlayerCharacterInstance,
   type PlayerClassId,
 } from '../../engine/procedural/PlayerEquipmentBuilder';
+import { type UnwrapMetricsSummary } from '../../engine/procedural/PixelMaterialSynth';
 import { type GeneratedPropResult } from '../../engine/procedural/PropBuilder';
 import {
   buildSpellVfxShowcase,
@@ -78,7 +79,7 @@ import {
   type SceneItemEntry,
 } from '../presets/demoScenes';
 import { mountAnimViewerPanel, type AnimViewerPanelHandle } from './animViewerPanel';
-import { mountGeneratorPanel } from './generatorPanel';
+import { mountGeneratorPanel, type GeneratorPanelHandle } from './generatorPanel';
 import { ICONS } from './icons';
 import { mountPaletteEditorTab } from './paletteEditor';
 
@@ -136,11 +137,33 @@ const CHARACTER_PRESETS: Record<string, CharacterPresetDef> = {
 };
 
 function disposeGroupResources(root: THREE.Object3D): void {
+  const seenTex = new Set<THREE.Texture>();
+  const seenMat = new Set<THREE.Material>();
   root.traverse((obj) => {
     if (obj instanceof THREE.Mesh) {
       obj.geometry?.dispose();
       const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
-      for (const m of mats) m?.dispose();
+      for (const m of mats) {
+        if (!m || seenMat.has(m)) continue;
+        seenMat.add(m);
+        if (m instanceof PixelizerMaterial) {
+          const o = m.options;
+          for (const t of [o.albedoMap, o.normalMap, o.emissionMap]) {
+            if (t && t.userData?.pooled !== true && !seenTex.has(t)) {
+              seenTex.add(t);
+              t.dispose();
+            }
+          }
+        } else if (m instanceof THREE.MeshStandardMaterial) {
+          for (const t of [m.map, m.normalMap, m.emissiveMap]) {
+            if (t && t.userData?.pooled !== true && !seenTex.has(t)) {
+              seenTex.add(t);
+              t.dispose();
+            }
+          }
+        }
+        m.dispose();
+      }
     }
   });
 }
@@ -910,6 +933,8 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
   let skeletonHelper: THREE.SkeletonHelper | null = null;
   let skeletonOverlayEnabled = false;
   let animViewerHandle: AnimViewerPanelHandle | null = null;
+  let generatorHandle: GeneratorPanelHandle | null = null;
+  let lastStageOrigin: 'preset' | 'generator' = 'preset';
   let nativeModelClips: THREE.AnimationClip[] = [];
   let activeStructureRoot: THREE.Object3D | null = null;
   let activePlayerInstance: PlayerCharacterInstance | null = null;
@@ -1142,6 +1167,7 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
 
     activeSandbox = createNwlPlaySandbox(stageEl, pipeline, {
       onExitSandbox: () => exitPlaySandbox(true),
+      finishOptions: generatorHandle?.getFinishOptions(),
       onZoneOrActorChanged: () => {
         if (!activeSandbox) return;
         const target = activeSandbox.getCameraTarget();
@@ -1193,6 +1219,9 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
     captionTitle.textContent = next.name;
     captionDesc.textContent = next.description;
     voxelStatsEl.textContent = 'Grid Ready — click Preview or Export';
+    generatorHandle?.updateQualityStats(
+      (next.subjectRoot.userData?.unwrapMetrics as UnwrapMetricsSummary | undefined) ?? null
+    );
     selectedItemId =
       next.items.find((i) => i.materials[0]?.options.pixelated)?.id ?? next.items[0]?.id ?? '';
     renderSceneItemList();
@@ -1389,6 +1418,7 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
         }
         npc.root.position.x = motionTest ? Math.sin(t * 1.1) * 1.25 : 0;
       },
+      onCleanup: () => npc.dispose?.(),
     });
     if (npc.rig) bindUalClipsToSubject(npc.root, 'Idle_Loop');
   }
@@ -1415,6 +1445,7 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
       updateAnimation: (t, motionTest) => {
         monster.root.position.x = motionTest ? Math.sin(t * 1.1) * 1.25 : 0;
       },
+      onCleanup: () => monster.dispose?.(),
     });
     bindUalClipsToSubject(monster.root, 'Sword_Regular_A');
   }
@@ -1504,6 +1535,7 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
           res.root.position.x = 0;
         }
       },
+      onCleanup: () => res.dispose?.(),
     });
 
     const pref = res.archetype === 'zombie' ? 'Zombie_Walk_Fwd_Loop' : preferredClip;
@@ -1526,6 +1558,7 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
         res.root.rotation.y = t * 0.55;
         res.root.position.x = motionTest ? Math.sin(t * 1.1) * 1.25 : 0;
       },
+      onCleanup: () => res.dispose?.(),
     });
   }
 
@@ -1553,6 +1586,7 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
           res.root.position.x = 0;
         }
       },
+      onCleanup: () => res.dispose?.(),
     });
   }
 
@@ -1567,6 +1601,9 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
   }
 
   async function loadPresetSelection(value: string): Promise<void> {
+    lastStageOrigin = 'preset';
+    const finish = generatorHandle?.getFinishOptions();
+
     if (value === 'nwl_knight' || value === 'nwl_archer' || value === 'nwl_mage') {
       loadRequestToken++;
       const classMap: Record<string, PlayerClassId> = {
@@ -1576,7 +1613,15 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
       };
       const cls = classMap[value];
       const player = buildNwlPlayerCharacter(
-        { classId: cls, rarity: 'normal', pixelSize: 3 },
+        {
+          classId: cls,
+          rarity: 'normal',
+          pixelSize: 3,
+          finishMode: finish?.finishMode,
+          materialSeed: finish?.seed,
+          aoStrength: finish?.aoStrength,
+          normalStrength: finish?.normalStrength,
+        },
         pipeline.getSharedResourcesForMaterial()
       );
       mountNwlPlayer(player);
@@ -1584,7 +1629,17 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
     }
     if (value === 'nwl_starter_city') {
       loadRequestToken++;
-      const city = buildNwlStarterCity(pipeline.getSharedResourcesForMaterial());
+      const city = buildNwlStarterCity(
+        pipeline.getSharedResourcesForMaterial(),
+        finish
+          ? {
+              finishMode: finish.finishMode,
+              seed: finish.seed,
+              aoStrength: finish.aoStrength,
+              normalStrength: finish.normalStrength,
+            }
+          : undefined
+      );
       const bank = AnimationLibraryBank.getInstance();
       const npcMixers: THREE.AnimationMixer[] = [];
       const attachNpcIdles = () => {
@@ -1626,7 +1681,17 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
       const actors: GeneratedMonsterResult[] = [];
       const xs = [-5.4, -3.5, -1.7, 0.2, 2.5, 5.4];
       NWL_MONSTER_IDS.forEach((id, i) => {
-        const m = buildNwlMonster(id, { pixelSize: 3 }, pipeline.getSharedResourcesForMaterial());
+        const m = buildNwlMonster(
+          id,
+          {
+            pixelSize: 3,
+            finishMode: finish?.finishMode,
+            seed: finish ? finish.seed + i * 17 : undefined,
+            aoStrength: finish?.aoStrength,
+            normalStrength: finish?.normalStrength,
+          },
+          pipeline.getSharedResourcesForMaterial()
+        );
         m.root.position.set(xs[i], 0, 0);
         group.add(m.root);
         actors.push(m);
@@ -1658,12 +1723,24 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
           prevT = t;
           for (const mx of mixers) mx.update(dt);
         },
+        onCleanup: () => actors.forEach((a) => a.dispose?.()),
       });
       return;
     }
     if (value === 'nwl_dungeon_floor1') {
       loadRequestToken++;
-      const dung = buildGreenRuinsFloor1(101, pipeline.getSharedResourcesForMaterial());
+      const dung = buildGreenRuinsFloor1(
+        finish?.seed ?? 101,
+        pipeline.getSharedResourcesForMaterial(),
+        finish
+          ? {
+              finishMode: finish.finishMode,
+              seed: finish.seed,
+              aoStrength: finish.aoStrength,
+              normalStrength: finish.normalStrength,
+            }
+          : undefined
+      );
       mountNwlCustomScene({
         name: dung.name,
         description: `${dung.rooms.length} salas conectadas (1.5m/tile) · 5 Inimigos + Boss Demônio + Armadilhas + Destrutíveis.`,
@@ -1677,7 +1754,18 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
     }
     if (value === 'nwl_tileset_ruins') {
       loadRequestToken++;
-      const cat = buildNwlTilesetCatalog('green_ruins', pipeline.getSharedResourcesForMaterial());
+      const cat = buildNwlTilesetCatalog(
+        'green_ruins',
+        pipeline.getSharedResourcesForMaterial(),
+        finish
+          ? {
+              finishMode: finish.finishMode,
+              seed: finish.seed,
+              aoStrength: finish.aoStrength,
+              normalStrength: finish.normalStrength,
+            }
+          : undefined
+      );
       mountNwlCustomScene({
         name: cat.name,
         description: `${cat.pieceCount} peças modulares 1.5m (chão, paredes 3m, flora, altar, baú, armadilha, destrutíveis).`,
@@ -1703,10 +1791,21 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
       return;
     }
 
+    const seedOrDefault = (def: number) =>
+      finish && finish.seed !== 101 ? finish.seed : def;
+
     if (value === 'ual_knight') {
       loadRequestToken++;
       const res = buildProceduralUalCharacter(
-        { archetype: 'knight', rigMode: 'skinned_mesh', visualStyle: 'lowpoly', seed: 42 },
+        {
+          archetype: 'knight',
+          rigMode: 'skinned_mesh',
+          visualStyle: 'lowpoly',
+          seed: seedOrDefault(42),
+          finishMode: finish?.finishMode,
+          aoStrength: finish?.aoStrength,
+          normalStrength: finish?.normalStrength,
+        },
         pipeline.getSharedResourcesForMaterial()
       );
       mountGeneratedCharacter(res, 'Sword_Regular_A');
@@ -1715,7 +1814,15 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
     if (value === 'ual_knight_rigid') {
       loadRequestToken++;
       const res = buildProceduralUalCharacter(
-        { archetype: 'knight', rigMode: 'rigid_segments', visualStyle: 'lowpoly', seed: 108 },
+        {
+          archetype: 'knight',
+          rigMode: 'rigid_segments',
+          visualStyle: 'lowpoly',
+          seed: seedOrDefault(108),
+          finishMode: finish?.finishMode,
+          aoStrength: finish?.aoStrength,
+          normalStrength: finish?.normalStrength,
+        },
         pipeline.getSharedResourcesForMaterial()
       );
       mountGeneratedCharacter(res, 'Jog_Fwd_Loop');
@@ -1724,7 +1831,16 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
     if (value === 'ual_zombie') {
       loadRequestToken++;
       const res = buildProceduralUalCharacter(
-        { archetype: 'zombie', rigMode: 'skinned_mesh', visualStyle: 'voxel', voxelResolution: 24, seed: 99 },
+        {
+          archetype: 'zombie',
+          rigMode: 'skinned_mesh',
+          visualStyle: 'voxel',
+          voxelResolution: 24,
+          seed: seedOrDefault(99),
+          finishMode: finish?.finishMode,
+          aoStrength: finish?.aoStrength,
+          normalStrength: finish?.normalStrength,
+        },
         pipeline.getSharedResourcesForMaterial()
       );
       mountGeneratedCharacter(res, 'Zombie_Walk_Fwd_Loop');
@@ -1733,7 +1849,16 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
     if (value === 'ual_dungeon') {
       loadRequestToken++;
       const struct = buildProceduralStructure(
-        { biome: 'dungeon', cols: 4, rows: 4, floors: 1, seed: 77 },
+        {
+          biome: 'dungeon',
+          cols: 4,
+          rows: 4,
+          floors: 1,
+          seed: seedOrDefault(77),
+          finishMode: finish?.finishMode,
+          aoStrength: finish?.aoStrength,
+          normalStrength: finish?.normalStrength,
+        },
         pipeline.getSharedResourcesForMaterial()
       );
       mountGeneratedStructure(struct);
@@ -1887,9 +2012,16 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
     valObjAlpha.textContent = o.alpha.toFixed(2);
     chkObjGrading.checked = o.useColorGrading;
 
-    texAlbedoName.textContent = o.albedoMap ? 'Albedo: Custom Map' : 'Albedo: None';
-    texNormalName.textContent = o.normalMap ? 'Normal: Custom Map' : 'Normal: None';
-    texEmitName.textContent = o.emissionMap ? 'Emission: Custom Map' : 'Emission: None';
+    const formatTexBadge = (label: string, tex: THREE.Texture | null | undefined): string => {
+      if (!tex) return `${label}: None`;
+      if (tex instanceof THREE.DataTexture && tex.image?.width > 1) {
+        return `${label}: ${tex.image.width}×${tex.image.height}`;
+      }
+      return `${label}: Custom Map`;
+    };
+    texAlbedoName.textContent = formatTexBadge('Albedo', o.albedoMap);
+    texNormalName.textContent = formatTexBadge('Normal', o.normalMap);
+    texEmitName.textContent = formatTexBadge('Emission', o.emissionMap);
 
     const attach = item.snapTarget.userData.pixelizer as PixelizerObjectAttachment | undefined;
     if (attach) {
@@ -2421,19 +2553,57 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
     }
   );
 
-  mountGeneratorPanel(rootElement.querySelector<HTMLElement>('#pane-generate-host')!, {
+  generatorHandle = mountGeneratorPanel(rootElement.querySelector<HTMLElement>('#pane-generate-host')!, {
     getSharedMaterialResources: () => pipeline.getSharedResourcesForMaterial(),
-    mountGeneratedCharacter: (res) => mountGeneratedCharacter(res, 'Sword_Regular_A'),
-    mountGeneratedProp,
-    mountGeneratedStructure,
-    mountNwlPlayer: (res) => mountNwlPlayer(res),
-    mountNwlNpc,
-    mountNwlMonster,
-    mountNwlCustomScene,
-    mountNwlSpellVfx,
+    mountGeneratedCharacter: (res) => {
+      lastStageOrigin = 'generator';
+      mountGeneratedCharacter(res, 'Sword_Regular_A');
+    },
+    mountGeneratedProp: (res) => {
+      lastStageOrigin = 'generator';
+      mountGeneratedProp(res);
+    },
+    mountGeneratedStructure: (res) => {
+      lastStageOrigin = 'generator';
+      mountGeneratedStructure(res);
+    },
+    mountNwlPlayer: (res) => {
+      lastStageOrigin = 'generator';
+      mountNwlPlayer(res);
+    },
+    mountNwlNpc: (res) => {
+      lastStageOrigin = 'generator';
+      mountNwlNpc(res);
+    },
+    mountNwlMonster: (res) => {
+      lastStageOrigin = 'generator';
+      mountNwlMonster(res);
+    },
+    mountNwlCustomScene: (opts) => {
+      lastStageOrigin = 'generator';
+      mountNwlCustomScene(opts);
+    },
+    mountNwlSpellVfx: (res) => {
+      lastStageOrigin = 'generator';
+      mountNwlSpellVfx(res);
+    },
     getCurrentPlayerInstance: () => activePlayerInstance,
     getCurrentStructureRoot: () => activeStructureRoot,
     downloadBlob,
+    onFinishOptionsChanged: () => {
+      if (activeSandbox) {
+        const curZone = activeSandbox.getState().zone;
+        exitPlaySandbox(false);
+        enterPlaySandbox();
+        const restored = activeSandbox as PlaySandboxHandle | null;
+        if (curZone === 'dungeon') restored?.enterZone('dungeon');
+        return;
+      }
+      if (lastStageOrigin === 'generator' && generatorHandle?.rebuildLastGenerated()) {
+        return;
+      }
+      void loadPresetSelection(selDemo.value || 'nwl_knight');
+    },
   });
 
   function acquireGridForExport(): { grid: VoxelGridResult; isTemp: boolean; res: number } | null {

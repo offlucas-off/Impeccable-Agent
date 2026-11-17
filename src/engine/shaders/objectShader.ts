@@ -46,8 +46,13 @@ void main() {
       transformedTangent = instMat3 * transformedTangent;
     #endif
     transformedTangent = normalMatrix * transformedTangent;
-    vTangentView = normalize(transformedTangent);
-    vBitangentView = normalize(cross(vNormalView, vTangentView) * tangent.w);
+    transformedTangent = transformedTangent - vNormalView * dot(transformedTangent, vNormalView);
+    float tLen = length(transformedTangent);
+    vTangentView = (tLen > 1e-6) ? (transformedTangent / tLen) : vec3(1.0, 0.0, 0.0);
+    float tSign = (abs(tangent.w) > 0.5) ? sign(tangent.w) : 1.0;
+    vec3 rawBitangent = cross(vNormalView, vTangentView) * tSign;
+    float bLen = length(rawBitangent);
+    vBitangentView = (bLen > 1e-6) ? (rawBitangent / bLen) : vec3(0.0, 1.0, 0.0);
   #else
     vTangentView = vec3(1.0, 0.0, 0.0);
     vBitangentView = vec3(0.0, 1.0, 0.0);
@@ -165,6 +170,13 @@ vec3 samplePaletteDualLut(vec3 srgbColor, vec2 ditherCoord) {
 }
 
 void main() {
+  #ifndef USE_TANGENT
+    vec3 dPosDx = dFdx(-vViewPos);
+    vec3 dPosDy = dFdy(-vViewPos);
+    vec2 dUvDx = dFdx(vUv);
+    vec2 dUvDy = dFdy(vUv);
+  #endif
+
   vec2 fragPx = floor(gl_FragCoord.xy);
   float P = max(1.0, floor(uPixelSize + 0.5));
   bool expansionActive = (uPixelated > 0.5) && (uUsePixelExpansion > 0.5) && (P > 1.0);
@@ -202,15 +214,32 @@ void main() {
   vec3 vertexTint = mix(vec3(1.0), vVertexColor.rgb, uDiffuseVertexColorWeight);
   vec3 albedoLinear = albedoSample.rgb * uBaseColorLinear * vertexTint;
 
-  // Normal calculation (with optional tangent-space normal map)
-  vec3 N = normalize(vNormalView);
+  // Normal calculation (with tangent-space normal map via vertex tangents or dFdx/dFdy cotangent frame)
+  float faceDirection = gl_FrontFacing ? 1.0 : -1.0;
+  vec3 N = normalize(vNormalView) * faceDirection;
   if (uHasNormalMap > 0.5) {
     vec3 mapN = texture(uNormalMap, vUv).xyz * 2.0 - 1.0;
     mapN.xy *= uNormalScale;
-    mat3 tbn = mat3(normalize(vTangentView), normalize(vBitangentView), N);
-    N = normalize(tbn * mapN);
+    #ifdef USE_TANGENT
+      vec3 tDir = normalize(vTangentView) * faceDirection;
+      vec3 bDir = normalize(vBitangentView) * faceDirection;
+      mat3 tbn = mat3(tDir, bDir, N);
+      N = normalize(tbn * mapN);
+    #else
+      vec3 q1perp = cross(dPosDy, N);
+      vec3 q0perp = cross(N, dPosDx);
+      vec3 T = q1perp * dUvDx.x + q0perp * dUvDy.x;
+      vec3 B = q1perp * dUvDx.y + q0perp * dUvDy.y;
+      float det = max(dot(T, T), dot(B, B));
+      if (det > 1e-10) {
+        float invMax = inversesqrt(det);
+        T = T * invMax * faceDirection;
+        B = B * invMax * faceDirection;
+        mat3 tbn = mat3(T, B, N);
+        N = normalize(tbn * mapN);
+      }
+    #endif
   }
-  if (!gl_FrontFacing) N = -N;
 
   vec3 V = (uIsOrthographic > 0.5) ? vec3(0.0, 0.0, 1.0) : normalize(vViewPos);
   float shadowMask = getShadowMask();

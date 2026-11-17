@@ -1,79 +1,58 @@
-# 65-Bone UAL Rigging & Procedural Content Generation
+# 65-Bone UAL Rigging, Sculpted Geometry, Auto-UV & Procedural Generation
 
-Reference for extending rigged characters, modular equipment, NPCs, enterable structures, monsters, `1.5 m` tilesets, dungeons, and 3D spell VFX.
-
----
-
-## 1. Canonical 65-Bone UAL Rig (`src/engine/rigging/`)
-
-- `UalRigSpec.ts` loads `src/data/ualSkeletonSpec.json` (65 bones: 17 structural + 48 fingers) and provides:
-  - `createCanonicalUalRig(profile: 'male' | 'female', scale?: number)`
-  - Bone names: `pelvis`, `spine_01`, `spine_02`, `spine_03`, `neck_01`, `Head`, `clavicle_l/r`, `upperarm_l/r`, `lowerarm_l/r`, `hand_l/r`, `thigh_l/r`, `calf_l/r`, `foot_l/r`, `ball_l/r`.
-  - Sockets: `hand_r`, `hand_l`, `head`, `back`.
-- `AnimationLibraryBank.ts` loads `./animations/ual_master_library.glb` (85 Quaternius clips):
-  - `await bank.ensureLoaded()` once; then `bank.getClip(name)` returns `THREE.AnimationClip | null`.
-  - Use `UalRetargeter.retargetUalClipsToModel(root, clips)` when importing non-UAL Mixamo/KayKit/Blender rigs.
-
-### Limb & Attachment Coordinate Rules
-
-1. **Bone Local `+Y` Convention**: `makeBoneSegmentBox(length, ...)` starts at `y = 0` (the joint pivot) and extends to `y = length`.
-2. **Shoulder Pauldrons / Spikes**: Arms hang downward in rest pose, meaning `+Y` points toward the elbow while `y ≈ 0` is at the shoulder socket and slight negative `y` points upward/outward in world space. Keep pauldrons/ridges centered at `y ≈ -0.02..+0.03` on `upperarm_l/r` so armor stays seated on the shoulder!
-3. **Vertex Colors Required**: When merging parts via `prepareColoredPart` + `mergeColoredParts`, always set `mat.vertexColors = true` on `PixelizerMaterial`.
+Reference for extending sculpted procedural assets, texel-locked auto-UV unwrapping, procedural pixel textures, Vertex/Texel AO baking, modular gear, NPCs, enterable cities, monsters, `1.5 m` tilesets, dungeons, and 3D spell VFX.
 
 ---
 
-## 2. Adding Player Classes, Slots, or Rarities (`PlayerEquipmentBuilder.ts`)
+## 1. Advanced Procedural Modeling, Auto-UV & Texture Pipeline (Phases 0–4)
 
-`PlayerBaseShell` (`1.79 m` standardized inner body) exposes:
-- `PLAYER_CLASSES`: `'knight' | 'archer' | 'mage'`
-- `EQUIP_SLOTS`: `'helmet' | 'chest' | 'legs' | 'boots' | 'gloves' | 'weapon'`
-- `ITEM_RARITIES`: `'normal' | 'common' | 'rare' | 'epic' | 'legendary'`
-- `RARITY_COLOR_TABLE`: maps each rarity to distinct SNES palette hexes (`primary`, `secondary`, `trim`, `glow`).
+Every major procedural builder routes through the 4-stage pipeline and honors `FinishMode = 'textured_ao' | 'classic_flat'`:
 
-To add a new equipment piece or class:
-1. Add class ID to `PlayerClassId` & `PLAYER_CLASSES` (and label/spells in `generatorPanel.ts` & `NwlPlaySandbox.ts`).
-2. Add geometry builders in `buildSlotAttachments(rig, classId, slot, rarity)` returning `RigidPartSpec[]` attached directly to UAL bones (`Head`, `spine_02`, `pelvis`/`thigh_l/r`, `calf_l/r`/`foot_l/r`, `lowerarm_l/r`/`hand_l/r`, `hand_r`/`hand_l`).
-3. Ensure `mountSlot` sets `mesh.userData.equipSlot = slot`, `mesh.userData.equipRarity = rarity`, `mat.vertexColors = true`, and `gridReference: rig.armature`.
-4. Maintain zero cloth simulation capes so silhouettes match clean modular swapping.
+### Stage A: Sculpted Watertight Primitives (`src/engine/procedural/ProceduralGeometryKit.ts`)
+Eliminate boxy flat cuboids (`detectFlatDetailCuboids` enforces zero `1x1` flat detail boxes >= 2% triangles):
+- **`makeBeveledBox(w, h, d, bevel, segs?)`**: Chamfered plates/beams with clean bevel catchlights.
+- **`makeBeveledBoneSegmentBox(len, w, d, bevel?)`**: Limb-aligned beveled armor/limb segments (`y = 0 .. len`).
+- **`makeLatheProfile(points, radialSegs?)`**: Turned pottery, potion flasks, crowns, staff orbs, fountain basins, and wooden barrels.
+- **`makeCurvedHornGeometry(...)` & `makePauldronShellGeometry(...)`**: Curved Boss/monster horns anchored safely inside skull sockets and cupped shoulder pauldrons.
+- **`makeSwordBladeGeometry(...)`, `makeAxeHeadGeometry(...)`, `makeDomeShieldGeometry(...)`, `makeRecurveBowGeometry(...)`**: Tapered multi-plane blades, crescent axes, bossed shields, and curved bow limbs.
+- **`makePitchedRoofGeometry(...)`**: True overhanging gable/hip roofs with ridge caps (`CityBuilder`).
+- **`makeSdfOrganicMesh(...)` + `sdSphere`, `sdEllipsoid`, `sdCapsule`, `sdRoundedBox`, `sminPoly`, `sdfHashNoise3D`**: Organic marching/isosurface creature torsos, boulders, tree canopies, and rock formations.
+- Tag parts with `tagPart(geo, partTag, materialKind, baseHex, { accentHex, projection, lockVertical, landmarkKind, islandScaleBias })`.
 
----
+### Stage B: Pixel-Aligned Auto-UV (`src/engine/procedural/PixelUvUnwrapper.ts`)
+- `unwrapPixelAligned(parts, options)` extracts planar `box6` / `cylindrical_y` / `planar` charts (respecting `lockVertical` so brick/planks stay upright) and packs integer texel rectangles at calibrated `texelsPerMeter` (`32` for props/architecture, `64` for `1.79m` heroes/weapons/monsters) with zero island overlap (`paddingPx: 3`).
+- Always keeps `vertexColorMode: 'white_for_ao'` (default) so `vertexColors` only carries grayscale AO weighting while `albedoMap` carries the full color pigment.
+- Run `inspectGeometryUvs(...)` and `detectFlatDetailCuboids(...)` to catch collapsed UVs, out-of-tile coords, density outliers, or un-beveled detail cuboids.
 
-## 3. Adding NPCs & Enterable 3-Part Houses (`NpcBuilder.ts`, `CityBuilder.ts`)
+### Stage C: Procedural Pixel-Art Texture Synthesis (`src/engine/procedural/PixelMaterialSynth.ts`)
+- 20 curated `MaterialRecipeId` generators (`stone_masonry`, `mossy_cobble`, `wood_planks`, `timber_frame`, `plaster_wall`, `roof_shingle`, `forged_steel`, `brushed_gold`, `rarity_armor`, `stitched_leather`, `woven_cloth`, `human_skin`, `goblin_skin`, `orc_hide`, `demon_hide`, `runic_glow`, `magma_obsidian`, `bone_ivory`, `foliage_leaf`, `water_pool`) plus semantic landmarks (`head_front` crisp eyes/brows/mouth, `chest_crest`, `shield_face`, `door_front` iron straps/brass ring, `rune_panel`).
+- Tiles/bricks/shingles use `>= 5-8 px` coarse macro-clusters so `3×3` point sampling in `Attempt #3` never spatial-aliases into confetti.
+- Heightfield Sobel gradients generate subtle normal maps (`<= 0.24` slope) dilated smoothly across gutters via 2-pass Felzenszwalb EDT (`dilateAtlasByEdt`).
+- Shared dungeon/city sheets use `synthesizeModularTilesetSheet` / `synthesizeStructureBiomeSheet` + `mapGeometryToSheetSlot` + `acquirePooledMaterialTextures` (LRU pool capped at `96` bundles; cleared safely via `clearPooledMaterialTextures()`).
+- **One-call Unified Baker**: Use `bakeTaggedPartsAsset(parts, options)` + `createPixelizerMaterialFromBaked(baked, overrides, sharedResources)`. Supports instant toggle `finishMode: 'classic_flat'`.
 
-- **NPCs (`buildNwlNpc`)**: Extend `NwlNpcId` and `NWL_NPC_PROFILES`. Humanoid NPCs target `~1.70 m` (`scale = 1.70 / 1.79`) with a distinct silhouette prop (`hammer`, `tome`, `halberd`, etc.) and headgear. `npc.bau` uses a hinged `lidPivot` animated via `setChestOpen(open)`.
-- **3-Part Enterable Houses (`CityBuilder.ts`)**:
-  - `baseGroup`: floor, interior props (anvil, counter, bookshelves, chests), lower doorway walls.
-  - `capaGroup`: upper walls + colored gable/hip roof (`setInteriorOpen(true)` hides `capaGroup.visible = false` when the hero approaches/enters!).
-  - `portaPivot`: hinged door swinging smoothly on `E` interaction or proximity.
-  - Keep accurate `worldFootprintMin/Max` and `colliders` so the Sandbox player collides cleanly with walls outside the doorway.
-
----
-
-## 4. Adding Bestiary Enemies & Bosses (`MonsterBuilder.ts`)
-
-Extend `NwlMonsterId` and `NWL_MONSTER_SPECS`:
-- Scale strictly enforces RPG readability (`targetHeightM`: e.g. `1.35 m` goblin -> `2.10 m` orc brute -> `2.95 m` boss demon).
-- Build custom proportional bone spacing via `makeMonsterScaleRig(...)` + `attachRigidPartsToUalRig(...)`.
-- Overlap connected details (horns, crowns, tusks, shoulder pauldrons, weapons) so no multi-segment mesh floats detached in orthographic view.
+### Stage D: Anti-Fangs Vertex AO & Texel GTAO (`src/engine/procedural/VertexAndTexelBaker.ts`)
+- `subdivideForAo(geo, maxEdgeM)` performs T-junction-free 1-to-4 midpoint splits cleanly on non-skinned props/architecture (skip on `SkinnedMesh` by passing `partTagToBoneIndex`).
+- `bakeVertexAoAndCreases(geo, opts)` traces multi-ray hemisphere occlusion against a pure-TS median-split `TriBvh` and clamps shadows cleanly to prevent jagged "dark fang" triangle artifacts.
+- `applyHeightGtaoAndWear(...)` adds 8-directional island-clamped horizon GTAO, discrete Laplacian bevel catchlights, vertical grime (`lockVertical` bottom weighting), and clean `8`-step quantization (`[12..244]`) on non-landmark surfaces.
 
 ---
 
-## 5. Adding Biome Tilesets & Procedural Dungeons (`NwlTilesetDungeon.ts`)
+## 2. Canonical 65-Bone UAL Rig (`src/engine/rigging/`)
 
-- Official grid size: **`NWL_TILE_M = 1.5`**, wall height **`NWL_WALL_H = 3.0`**.
-- `buildNwlTilesetCatalog(biome)` showcases modular floor, wall, pillar, arch, trap, crate, altar, chest, and stairs pieces.
-- `buildGreenRuinsFloor1(seed)`:
-  1. Carves connected rooms (`entrance`, `corridor`, `combat`, `treasure`, `boss`) using `createSeededRng(seed)`.
-  2. Guarantees a continuous `walkableGrid` path from `playerSpawnPos` to `exitStairsPos` (verify via BFS in tests!).
-  3. Populates `colliders`, `destructibles`, `traps`, `enemySpawns`, `chestPos`, `altarPos`.
+- `UalRigSpec.ts` loads `src/data/ualSkeletonSpec.json` (65 bones: 17 structural + 48 fingers) and provides `createCanonicalUalRig(profile, scale)`.
+- `AnimationLibraryBank.ts` loads `./animations/ual_master_library.glb` (`getClip(name)` returns `THREE.AnimationClip | null`).
+- **Bone Local `+Y` Convention**: `makeBeveledBoneSegmentBox(length, ...)` starts at `y = 0` and extends to `y = length`. Shoulder pauldrons/ridges anchor near `y ≈ -0.02..+0.03` on `upperarm_l/r`.
+- **Single-atlas Skinned Binding**: Pass `partTagToBoneIndex` into `bakeTaggedPartsAsset` to receive aligned `perVertexBoneIndices` for merged `SkinnedMesh` binding without corrupting skin weights.
 
 ---
 
-## 6. Adding 3D Pixelated Spell VFX (`SpellVfxBuilder.ts`)
+## 3. Extending Builders (`Player`, `NPC`, `City`, `Monster`, `Tilesets`, `Spells`)
 
-- Add entries to `NwlSpellVfxId` and `NWL_SPELL_VFX_CATALOG`.
-- Construct crisp geometric meshes (`Tetrahedron`, `Octahedron`, `Box`, `Cylinder`, `Cone`, `Torus` <= 6 radial segments) colored via `prepareColoredPart` and shaded by `PixelizerMaterial` (`pixelated: true, objectId, mat.vertexColors = true`).
-- **Strict Rules**:
-  - **Zero soft glow/blur sprites**: All magic effects are pixel-snapped faceted 3D geometry.
-  - Keep projectile triangle counts **`<= 200` triangles** (checked by `nwl_production.test.ts`).
-  - Implement `updatePhase(progress01)` to animate expansion, spin, fade/drop, or ring ripple without allocations per frame.
+All builders accept `{ finishMode?: FinishMode, materialSeed?: number, aoStrength?: number, normalStrength?: number }`:
+- **Player Equipment (`PlayerEquipmentBuilder.ts`)**: `PlayerBaseShell` (`1.79 m`), `'knight' | 'archer' | 'mage'` × 6 slots × 5 rarities (`90` textured items). Swapping slots via `hero.equipSlot(slot, rarity)` preserves pooled/fresh `albedoMap`/`normalMap`/`emissionMap` and updates `hero.root.userData.unwrapMetrics`. Zero cloth capes.
+- **NPCs (`NpcBuilder.ts`)**: 9 NPCs (`~1.70 m`) with landmark faces + hinged animated `npc.bau`.
+- **Starter City (`CityBuilder.ts`)**: `NWL_Cidade_Principal_Portais` with 6 enterable 3-part houses (`baseGroup`/`capaGroup`/`portaPivot`), overhanging gable/hip roofs, timber framing, cobble plazas, lantern glow, Fountain, and Portal.
+- **Bestiary (`MonsterBuilder.ts`)**: `1.35 m` Goblins -> `2.10 m` Orc Brute -> `2.95 m` Boss Demon (`makeSdfOrganicMesh` muscular torso + connected `makeCurvedHornGeometry` + `magma_obsidian` cracks & runic greatsword).
+- **1.5 m Tilesets & Dungeon Floor 1 (`NwlTilesetDungeon.ts`)**: `NWL_TILE_M = 1.5`, `NWL_WALL_H = 3.0`, shared textured `256×256` atlas sheet (`floor_a/b/moss/rune`, `wall_stone/moss`), and BFS-verified walkable grid to Boss room.
+- **3D Spell VFX (`SpellVfxBuilder.ts`)**: Keep `<= 200` triangles per projectile, faceted pixel-snapped solids, zero soft radial glow sprites.

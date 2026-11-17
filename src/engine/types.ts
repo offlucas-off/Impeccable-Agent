@@ -89,6 +89,8 @@ export interface PixelizerMaterialOptions {
   albedoMap?: THREE.Texture | null;
   normalMap?: THREE.Texture | null;
   normalScale?: number;
+  /** Enable vertex `tangent` (vec4) attribute TBN when geometry supplies valid tangents */
+  useVertexTangents?: boolean;
   emissionMap?: THREE.Texture | null;
   emissionColor?: string;
   emissionIntensity?: number;

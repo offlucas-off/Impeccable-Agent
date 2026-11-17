@@ -42,11 +42,34 @@ const _srgbHelper = new THREE.Color();
 const _vcolSrgb = new THREE.Color();
 
 function createTextureSampler(tex: THREE.Texture | null | undefined): TextureSampler | null {
-  if (!tex || !tex.image || typeof document === 'undefined') return null;
-  const img = tex.image as { width?: number; height?: number; videoWidth?: number; videoHeight?: number };
+  if (!tex || !tex.image) return null;
+  const img = tex.image as {
+    data?: Uint8Array | Uint8ClampedArray;
+    width?: number;
+    height?: number;
+    videoWidth?: number;
+    videoHeight?: number;
+  };
   const rawW = img.width || img.videoWidth || 0;
   const rawH = img.height || img.videoHeight || 0;
   if (rawW <= 0 || rawH <= 0) return null;
+
+  if (img.data && img.data.length >= rawW * rawH * 4) {
+    const clamped =
+      img.data instanceof Uint8ClampedArray
+        ? img.data
+        : new Uint8ClampedArray(img.data.buffer, img.data.byteOffset, rawW * rawH * 4);
+    return {
+      width: rawW,
+      height: rawH,
+      data: clamped,
+      flipY: tex.flipY !== false,
+      wrapRepeatS: tex.wrapS === THREE.RepeatWrapping,
+      wrapRepeatT: tex.wrapT === THREE.RepeatWrapping,
+    };
+  }
+
+  if (typeof document === 'undefined') return null;
 
   const w = Math.min(1024, rawW);
   const h = Math.min(1024, rawH);

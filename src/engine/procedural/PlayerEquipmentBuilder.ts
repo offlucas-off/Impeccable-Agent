@@ -12,11 +12,25 @@ import {
   createCanonicalUalRig,
   type CanonicalUalRig,
 } from '../rigging/UalRigSpec';
+import type { PixelizerMaterialOptions } from '../types';
 import {
-  makeBoneSegmentBox,
-  mergeColoredParts,
-  prepareColoredPart,
-} from './SdfVoxelPrimitives';
+  bakeTaggedPartsAsset,
+  type BakedAssetResult,
+  type UnwrapMetricsSummary,
+} from './PixelMaterialSynth';
+import {
+  makeBeveledBoneSegmentBox,
+  makeBeveledBox,
+  makeDomeShieldGeometry,
+  makeLatheProfile,
+  makePauldronShellGeometry,
+  makeRecurveBowGeometry,
+  makeSwordBladeGeometry,
+  tagPart,
+  type FinishMode,
+  type TaggedGeometryPart,
+} from './ProceduralGeometryKit';
+import { prepareColoredPart } from './SdfVoxelPrimitives';
 
 export type PlayerClassId = 'knight' | 'archer' | 'mage';
 export type EquipSlot = 'helmet' | 'chest' | 'legs' | 'boots' | 'gloves' | 'weapon';
@@ -130,7 +144,7 @@ const SHELL_COLORS = {
   undershirt: '#3b1725',
   undershirtDark: '#141013',
   hair: '#3b1725',
-  eye: '#141013',
+  eye: '#285cc4',
 };
 
 const CLASS_META: Record<
@@ -186,6 +200,13 @@ const CLASS_META: Record<
   },
 };
 
+interface InternalFinishConfig {
+  finishMode: FinishMode;
+  materialSeed: number;
+  aoStrength: number;
+  normalStrength: number;
+}
+
 function getBoneSpanY(rig: CanonicalUalRig, boneName: string, fallback: number): number {
   const b = rig.boneByName.get(boneName);
   if (!b) return fallback;
@@ -195,6 +216,49 @@ function getBoneSpanY(rig: CanonicalUalRig, boneName: string, fallback: number):
     }
   }
   return fallback;
+}
+
+function disposePartsArray(parts: TaggedGeometryPart[]): void {
+  for (const p of parts) {
+    p.geometry.dispose();
+  }
+}
+
+function bakedToMaterialOptions(
+  baked: BakedAssetResult,
+  extras: Partial<PixelizerMaterialOptions> = {}
+): Partial<PixelizerMaterialOptions> {
+  const hasTex = Boolean(baked.textures);
+  const hasEmission = Boolean(baked.textures?.hasEmission && baked.textures.emissionMap);
+  return {
+    baseColor: '#ffffff',
+    diffuseVertexColorWeight: 1.0,
+    edgeHighlight: 0.36,
+    edgeBevelWeight: 0.72,
+    smoothness: 0.25,
+    albedoMap: baked.textures?.albedoMap ?? null,
+    normalMap: baked.textures?.normalMap ?? null,
+    normalScale: hasTex ? 0.85 : 1.0,
+    useVertexTangents: Boolean(baked.hasTangents && baked.textures?.normalMap),
+    emissionMap: hasEmission ? (baked.textures?.emissionMap ?? null) : null,
+    emissionColor: hasEmission ? '#ffffff' : '#000000',
+    emissionIntensity: hasEmission ? 1.15 : 0.0,
+    ...extras,
+  };
+}
+
+function disposeMaterialAndUnpooledTextures(mat: PixelizerMaterial): void {
+  const opts = mat.options;
+  const seen = new Set<THREE.Texture>();
+  for (const tex of [opts.albedoMap, opts.normalMap, opts.emissionMap]) {
+    if (tex && !seen.has(tex)) {
+      seen.add(tex);
+      if (tex.userData?.pooled !== true) {
+        tex.dispose();
+      }
+    }
+  }
+  mat.dispose();
 }
 
 export function getEquipmentPieceDef(
@@ -238,10 +302,12 @@ export function listAllPlayerEquipmentCatalog(): EquipmentPieceDef[] {
 
 /**
  * Builds the canonical 1.79m Player Base Shell onto the 65-bone UAL skeleton.
- * All modular equipment parts wrap cleanly outside these standardized bone clearances
- * so swapping drops never z-fights or clips.
+ * Uses beveled bone segments and textured `head_front` semantic eyes/brows (zero flat detail cuboids).
  */
-function buildBaseShellSpecs(rig: CanonicalUalRig): RigidPartSpec[] {
+function buildBaseShellSpecs(
+  rig: CanonicalUalRig,
+  cfg: InternalFinishConfig
+): { specs: RigidPartSpec[]; headMetrics: UnwrapMetricsSummary } {
   const pelvisLen = getBoneSpanY(rig, 'pelvis', 0.138);
   const spine1Len = getBoneSpanY(rig, 'spine_01', 0.124);
   const spine2Len = getBoneSpanY(rig, 'spine_02', 0.141);
@@ -253,104 +319,232 @@ function buildBaseShellSpecs(rig: CanonicalUalRig): RigidPartSpec[] {
   const calf = getBoneSpanY(rig, 'calf_l', 0.43);
 
   const specs: RigidPartSpec[] = [];
-  specs.push({
-    name: 'Shell_Pelvis',
-    boneName: 'pelvis',
-    geometry: makeBoneSegmentBox(pelvisLen * 1.05, 0.135, 0.095, 0.13, 0.09, SHELL_COLORS.undershirtDark),
-  });
-  specs.push({
-    name: 'Shell_Spine1',
-    boneName: 'spine_01',
-    geometry: makeBoneSegmentBox(spine1Len * 1.05, 0.125, 0.088, 0.135, 0.092, SHELL_COLORS.undershirt),
-  });
-  specs.push({
-    name: 'Shell_Spine2',
-    boneName: 'spine_02',
-    geometry: makeBoneSegmentBox(spine2Len * 1.06, 0.138, 0.095, 0.152, 0.105, SHELL_COLORS.undershirt),
-  });
-  specs.push({
-    name: 'Shell_Spine3',
-    boneName: 'spine_03',
-    geometry: makeBoneSegmentBox(spine3Len * 0.9, 0.155, 0.105, 0.165, 0.11, SHELL_COLORS.undershirt),
-  });
-  specs.push({
-    name: 'Shell_Neck',
-    boneName: 'neck_01',
-    geometry: makeBoneSegmentBox(neckLen * 1.1, 0.05, 0.05, 0.048, 0.048, SHELL_COLORS.skinShadow),
-  });
+  let headMetrics!: UnwrapMetricsSummary;
 
-  // Head + simple clean face + short hair (NO loose hair physics)
-  const headCube = new THREE.BoxGeometry(0.21, 0.23, 0.21);
-  headCube.translate(0, 0.11, 0);
-  const faceBand = new THREE.BoxGeometry(0.18, 0.09, 0.03);
-  faceBand.translate(0, 0.10, 0.10);
-  const hairCap = new THREE.BoxGeometry(0.22, 0.075, 0.22);
-  hairCap.translate(0, 0.20, -0.01);
-  specs.push({
-    name: 'Shell_Head',
-    boneName: 'Head',
-    geometry: mergeColoredParts([
-      prepareColoredPart(headCube, SHELL_COLORS.skin),
-      prepareColoredPart(faceBand, SHELL_COLORS.skinShadow),
-      prepareColoredPart(hairCap, SHELL_COLORS.hair),
-    ]),
+  const bakeShellBone = (
+    name: string,
+    boneName: string,
+    parts: TaggedGeometryPart[],
+    inspectUvs = false
+  ) => {
+    const baked = bakeTaggedPartsAsset(parts, {
+      finishMode: cfg.finishMode,
+      texelsPerMeter: 64,
+      seed: cfg.materialSeed,
+      aoRays: 10,
+      aoMaxDist: 0.3,
+      aoStrength: cfg.aoStrength,
+      normalStrength: cfg.normalStrength,
+      eyeHex: SHELL_COLORS.eye,
+      browHex: SHELL_COLORS.hair,
+      usePool: true,
+      cacheKey: `nwl_shell:${name}`,
+      inspectUvs,
+    });
+    disposePartsArray(parts);
+    if (name === 'Shell_Head') {
+      headMetrics = baked.unwrapMetrics;
+    }
+    specs.push({
+      name,
+      boneName,
+      geometry: baked.geometry,
+      materialOptions: bakedToMaterialOptions(baked, {
+        smoothness: 0.18,
+      }),
+    });
+  };
+
+  bakeShellBone('Shell_Pelvis', 'pelvis', [
+    tagPart(
+      makeBeveledBoneSegmentBox(
+        pelvisLen * 1.05,
+        0.135,
+        0.095,
+        0.13,
+        0.09,
+        0.012,
+        SHELL_COLORS.undershirtDark
+      ),
+      'shell_pelvis',
+      'woven_cloth',
+      SHELL_COLORS.undershirtDark
+    ),
+  ]);
+
+  bakeShellBone('Shell_Spine1', 'spine_01', [
+    tagPart(
+      makeBeveledBoneSegmentBox(
+        spine1Len * 1.05,
+        0.125,
+        0.088,
+        0.135,
+        0.092,
+        0.012,
+        SHELL_COLORS.undershirt
+      ),
+      'shell_spine1',
+      'woven_cloth',
+      SHELL_COLORS.undershirt
+    ),
+  ]);
+
+  bakeShellBone('Shell_Spine2', 'spine_02', [
+    tagPart(
+      makeBeveledBoneSegmentBox(
+        spine2Len * 1.06,
+        0.138,
+        0.095,
+        0.152,
+        0.105,
+        0.013,
+        SHELL_COLORS.undershirt
+      ),
+      'shell_spine2',
+      'woven_cloth',
+      SHELL_COLORS.undershirt
+    ),
+  ]);
+
+  bakeShellBone('Shell_Spine3', 'spine_03', [
+    tagPart(
+      makeBeveledBoneSegmentBox(
+        spine3Len * 0.9,
+        0.155,
+        0.105,
+        0.165,
+        0.11,
+        0.014,
+        SHELL_COLORS.undershirt
+      ),
+      'shell_spine3',
+      'woven_cloth',
+      SHELL_COLORS.undershirt
+    ),
+  ]);
+
+  bakeShellBone('Shell_Neck', 'neck_01', [
+    tagPart(
+      makeBeveledBoneSegmentBox(neckLen * 1.1, 0.05, 0.05, 0.048, 0.048, 0.008, SHELL_COLORS.skinShadow),
+      'shell_neck',
+      'human_skin',
+      SHELL_COLORS.skinShadow
+    ),
+  ]);
+
+  // Head + textured semantic eyes/brows + beveled short hair (no protruding faceBand cuboid!)
+  const headBox = makeBeveledBox(0.21, 0.23, 0.21, 0.02, SHELL_COLORS.skin, {
+    offset: [0, 0.11, 0],
   });
+  const hairCap = makeBeveledBox(0.22, 0.075, 0.22, 0.015, SHELL_COLORS.hair, {
+    offset: [0, 0.2, -0.01],
+  });
+  bakeShellBone(
+    'Shell_Head',
+    'Head',
+    [
+      tagPart(headBox, 'shell_head', 'human_skin', SHELL_COLORS.skin, {
+        landmarkKind: 'head_front',
+        lockVertical: true,
+      }),
+      tagPart(hairCap, 'shell_hair', 'woven_cloth', SHELL_COLORS.hair, {
+        lockVertical: true,
+      }),
+    ],
+    true
+  );
 
   for (const side of ['l', 'r'] as const) {
-    specs.push({
-      name: `Shell_UpperArm_${side}`,
-      boneName: `upperarm_${side}`,
-      geometry: makeBoneSegmentBox(uArm * 0.94, 0.054, 0.054, 0.046, 0.046, SHELL_COLORS.undershirt),
-    });
-    specs.push({
-      name: `Shell_LowerArm_${side}`,
-      boneName: `lowerarm_${side}`,
-      geometry: makeBoneSegmentBox(lArm * 0.94, 0.045, 0.045, 0.038, 0.038, SHELL_COLORS.skinShadow),
-    });
-    specs.push({
-      name: `Shell_Hand_${side}`,
-      boneName: `hand_${side}`,
-      geometry: makeBoneSegmentBox(0.10, 0.038, 0.035, 0.034, 0.03, SHELL_COLORS.skin),
-    });
-    specs.push({
-      name: `Shell_Thigh_${side}`,
-      boneName: `thigh_${side}`,
-      geometry: makeBoneSegmentBox(thigh * 0.94, 0.072, 0.072, 0.056, 0.056, SHELL_COLORS.undershirtDark),
-    });
-    specs.push({
-      name: `Shell_Calf_${side}`,
-      boneName: `calf_${side}`,
-      geometry: makeBoneSegmentBox(calf * 0.94, 0.056, 0.056, 0.044, 0.044, SHELL_COLORS.undershirtDark),
-    });
-    specs.push({
-      name: `Shell_Foot_${side}`,
-      boneName: `foot_${side}`,
-      geometry: makeBoneSegmentBox(0.14, 0.046, 0.054, 0.04, 0.045, SHELL_COLORS.undershirtDark),
-    });
+    bakeShellBone(`Shell_UpperArm_${side}`, `upperarm_${side}`, [
+      tagPart(
+        makeBeveledBoneSegmentBox(uArm * 0.94, 0.054, 0.054, 0.046, 0.046, 0.009, SHELL_COLORS.undershirt),
+        `shell_ua_${side}`,
+        'woven_cloth',
+        SHELL_COLORS.undershirt
+      ),
+    ]);
+    bakeShellBone(`Shell_LowerArm_${side}`, `lowerarm_${side}`, [
+      tagPart(
+        makeBeveledBoneSegmentBox(lArm * 0.94, 0.045, 0.045, 0.038, 0.038, 0.008, SHELL_COLORS.skinShadow),
+        `shell_la_${side}`,
+        'human_skin',
+        SHELL_COLORS.skinShadow
+      ),
+    ]);
+    bakeShellBone(`Shell_Hand_${side}`, `hand_${side}`, [
+      tagPart(
+        makeBeveledBoneSegmentBox(0.1, 0.038, 0.035, 0.034, 0.03, 0.007, SHELL_COLORS.skin),
+        `shell_hand_${side}`,
+        'human_skin',
+        SHELL_COLORS.skin
+      ),
+    ]);
+    bakeShellBone(`Shell_Thigh_${side}`, `thigh_${side}`, [
+      tagPart(
+        makeBeveledBoneSegmentBox(
+          thigh * 0.94,
+          0.072,
+          0.072,
+          0.056,
+          0.056,
+          0.011,
+          SHELL_COLORS.undershirtDark
+        ),
+        `shell_thigh_${side}`,
+        'woven_cloth',
+        SHELL_COLORS.undershirtDark
+      ),
+    ]);
+    bakeShellBone(`Shell_Calf_${side}`, `calf_${side}`, [
+      tagPart(
+        makeBeveledBoneSegmentBox(
+          calf * 0.94,
+          0.056,
+          0.056,
+          0.044,
+          0.044,
+          0.009,
+          SHELL_COLORS.undershirtDark
+        ),
+        `shell_calf_${side}`,
+        'stitched_leather',
+        SHELL_COLORS.undershirtDark
+      ),
+    ]);
+    bakeShellBone(`Shell_Foot_${side}`, `foot_${side}`, [
+      tagPart(
+        makeBeveledBoneSegmentBox(0.14, 0.046, 0.054, 0.04, 0.045, 0.008, SHELL_COLORS.undershirtDark),
+        `shell_foot_${side}`,
+        'stitched_leather',
+        SHELL_COLORS.undershirtDark
+      ),
+    ]);
   }
 
-  return specs;
+  return { specs, headMetrics };
 }
 
 interface ModularAttachmentSpec {
   boneName: string;
-  geometry: THREE.BufferGeometry;
-  emissive?: boolean;
+  baked: BakedAssetResult;
+  isMetal: boolean;
 }
 
 /**
  * Generates bone-mounted geometry pieces for any (classId × slot × rarity)
- * keeping clean >=3.5cm geometric ribs/chamfers and ZERO cloth simulation.
+ * using beveled armor primitives, curved pauldrons, sculpted blades/shields/bows, and procedural PBR atlases.
  */
 function buildSlotAttachments(
   rig: CanonicalUalRig,
   classId: PlayerClassId,
   slot: EquipSlot,
-  rarity: ItemRarity
+  rarity: ItemRarity,
+  cfg: InternalFinishConfig
 ): ModularAttachmentSpec[] {
   const pal = RARITY_COLOR_TABLE[rarity];
   const tier = pal.tierLevel;
   const out: ModularAttachmentSpec[] = [];
+  const armorRecipe = classId === 'archer' ? 'stitched_leather' : 'rarity_armor';
 
   const spine1Len = getBoneSpanY(rig, 'spine_01', 0.124);
   const spine2Len = getBoneSpanY(rig, 'spine_02', 0.141);
@@ -360,137 +554,242 @@ function buildSlotAttachments(
   const thigh = getBoneSpanY(rig, 'thigh_l', 0.40);
   const calf = getBoneSpanY(rig, 'calf_l', 0.43);
 
+  const bakeBoneParts = (
+    boneName: string,
+    parts: TaggedGeometryPart[],
+    opts: { isMetal?: boolean; inspectUvs?: boolean } = {}
+  ) => {
+    const baked = bakeTaggedPartsAsset(parts, {
+      finishMode: cfg.finishMode,
+      texelsPerMeter: 64,
+      seed: cfg.materialSeed + tier * 7,
+      aoRays: 10,
+      aoMaxDist: 0.36,
+      aoStrength: cfg.aoStrength,
+      normalStrength: cfg.normalStrength,
+      rarityTier: rarity,
+      emblemHex: pal.trim,
+      emissiveRuneHex: tier >= 3 ? pal.glow : null,
+      usePool: true,
+      cacheKey: `nwl_equip:${classId}:${slot}:${rarity}:${boneName}`,
+      inspectUvs: Boolean(opts.inspectUvs),
+    });
+    disposePartsArray(parts);
+    out.push({ boneName, baked, isMetal: Boolean(opts.isMetal) });
+  };
+
   if (slot === 'helmet') {
-    const parts: THREE.BufferGeometry[] = [];
+    const parts: TaggedGeometryPart[] = [];
     if (classId === 'knight') {
-      const dome = new THREE.BoxGeometry(0.26, 0.24, 0.26);
-      dome.translate(0, 0.14, 0);
-      const visor = new THREE.BoxGeometry(0.22, 0.07, 0.07);
-      visor.translate(0, 0.11, 0.115);
-      const brow = new THREE.BoxGeometry(0.27, 0.04, 0.27);
-      brow.translate(0, 0.19, 0.01);
+      const dome = makeBeveledBox(0.26, 0.24, 0.26, 0.025, pal.primary, { offset: [0, 0.14, 0] });
+      const visor = makeBeveledBox(0.22, 0.07, 0.07, 0.012, '#141013', { offset: [0, 0.11, 0.115] });
+      const trimBand = makeBeveledBox(0.27, 0.044, 0.27, 0.01, pal.trim, { offset: [0, 0.19, 0.01] });
       parts.push(
-        prepareColoredPart(dome, pal.primary),
-        prepareColoredPart(visor, '#141013'),
-        prepareColoredPart(brow, pal.trim)
+        tagPart(dome, 'knight_helm_dome', 'rarity_armor', pal.primary, { accentHex: pal.trim }),
+        tagPart(visor, 'knight_helm_visor', 'forged_steel', '#141013'),
+        tagPart(trimBand, 'knight_helm_trim', 'brushed_gold', pal.trim)
       );
       if (tier >= 2) {
-        const crest = new THREE.BoxGeometry(0.055, 0.10 + tier * 0.015, 0.24);
-        crest.translate(0, 0.29, -0.01);
-        parts.push(prepareColoredPart(crest, pal.secondary));
+        const crest = makeBeveledBox(0.056, 0.1 + tier * 0.015, 0.24, 0.012, pal.secondary, {
+          offset: [0, 0.29, -0.01],
+        });
+        parts.push(tagPart(crest, 'knight_helm_crest', 'rarity_armor', pal.secondary, { accentHex: pal.trim }));
       }
       if (tier >= 4) {
-        for (const sx of [-1, 1]) {
-          const wing = new THREE.BoxGeometry(0.05, 0.14, 0.09);
+        for (const [wIdx, sx] of [-1, 1].entries()) {
+          const wing = makeBeveledBox(0.052, 0.14, 0.095, 0.01, pal.trim);
           wing.rotateZ(sx * -0.35);
           wing.translate(sx * 0.15, 0.25, 0);
-          parts.push(prepareColoredPart(wing, pal.trim));
+          parts.push(tagPart(wing, `knight_helm_wing_${wIdx}`, 'brushed_gold', pal.trim));
         }
       }
+      bakeBoneParts('Head', parts, { isMetal: true, inspectUvs: true });
     } else if (classId === 'archer') {
-      const hood = new THREE.BoxGeometry(0.25, 0.22, 0.27);
-      hood.translate(0, 0.14, -0.015);
-      const cowlRim = new THREE.BoxGeometry(0.26, 0.05, 0.08);
-      cowlRim.translate(0, 0.21, 0.10);
-      parts.push(prepareColoredPart(hood, pal.primary), prepareColoredPart(cowlRim, pal.trim));
+      const hood = makeBeveledBox(0.25, 0.22, 0.27, 0.024, pal.primary, { offset: [0, 0.14, -0.015] });
+      const cowlRim = makeBeveledBox(0.26, 0.055, 0.085, 0.012, pal.trim, { offset: [0, 0.21, 0.1] });
+      parts.push(
+        tagPart(hood, 'archer_hood', 'stitched_leather', pal.primary, { accentHex: pal.trim }),
+        tagPart(cowlRim, 'archer_cowl', 'stitched_leather', pal.trim)
+      );
       if (tier >= 2) {
-        const feather = new THREE.BoxGeometry(0.04, 0.18 + tier * 0.02, 0.06);
+        const feather = makeBeveledBox(0.042, 0.18 + tier * 0.02, 0.065, 0.008, pal.secondary);
         feather.rotateZ(-0.28);
         feather.rotateX(-0.2);
         feather.translate(0.14, 0.25, -0.04);
-        parts.push(prepareColoredPart(feather, pal.secondary));
+        parts.push(tagPart(feather, 'archer_feather', 'woven_cloth', pal.secondary));
       }
       if (tier >= 4) {
-        const mask = new THREE.BoxGeometry(0.20, 0.06, 0.04);
-        mask.translate(0, 0.07, 0.115);
-        parts.push(prepareColoredPart(mask, pal.secondary));
+        const mask = makeBeveledBox(0.2, 0.06, 0.045, 0.01, pal.secondary, { offset: [0, 0.07, 0.115] });
+        parts.push(tagPart(mask, 'archer_mask', 'stitched_leather', pal.secondary));
       }
+      bakeBoneParts('Head', parts, { isMetal: false, inspectUvs: true });
     } else {
-      // Mage pointed hat / circlet (compact, rigid, crisp silhouette)
-      const brim = new THREE.CylinderGeometry(0.28 + tier * 0.012, 0.30 + tier * 0.012, 0.04, 8);
-      brim.translate(0, 0.23, 0);
-      const band = new THREE.CylinderGeometry(0.16, 0.17, 0.055, 8);
-      band.translate(0, 0.26, 0);
-      const cone = new THREE.ConeGeometry(0.155, 0.32 + tier * 0.02, 8);
+      // Mage pointed hat sculpted via LatheProfile
+      const brim = makeLatheProfile(
+        [
+          [0.145, 0.215],
+          [0.285 + tier * 0.012, 0.224],
+          [0.275 + tier * 0.012, 0.248],
+          [0.145, 0.252],
+        ],
+        8,
+        pal.primary
+      );
+      const band = makeLatheProfile(
+        [
+          [0.168, 0.248],
+          [0.162, 0.3],
+        ],
+        8,
+        pal.trim
+      );
+      const cone = makeLatheProfile(
+        [
+          [0.155, 0.0],
+          [0.09, 0.16],
+          [0.012, 0.31 + tier * 0.02],
+        ],
+        8,
+        pal.secondary
+      );
       cone.rotateX(-0.18);
-      cone.translate(0, 0.42, -0.03);
+      cone.translate(0, 0.285, -0.02);
       parts.push(
-        prepareColoredPart(brim, pal.primary),
-        prepareColoredPart(band, pal.trim),
-        prepareColoredPart(cone, pal.secondary)
+        tagPart(brim, 'mage_hat_brim', 'rarity_armor', pal.primary, { accentHex: pal.trim }),
+        tagPart(band, 'mage_hat_band', 'brushed_gold', pal.trim),
+        tagPart(cone, 'mage_hat_cone', 'woven_cloth', pal.secondary, { accentHex: pal.trim })
       );
       if (tier >= 3) {
-        const gem = new THREE.OctahedronGeometry(0.045, 0);
-        gem.translate(0, 0.27, 0.16);
-        parts.push(prepareColoredPart(gem, pal.glow));
+        const gem = prepareColoredPart(new THREE.OctahedronGeometry(0.045, 0), pal.glow);
+        gem.translate(0, 0.27, 0.165);
+        parts.push(tagPart(gem, 'mage_hat_gem', 'runic_glow', pal.glow, { lockVertical: false }));
       }
+      bakeBoneParts('Head', parts, { isMetal: false, inspectUvs: true });
     }
-    out.push({ boneName: 'Head', geometry: mergeColoredParts(parts) });
   } else if (slot === 'chest') {
-    // Pelvis belt/fauld + spine_01/02/03 torso armor + rigid pauldrons (NO cloth cape)
-    const beltParts: THREE.BufferGeometry[] = [
-      makeBoneSegmentBox(0.07, 0.165, 0.125, 0.165, 0.125, pal.secondary),
+    const beltParts: TaggedGeometryPart[] = [
+      tagPart(
+        makeBeveledBoneSegmentBox(0.072, 0.165, 0.125, 0.165, 0.125, 0.012, pal.secondary),
+        'belt_strap',
+        'stitched_leather',
+        pal.secondary,
+        { accentHex: pal.trim }
+      ),
+      tagPart(
+        makeBeveledBox(0.085, 0.075, 0.045, 0.01, pal.trim, { offset: [0, 0.05, 0.12] }),
+        'belt_buckle',
+        'brushed_gold',
+        pal.trim,
+        { landmarkKind: 'chest_crest' }
+      ),
     ];
-    const buckle = new THREE.BoxGeometry(0.08, 0.07, 0.04);
-    buckle.translate(0, 0.05, 0.12);
-    beltParts.push(prepareColoredPart(buckle, pal.trim));
-    // Rigid short tassets on hips (zero physics needed)
     if (classId === 'knight' || tier >= 3) {
-      for (const sx of [-1, 1]) {
-        const tasset = new THREE.BoxGeometry(0.09, 0.12, 0.13);
-        tasset.translate(sx * 0.145, -0.02, 0);
-        beltParts.push(prepareColoredPart(tasset, pal.primary));
+      for (const [tIdx, sx] of [-1, 1].entries()) {
+        const tasset = makeBeveledBox(0.092, 0.125, 0.135, 0.014, pal.primary, {
+          offset: [sx * 0.145, -0.02, 0],
+        });
+        beltParts.push(tagPart(tasset, `belt_tasset_${tIdx}`, armorRecipe, pal.primary, { accentHex: pal.trim }));
       }
     }
-    out.push({ boneName: 'pelvis', geometry: mergeColoredParts(beltParts) });
+    bakeBoneParts('pelvis', beltParts, { isMetal: classId === 'knight' });
 
-    out.push({
-      name: 'Chest_Lower',
-      boneName: 'spine_01',
-      geometry: makeBoneSegmentBox(spine1Len * 1.05, 0.142, 0.104, 0.156, 0.114, pal.secondary),
-    } as ModularAttachmentSpec);
+    bakeBoneParts(
+      'spine_01',
+      [
+        tagPart(
+          makeBeveledBoneSegmentBox(spine1Len * 1.05, 0.142, 0.104, 0.156, 0.114, 0.014, pal.secondary),
+          'chest_lower',
+          armorRecipe,
+          pal.secondary,
+          { accentHex: pal.trim }
+        ),
+      ],
+      { isMetal: classId === 'knight' }
+    );
 
-    const midParts: THREE.BufferGeometry[] = [
-      makeBoneSegmentBox(spine2Len * 1.08, 0.16, 0.115, 0.18, 0.13, pal.primary),
+    bakeBoneParts(
+      'spine_02',
+      [
+        tagPart(
+          makeBeveledBoneSegmentBox(spine2Len * 1.08, 0.16, 0.115, 0.18, 0.13, 0.015, pal.primary),
+          'chest_mid',
+          armorRecipe,
+          pal.primary,
+          { accentHex: pal.trim, landmarkKind: 'chest_crest' }
+        ),
+        tagPart(
+          makeBeveledBox(0.28, 0.052, 0.24, 0.01, pal.trim, { offset: [0, spine2Len * 0.5, 0] }),
+          'chest_band',
+          'brushed_gold',
+          pal.trim
+        ),
+      ],
+      { isMetal: classId === 'knight', inspectUvs: true }
+    );
+
+    const topParts: TaggedGeometryPart[] = [
+      tagPart(
+        makeBeveledBoneSegmentBox(spine3Len * 0.94, 0.185, 0.13, 0.2, 0.135, 0.016, pal.primary),
+        'chest_upper',
+        armorRecipe,
+        pal.primary,
+        { accentHex: pal.trim }
+      ),
     ];
-    const chestBand = new THREE.BoxGeometry(0.28, 0.05, 0.24);
-    chestBand.translate(0, spine2Len * 0.5, 0);
-    midParts.push(prepareColoredPart(chestBand, pal.trim));
-    out.push({ boneName: 'spine_02', geometry: mergeColoredParts(midParts) });
-
-    const topParts: THREE.BufferGeometry[] = [
-      makeBoneSegmentBox(spine3Len * 0.94, 0.185, 0.13, 0.20, 0.135, pal.primary),
-    ];
-    // Class chest insignia / collar / quiver (all rigid!)
     if (classId === 'knight') {
-      const gorget = new THREE.BoxGeometry(0.22, 0.06, 0.18);
-      gorget.translate(0, spine3Len * 0.9, 0);
-      const crest = new THREE.BoxGeometry(0.11, 0.11, 0.04);
-      crest.translate(0, spine3Len * 0.48, 0.135);
-      topParts.push(prepareColoredPart(gorget, pal.trim), prepareColoredPart(crest, pal.secondary));
+      const gorget = makeBeveledBox(0.22, 0.06, 0.18, 0.012, pal.trim, {
+        offset: [0, spine3Len * 0.9, 0],
+      });
+      const crest = makeBeveledBox(0.115, 0.115, 0.044, 0.01, pal.secondary, {
+        offset: [0, spine3Len * 0.48, 0.135],
+      });
+      topParts.push(
+        tagPart(gorget, 'knight_gorget', 'brushed_gold', pal.trim),
+        tagPart(crest, 'knight_crest', 'rarity_armor', pal.secondary, {
+          landmarkKind: 'chest_crest',
+          accentHex: pal.trim,
+        })
+      );
     } else if (classId === 'archer') {
-      // Rigid angled quiver + arrow fletchings mounted to upper back
-      const quiver = new THREE.CylinderGeometry(0.055, 0.045, 0.38, 6);
+      const quiver = makeLatheProfile(
+        [
+          [0.044, -0.18],
+          [0.056, 0.18],
+        ],
+        7,
+        pal.secondary
+      );
       quiver.rotateZ(-0.42);
       quiver.translate(-0.08, 0.08, -0.15);
-      const arrows = new THREE.ConeGeometry(0.05, 0.08, 6);
+      const arrows = makeBeveledBox(0.085, 0.08, 0.085, 0.012, pal.trim);
       arrows.rotateZ(-0.42);
       arrows.translate(-0.16, 0.26, -0.15);
-      topParts.push(prepareColoredPart(quiver, pal.secondary), prepareColoredPart(arrows, pal.trim));
+      topParts.push(
+        tagPart(quiver, 'archer_quiver', 'stitched_leather', pal.secondary, { accentHex: pal.trim }),
+        tagPart(arrows, 'archer_fletching', 'woven_cloth', pal.trim)
+      );
     } else {
-      // Mage arcane mantle + rune medallion
-      const mantle = new THREE.BoxGeometry(0.38, 0.065, 0.24);
-      mantle.translate(0, spine3Len * 0.78, -0.01);
-      const rune = new THREE.OctahedronGeometry(0.05, 0);
-      rune.translate(0, spine3Len * 0.48, 0.135);
-      topParts.push(prepareColoredPart(mantle, pal.trim), prepareColoredPart(rune, pal.glow));
+      const mantle = makeBeveledBox(0.38, 0.065, 0.24, 0.014, pal.trim, {
+        offset: [0, spine3Len * 0.78, -0.01],
+      });
+      const rune = prepareColoredPart(new THREE.OctahedronGeometry(0.05, 0), pal.glow);
+      rune.translate(0, spine3Len * 0.48, 0.138);
+      topParts.push(
+        tagPart(mantle, 'mage_mantle', 'brushed_gold', pal.trim),
+        tagPart(rune, 'mage_chest_rune', 'runic_glow', pal.glow, { lockVertical: false })
+      );
     }
-    out.push({ boneName: 'spine_03', geometry: mergeColoredParts(topParts) });
+    bakeBoneParts('spine_03', topParts, { isMetal: classId === 'knight' });
 
-    // Pauldrons + upper arm sleeves
     for (const side of ['l', 'r'] as const) {
-      const armParts: THREE.BufferGeometry[] = [
-        makeBoneSegmentBox(uArm * 0.88, 0.068, 0.068, 0.058, 0.058, pal.secondary),
+      const armParts: TaggedGeometryPart[] = [
+        tagPart(
+          makeBeveledBoneSegmentBox(uArm * 0.88, 0.068, 0.068, 0.058, 0.058, 0.01, pal.secondary),
+          `arm_sleeve_${side}`,
+          armorRecipe,
+          pal.secondary,
+          { accentHex: pal.trim }
+        ),
       ];
       const hasPauldron =
         classId === 'knight' ||
@@ -498,188 +797,281 @@ function buildSlotAttachments(
         (classId === 'mage' && tier >= 2) ||
         tier >= 3;
       if (hasPauldron) {
-        const pW = classId === 'knight' ? 0.165 + tier * 0.008 : 0.135;
-        const pH = classId === 'knight' ? 0.125 : 0.09;
-        const pauldron = new THREE.BoxGeometry(pW, pH, pW);
-        pauldron.translate(0, 0.04, 0);
-        armParts.push(prepareColoredPart(pauldron, pal.primary));
+        const pW = classId === 'knight' ? 0.18 + tier * 0.008 : 0.145;
+        const pH = classId === 'knight' ? 0.155 : 0.115;
+        const pauldron = makePauldronShellGeometry(pW, pH, pW * 1.12, 0.032, pal.primary);
+        if (side === 'r') {
+          pauldron.rotateY(Math.PI);
+        }
+        pauldron.translate(side === 'l' ? 0.01 : -0.01, 0.05, 0);
+        armParts.push(
+          tagPart(pauldron, `pauldron_${side}`, armorRecipe, pal.primary, {
+            accentHex: pal.trim,
+            lockVertical: true,
+          })
+        );
         if (tier >= 3) {
-          const rim = new THREE.BoxGeometry(pW + 0.03, 0.038, pW + 0.03);
-          rim.translate(0, 0.01, 0);
-          armParts.push(prepareColoredPart(rim, pal.trim));
+          const rim = makeBeveledBox(pW + 0.025, 0.038, pW + 0.025, 0.008, pal.trim, {
+            offset: [0, 0.01, 0],
+          });
+          armParts.push(tagPart(rim, `pauldron_rim_${side}`, 'brushed_gold', pal.trim));
         }
         if (tier >= 5) {
-          const spike = new THREE.ConeGeometry(0.042, 0.11, 4);
-          spike.translate(side === 'l' ? 0.04 : -0.04, 0.12, 0);
-          armParts.push(prepareColoredPart(spike, pal.trim));
+          const spike = prepareColoredPart(new THREE.ConeGeometry(0.042, 0.11, 5), pal.trim);
+          spike.translate(side === 'l' ? 0.045 : -0.045, 0.12, 0);
+          armParts.push(tagPart(spike, `pauldron_spike_${side}`, 'brushed_gold', pal.trim));
         }
       }
-      out.push({ boneName: `upperarm_${side}`, geometry: mergeColoredParts(armParts) });
+      bakeBoneParts(`upperarm_${side}`, armParts, { isMetal: classId === 'knight' });
     }
   } else if (slot === 'legs') {
     for (const side of ['l', 'r'] as const) {
-      const parts: THREE.BufferGeometry[] = [
-        makeBoneSegmentBox(thigh * 0.88, 0.09, 0.09, 0.072, 0.072, pal.primary),
+      const parts: TaggedGeometryPart[] = [
+        tagPart(
+          makeBeveledBoneSegmentBox(thigh * 0.88, 0.09, 0.09, 0.072, 0.072, 0.013, pal.primary),
+          `thigh_guard_${side}`,
+          armorRecipe,
+          pal.primary,
+          { accentHex: pal.trim }
+        ),
+        tagPart(
+          makeBeveledBox(0.135, 0.082, 0.14, 0.014, pal.trim, {
+            offset: [0, thigh * 0.86, 0.015],
+          }),
+          `kneecap_${side}`,
+          'brushed_gold',
+          pal.trim
+        ),
       ];
-      const kneecap = new THREE.BoxGeometry(0.135, 0.08, 0.14);
-      kneecap.translate(0, thigh * 0.86, 0.015);
-      parts.push(prepareColoredPart(kneecap, pal.trim));
       if (tier >= 3) {
-        const stripe = new THREE.BoxGeometry(0.155, thigh * 0.52, 0.06);
-        stripe.translate(0, thigh * 0.45, 0);
-        parts.push(prepareColoredPart(stripe, pal.secondary));
+        const outerPlate = makeBeveledBox(0.155, thigh * 0.52, 0.062, 0.01, pal.secondary, {
+          offset: [0, thigh * 0.45, 0],
+        });
+        parts.push(
+          tagPart(outerPlate, `thigh_plate_${side}`, armorRecipe, pal.secondary, {
+            accentHex: pal.trim,
+          })
+        );
       }
-      out.push({ boneName: `thigh_${side}`, geometry: mergeColoredParts(parts) });
+      bakeBoneParts(`thigh_${side}`, parts, { isMetal: classId === 'knight' });
     }
   } else if (slot === 'boots') {
     for (const side of ['l', 'r'] as const) {
-      const calfParts: THREE.BufferGeometry[] = [
-        makeBoneSegmentBox(calf * 0.72, 0.068, 0.068, 0.076, 0.076, pal.secondary),
+      const calfParts: TaggedGeometryPart[] = [
+        tagPart(
+          makeBeveledBoneSegmentBox(calf * 0.72, 0.068, 0.068, 0.076, 0.076, 0.012, pal.secondary),
+          `greave_${side}`,
+          armorRecipe,
+          pal.secondary,
+          { accentHex: pal.trim }
+        ),
+        tagPart(
+          makeBeveledBox(0.15, 0.065, 0.15, 0.012, pal.trim, {
+            offset: [0, calf * 0.34, 0],
+          }),
+          `boot_cuff_${side}`,
+          'brushed_gold',
+          pal.trim
+        ),
       ];
-      const cuff = new THREE.BoxGeometry(0.15, 0.065, 0.15);
-      cuff.translate(0, calf * 0.34, 0);
-      calfParts.push(prepareColoredPart(cuff, pal.trim));
-      out.push({ boneName: `calf_${side}`, geometry: mergeColoredParts(calfParts) });
+      bakeBoneParts(`calf_${side}`, calfParts, { isMetal: classId === 'knight' });
 
-      const footParts: THREE.BufferGeometry[] = [
-        makeBoneSegmentBox(0.175, 0.06, 0.068, 0.055, 0.06, pal.primary),
+      const footParts: TaggedGeometryPart[] = [
+        tagPart(
+          makeBeveledBoneSegmentBox(0.175, 0.06, 0.068, 0.055, 0.06, 0.01, pal.primary),
+          `sabaton_${side}`,
+          armorRecipe,
+          pal.primary,
+          { accentHex: pal.trim }
+        ),
       ];
       if (tier >= 3) {
-        const toe = new THREE.BoxGeometry(0.11, 0.05, 0.06);
-        toe.translate(0, 0.15, 0.02);
-        footParts.push(prepareColoredPart(toe, pal.trim));
+        const toe = makeBeveledBox(0.11, 0.052, 0.065, 0.01, pal.trim, {
+          offset: [0, 0.15, 0.02],
+        });
+        footParts.push(tagPart(toe, `sabaton_toe_${side}`, 'brushed_gold', pal.trim));
       }
-      out.push({ boneName: `foot_${side}`, geometry: mergeColoredParts(footParts) });
+      bakeBoneParts(`foot_${side}`, footParts, { isMetal: classId === 'knight' });
     }
   } else if (slot === 'gloves') {
     for (const side of ['l', 'r'] as const) {
-      const bracerParts: THREE.BufferGeometry[] = [
-        makeBoneSegmentBox(lArm * 0.62, 0.054, 0.054, 0.062, 0.062, pal.primary),
+      const bracerParts: TaggedGeometryPart[] = [
+        tagPart(
+          makeBeveledBoneSegmentBox(lArm * 0.62, 0.054, 0.054, 0.062, 0.062, 0.01, pal.primary),
+          `bracer_${side}`,
+          armorRecipe,
+          pal.primary,
+          { accentHex: pal.trim }
+        ),
       ];
       if (tier >= 2) {
-        const rim = new THREE.BoxGeometry(0.12, 0.048, 0.12);
-        rim.translate(0, lArm * 0.56, 0);
-        bracerParts.push(prepareColoredPart(rim, pal.trim));
+        const rim = makeBeveledBox(0.12, 0.048, 0.12, 0.01, pal.trim, {
+          offset: [0, lArm * 0.56, 0],
+        });
+        bracerParts.push(tagPart(rim, `bracer_cuff_${side}`, 'brushed_gold', pal.trim));
       }
-      out.push({ boneName: `lowerarm_${side}`, geometry: mergeColoredParts(bracerParts) });
+      bakeBoneParts(`lowerarm_${side}`, bracerParts, { isMetal: classId === 'knight' });
 
-      const handArmor = makeBoneSegmentBox(0.115, 0.05, 0.048, 0.044, 0.042, pal.secondary);
-      out.push({ boneName: `hand_${side}`, geometry: handArmor });
+      bakeBoneParts(
+        `hand_${side}`,
+        [
+          tagPart(
+            makeBeveledBoneSegmentBox(0.115, 0.05, 0.048, 0.044, 0.042, 0.008, pal.secondary),
+            `gauntlet_${side}`,
+            armorRecipe,
+            pal.secondary,
+            { accentHex: pal.trim }
+          ),
+        ],
+        { isMetal: classId === 'knight' }
+      );
     }
   } else if (slot === 'weapon') {
     if (classId === 'knight') {
-      // Broadsword in hand_r (wide >=5cm blade facing camera) + Heater Shield in hand_l
-      const swParts: THREE.BufferGeometry[] = [];
-      const grip = new THREE.CylinderGeometry(0.024, 0.024, 0.24, 6);
+      const grip = makeLatheProfile(
+        [
+          [0.024, -0.12],
+          [0.022, 0.12],
+        ],
+        7,
+        '#3b1725'
+      );
       grip.rotateX(Math.PI * 0.5);
-      const pommel = new THREE.OctahedronGeometry(0.045, 0);
-      pommel.translate(0, 0, -0.14);
-      const guard = new THREE.BoxGeometry(0.28 + tier * 0.015, 0.05, 0.065);
-      guard.translate(0, 0, 0.13);
+      const pommel = makeBeveledBox(0.072, 0.064, 0.072, 0.016, pal.trim, {
+        offset: [0, 0, -0.14],
+      });
+      const guard = makeBeveledBox(0.28 + tier * 0.015, 0.05, 0.065, 0.012, pal.trim, {
+        offset: [0, 0, 0.13],
+      });
       const bladeLen = 0.72 + tier * 0.04;
       const bladeW = 0.105 + tier * 0.008;
-      const blade = new THREE.BoxGeometry(bladeW, 0.042, bladeLen);
-      blade.translate(0, 0, 0.16 + bladeLen * 0.5);
-      const tip = new THREE.ConeGeometry(bladeW * 0.6, 0.16, 4);
-      tip.rotateX(Math.PI * 0.5);
-      tip.rotateZ(Math.PI * 0.25);
-      tip.translate(0, 0, 0.16 + bladeLen + 0.07);
-      swParts.push(
-        prepareColoredPart(grip, '#3b1725'),
-        prepareColoredPart(pommel, pal.trim),
-        prepareColoredPart(guard, pal.trim),
-        prepareColoredPart(blade, pal.primary),
-        prepareColoredPart(tip, pal.glow)
-      );
-      out.push({ boneName: 'hand_r', geometry: mergeColoredParts(swParts) });
+      const blade = makeSwordBladeGeometry(bladeW, 0.04, bladeLen * 0.82, bladeLen * 0.22, pal.primary);
+      blade.rotateX(Math.PI * 0.5);
+      blade.translate(0, 0, 0.15);
 
-      const shParts: THREE.BufferGeometry[] = [];
+      bakeBoneParts(
+        'hand_r',
+        [
+          tagPart(grip, 'knight_sw_grip', 'stitched_leather', '#3b1725', { lockVertical: false }),
+          tagPart(pommel, 'knight_sw_pommel', 'brushed_gold', pal.trim, { lockVertical: false }),
+          tagPart(guard, 'knight_sw_guard', 'brushed_gold', pal.trim, { lockVertical: false }),
+          tagPart(blade, 'knight_sw_blade', tier >= 3 ? 'rarity_armor' : 'forged_steel', pal.primary, {
+            accentHex: pal.glow,
+            lockVertical: false,
+          }),
+        ],
+        { isMetal: true }
+      );
+
       const shieldW = 0.44 + tier * 0.015;
       const shieldH = 0.58 + tier * 0.02;
-      const body = new THREE.BoxGeometry(shieldW, shieldH, 0.065);
-      const rim = new THREE.BoxGeometry(shieldW + 0.045, shieldH + 0.045, 0.04);
-      const crossV = new THREE.BoxGeometry(0.08, shieldH - 0.10, 0.08);
-      const crossH = new THREE.BoxGeometry(shieldW - 0.10, 0.08, 0.08);
-      shParts.push(
-        prepareColoredPart(rim, pal.trim),
-        prepareColoredPart(body, pal.secondary),
-        prepareColoredPart(crossV, pal.primary),
-        prepareColoredPart(crossH, pal.primary)
-      );
-      for (const g of shParts) {
+      const dome = makeDomeShieldGeometry(shieldW, shieldH, 0.065, pal.secondary);
+      const boss = makeBeveledBox(0.11, 0.12, 0.055, 0.016, pal.trim, {
+        offset: [0, 0.03, 0.095],
+      });
+      for (const g of [dome, boss]) {
         g.rotateY(Math.PI * 0.5);
         g.translate(0.11, 0.06, 0.06);
       }
-      out.push({ boneName: 'hand_l', geometry: mergeColoredParts(shParts) });
-    } else if (classId === 'archer') {
-      // Composite Bow in hand_l + nocked arrow in hand_r
-      const bowParts: THREE.BufferGeometry[] = [];
-      const riser = new THREE.BoxGeometry(0.055, 0.34, 0.07);
-      const limbTop = new THREE.BoxGeometry(0.05, 0.42, 0.06);
-      limbTop.rotateX(-0.28);
-      limbTop.translate(0, 0.34, -0.06);
-      const limbBot = new THREE.BoxGeometry(0.05, 0.42, 0.06);
-      limbBot.rotateX(0.28);
-      limbBot.translate(0, -0.34, -0.06);
-      const tipTop = new THREE.BoxGeometry(0.065, 0.08, 0.08);
-      tipTop.translate(0, 0.54, -0.14);
-      const tipBot = new THREE.BoxGeometry(0.065, 0.08, 0.08);
-      tipBot.translate(0, -0.54, -0.14);
-      const stringBar = new THREE.BoxGeometry(0.025, 1.04, 0.025);
-      stringBar.translate(0, 0, -0.14);
-      bowParts.push(
-        prepareColoredPart(riser, pal.trim),
-        prepareColoredPart(limbTop, pal.primary),
-        prepareColoredPart(limbBot, pal.primary),
-        prepareColoredPart(tipTop, pal.secondary),
-        prepareColoredPart(tipBot, pal.secondary),
-        prepareColoredPart(stringBar, '#dae0ea')
+      bakeBoneParts(
+        'hand_l',
+        [
+          tagPart(dome, 'knight_shield_body', 'rarity_armor', pal.secondary, {
+            landmarkKind: 'shield_face',
+            accentHex: pal.trim,
+            lockVertical: false,
+          }),
+          tagPart(boss, 'knight_shield_boss', 'brushed_gold', pal.trim, { lockVertical: false }),
+        ],
+        { isMetal: true }
       );
-      for (const g of bowParts) g.translate(0, 0.05, 0.14);
-      out.push({ boneName: 'hand_l', geometry: mergeColoredParts(bowParts) });
-
-      const arrowShaft = new THREE.CylinderGeometry(0.018, 0.018, 0.68, 5);
-      arrowShaft.rotateX(Math.PI * 0.5);
-      arrowShaft.translate(0, 0, 0.25);
-      const arrowHead = new THREE.ConeGeometry(0.045, 0.12, 4);
-      arrowHead.rotateX(Math.PI * 0.5);
-      arrowHead.translate(0, 0, 0.62);
-      out.push({
-        boneName: 'hand_r',
-        geometry: mergeColoredParts([
-          prepareColoredPart(arrowShaft, '#6d758d'),
-          prepareColoredPart(arrowHead, pal.glow),
-        ]),
+    } else if (classId === 'archer') {
+      const bow = makeRecurveBowGeometry(1.16, 0.22, 0.046, pal.primary);
+      const riser = makeBeveledBox(0.062, 0.28, 0.072, 0.012, pal.trim);
+      const stringBar = makeBeveledBox(0.024, 1.0, 0.024, 0.004, '#dae0ea', {
+        offset: [0, 0, -0.14],
       });
+      for (const g of [bow, riser, stringBar]) {
+        g.translate(0, 0.05, 0.14);
+      }
+      bakeBoneParts(
+        'hand_l',
+        [
+          tagPart(bow, 'archer_bow', 'wood_planks', pal.primary, { accentHex: pal.trim }),
+          tagPart(riser, 'archer_riser', 'brushed_gold', pal.trim),
+          tagPart(stringBar, 'archer_string', 'bone_ivory', '#dae0ea'),
+        ],
+        { isMetal: false }
+      );
+
+      const shaft = makeLatheProfile(
+        [
+          [0.018, 0],
+          [0.018, 0.65],
+        ],
+        6,
+        '#6d758d'
+      );
+      shaft.rotateX(Math.PI * 0.5);
+      shaft.translate(0, 0, -0.08);
+      const head = makeSwordBladeGeometry(0.056, 0.028, 0.05, 0.1, pal.glow);
+      head.rotateX(Math.PI * 0.5);
+      head.translate(0, 0, 0.56);
+      bakeBoneParts(
+        'hand_r',
+        [
+          tagPart(shaft, 'archer_arrow_shaft', 'wood_planks', '#6d758d', { lockVertical: false }),
+          tagPart(head, 'archer_arrow_head', tier >= 3 ? 'runic_glow' : 'forged_steel', pal.glow, {
+            lockVertical: false,
+          }),
+        ],
+        { isMetal: false }
+      );
     } else {
-      // Mage Runic Staff in hand_r + Floating Focus Orb in hand_l
-      const stParts: THREE.BufferGeometry[] = [];
-      const pole = new THREE.CylinderGeometry(0.032, 0.026, 1.56, 6);
+      const pole = makeLatheProfile(
+        [
+          [0.026, -0.34],
+          [0.03, 0.45],
+          [0.036, 1.18],
+        ],
+        7,
+        pal.secondary
+      );
       pole.rotateX(Math.PI * 0.5);
-      pole.translate(0, 0, 0.42);
-      const crown = new THREE.BoxGeometry(0.18 + tier * 0.015, 0.18 + tier * 0.015, 0.08);
+      pole.translate(0, 0, 0.04);
+      const crown = makeBeveledBox(0.18 + tier * 0.015, 0.18 + tier * 0.015, 0.082, 0.018, pal.trim);
       crown.rotateZ(Math.PI * 0.25);
       crown.translate(0, 0, 1.24);
-      const crystal = new THREE.OctahedronGeometry(0.095 + tier * 0.01, 0);
+      const crystal = prepareColoredPart(new THREE.OctahedronGeometry(0.095 + tier * 0.01, 0), pal.glow);
       crystal.translate(0, 0, 1.32);
-      stParts.push(
-        prepareColoredPart(pole, pal.secondary),
-        prepareColoredPart(crown, pal.trim),
-        prepareColoredPart(crystal, pal.glow)
-      );
-      out.push({ boneName: 'hand_r', geometry: mergeColoredParts(stParts) });
 
-      const tome = new THREE.BoxGeometry(0.18, 0.24, 0.07);
-      tome.translate(0.04, 0.04, 0.08);
-      const rune = new THREE.OctahedronGeometry(0.055, 0);
-      rune.translate(0.04, 0.04, 0.14);
-      out.push({
-        boneName: 'hand_l',
-        geometry: mergeColoredParts([
-          prepareColoredPart(tome, pal.primary),
-          prepareColoredPart(rune, pal.glow),
-        ]),
+      bakeBoneParts(
+        'hand_r',
+        [
+          tagPart(pole, 'mage_staff_pole', 'wood_planks', pal.secondary, { lockVertical: false }),
+          tagPart(crown, 'mage_staff_crown', 'brushed_gold', pal.trim, { lockVertical: false }),
+          tagPart(crystal, 'mage_staff_crystal', 'runic_glow', pal.glow, { lockVertical: false }),
+        ],
+        { isMetal: false }
+      );
+
+      const tome = makeBeveledBox(0.18, 0.24, 0.072, 0.014, pal.primary, {
+        offset: [0.04, 0.04, 0.08],
       });
+      const rune = prepareColoredPart(new THREE.OctahedronGeometry(0.055, 0), pal.glow);
+      rune.translate(0.04, 0.04, 0.14);
+      bakeBoneParts(
+        'hand_l',
+        [
+          tagPart(tome, 'mage_tome', 'stitched_leather', pal.primary, {
+            landmarkKind: 'chest_crest',
+            accentHex: pal.trim,
+            lockVertical: false,
+          }),
+          tagPart(rune, 'mage_tome_rune', 'runic_glow', pal.glow, { lockVertical: false }),
+        ],
+        { isMetal: false }
+      );
     }
   }
 
@@ -697,6 +1089,10 @@ export function buildNwlPlayerCharacter(
     loadout?: Partial<EquipmentLoadout>;
     pixelSize?: number;
     objectId?: number;
+    finishMode?: FinishMode;
+    materialSeed?: number;
+    aoStrength?: number;
+    normalStrength?: number;
   } = {},
   sharedResources?: PixelizerMaterialResources
 ): PlayerCharacterInstance {
@@ -711,6 +1107,13 @@ export function buildNwlPlayerCharacter(
     weapon: options.loadout?.weapon ?? defaultRarity,
   };
 
+  const cfg: InternalFinishConfig = {
+    finishMode: options.finishMode ?? 'textured_ao',
+    materialSeed: Math.floor(options.materialSeed ?? 101),
+    aoStrength: options.aoStrength ?? 0.55,
+    normalStrength: options.normalStrength ?? 0.36,
+  };
+
   const px = options.pixelSize ?? 3;
   const objId = options.objectId ?? 10;
 
@@ -720,7 +1123,7 @@ export function buildNwlPlayerCharacter(
   root.add(rig.armature);
 
   // Attach Base Shell cleanly on UAL bones
-  const shellSpecs = buildBaseShellSpecs(rig);
+  const { specs: shellSpecs, headMetrics } = buildBaseShellSpecs(rig, cfg);
   const shellRes = attachRigidPartsToUalRig(rig, shellSpecs, sharedResources, {
     objectId: objId,
     pixelSize: px,
@@ -730,6 +1133,8 @@ export function buildNwlPlayerCharacter(
   const equippedMeshes = new Map<EquipSlot, { mesh: THREE.Mesh; mat: PixelizerMaterial }[]>();
   const allMeshes: THREE.Mesh[] = [...baseMeshes];
   const allMaterials: PixelizerMaterial[] = [...shellRes.materials];
+
+  root.userData.unwrapMetrics = headMetrics;
 
   const rebuildMeshLists = () => {
     allMeshes.length = 0;
@@ -750,36 +1155,35 @@ export function buildNwlPlayerCharacter(
       for (const e of existing) {
         e.mesh.removeFromParent();
         e.mesh.geometry.dispose();
-        e.mat.dispose();
+        disposeMaterialAndUnpooledTextures(e.mat);
       }
       equippedMeshes.delete(slot);
     }
 
     loadout[slot] = rarity;
     const def = getEquipmentPieceDef(currentClass, slot, rarity);
-    const specs = buildSlotAttachments(rig, currentClass, slot, rarity);
+    const specs = buildSlotAttachments(rig, currentClass, slot, rarity, cfg);
     const mounted: { mesh: THREE.Mesh; mat: PixelizerMaterial }[] = [];
 
     for (let i = 0; i < specs.length; i++) {
       const spec = specs[i];
       const bone = rig.boneByName.get(spec.boneName) ?? rig.rootBone;
       const mat = new PixelizerMaterial(
-        {
+        bakedToMaterialOptions(spec.baked, {
           pixelated: true,
           pixelSize: px,
           objectId: objId,
           outlineColor: '#14101c',
           outlineAlpha: 1.0,
-          baseColor: '#ffffff',
-          edgeHighlight: 0.35,
-          edgeBevelWeight: 0.75,
-          smoothness: 0.25,
+          workflow: spec.isMetal ? 'metallic' : 'specular',
+          metallic: spec.isMetal ? 0.26 : 0.0,
+          smoothness: spec.isMetal ? 0.34 : 0.22,
           useColorGrading: true,
-        },
+        }),
         sharedResources
       );
       mat.vertexColors = true;
-      const mesh = new THREE.Mesh(spec.geometry, mat);
+      const mesh = new THREE.Mesh(spec.baked.geometry, mat);
       mesh.name = `Equip_${currentClass}_${slot}_${rarity}_${i}`;
       mesh.castShadow = true;
       mesh.receiveShadow = true;
@@ -797,6 +1201,10 @@ export function buildNwlPlayerCharacter(
       } satisfies PixelizerObjectAttachment;
       bone.add(mesh);
       mounted.push({ mesh, mat });
+
+      if (spec.baked.uvReport) {
+        root.userData.unwrapMetrics = spec.baked.unwrapMetrics;
+      }
     }
 
     equippedMeshes.set(slot, mounted);
@@ -840,12 +1248,12 @@ export function buildNwlPlayerCharacter(
         m.removeFromParent();
         m.geometry.dispose();
       }
-      for (const mat of shellRes.materials) mat.dispose();
+      for (const mat of shellRes.materials) disposeMaterialAndUnpooledTextures(mat);
       for (const entries of equippedMeshes.values()) {
         for (const e of entries) {
           e.mesh.removeFromParent();
           e.mesh.geometry.dispose();
-          e.mat.dispose();
+          disposeMaterialAndUnpooledTextures(e.mat);
         }
       }
       equippedMeshes.clear();

@@ -23,6 +23,7 @@ import {
   buildNwlTilesetCatalog,
   type NwlTilesetBiome,
 } from '../../engine/procedural/NwlTilesetDungeon';
+import type { UnwrapMetricsSummary } from '../../engine/procedural/PixelMaterialSynth';
 import {
   buildNwlPlayerCharacter,
   type EquipSlot,
@@ -30,6 +31,7 @@ import {
   type PlayerCharacterInstance,
   type PlayerClassId,
 } from '../../engine/procedural/PlayerEquipmentBuilder';
+import type { FinishMode } from '../../engine/procedural/ProceduralGeometryKit';
 import {
   buildProceduralProp,
   type GeneratedPropResult,
@@ -48,6 +50,19 @@ import {
 } from '../../engine/procedural/TilesetStructureSolver';
 import type { UalGenderProfile, UalRigBuildMode } from '../../engine/rigging/UalRigSpec';
 
+export interface GeneratorFinishOptions {
+  finishMode: FinishMode;
+  seed: number;
+  aoStrength: number;
+  normalStrength: number;
+}
+
+export interface GeneratorPanelHandle {
+  getFinishOptions: () => GeneratorFinishOptions;
+  updateQualityStats: (metrics?: UnwrapMetricsSummary | null) => void;
+  rebuildLastGenerated: () => boolean;
+}
+
 export interface GeneratorHostContext {
   getSharedMaterialResources: () => PixelizerMaterialResources;
   mountGeneratedCharacter: (res: GeneratedCharacterResult) => void;
@@ -63,18 +78,54 @@ export interface GeneratorHostContext {
     materials: PixelizerMaterial[];
     isLargeStructure?: boolean;
     onUpdate?: (t: number) => void;
+    onCleanup?: () => void;
   }) => void;
   mountNwlSpellVfx: (res: GeneratedSpellVfxResult) => void;
   getCurrentPlayerInstance: () => PlayerCharacterInstance | null;
   getCurrentStructureRoot: () => THREE.Object3D | null;
   downloadBlob: (blob: Blob, filename: string) => void;
+  onFinishOptionsChanged?: (opts: GeneratorFinishOptions) => void;
 }
 
 export function mountGeneratorPanel(
   container: HTMLElement,
   ctx: GeneratorHostContext
-): void {
+): GeneratorPanelHandle {
   container.innerHTML = `
+    <div class="ctrl-section">
+      <div class="ctrl-section-head"><span>Acabamento Procedural (Texel &amp; AO)</span></div>
+      <div class="ctrl-section-body">
+        <div class="field-row">
+          <label class="field-label" for="gen-finish-mode">Finish Mode</label>
+          <select id="gen-finish-mode" class="select-ctrl select-ctrl-sm" style="width:170px;">
+            <option value="textured_ao" selected>Texturizado + AO + Normal (Novo)</option>
+            <option value="classic_flat">Clássico Flat (Legado)</option>
+          </select>
+        </div>
+        <div class="field-row">
+          <label class="field-label" for="gen-mat-seed">Material Seed</label>
+          <input id="gen-mat-seed" type="number" class="select-ctrl select-ctrl-sm" style="width:92px;" value="101" step="1" />
+        </div>
+        <div class="slider-row">
+          <div class="slider-head">
+            <span>Vertex &amp; Texel AO</span>
+            <span id="gen-ao-val" class="slider-val">0.55</span>
+          </div>
+          <input id="gen-ao-str" type="range" min="0" max="1" step="0.05" value="0.55" />
+        </div>
+        <div class="slider-row">
+          <div class="slider-head">
+            <span>Normal Relief</span>
+            <span id="gen-norm-val" class="slider-val">0.36</span>
+          </div>
+          <input id="gen-norm-str" type="range" min="0" max="1" step="0.05" value="0.36" />
+        </div>
+        <div id="gen-quality-stats" class="voxel-stats-box">
+          <span>UV &amp; Texture Quality Gate pronto</span>
+        </div>
+      </div>
+    </div>
+
     <div class="ctrl-section">
       <div class="ctrl-section-head"><span>NWL Herói Modular (1.79m · 6 Slots × 5 Raridades)</span></div>
       <div class="ctrl-section-body">
@@ -236,19 +287,82 @@ export function mountGeneratorPanel(
     </div>
   `;
 
+  const selFinishMode = container.querySelector<HTMLSelectElement>('#gen-finish-mode')!;
+  const inpMatSeed = container.querySelector<HTMLInputElement>('#gen-mat-seed')!;
+  const rngAoStr = container.querySelector<HTMLInputElement>('#gen-ao-str')!;
+  const valAoStr = container.querySelector<HTMLElement>('#gen-ao-val')!;
+  const rngNormStr = container.querySelector<HTMLInputElement>('#gen-norm-str')!;
+  const valNormStr = container.querySelector<HTMLElement>('#gen-norm-val')!;
+  const qualityStatsEl = container.querySelector<HTMLElement>('#gen-quality-stats')!;
   const statusEl = container.querySelector<HTMLElement>('#gen-status')!;
 
-  container.querySelector('#gen-btn-nwl-hero')!.addEventListener('click', () => {
+  const getFinishOptions = (): GeneratorFinishOptions => ({
+    finishMode: (selFinishMode.value as FinishMode) || 'textured_ao',
+    seed: Math.floor(Number(inpMatSeed.value) || 101),
+    aoStrength: Number(rngAoStr.value),
+    normalStrength: Number(rngNormStr.value),
+  });
+
+  const updateQualityStats = (metrics?: UnwrapMetricsSummary | null) => {
+    if (!metrics) {
+      qualityStatsEl.textContent = 'UV & Texture Quality Gate pronto (sem bake ativo)';
+      return;
+    }
+    if (metrics.finishMode === 'classic_flat' || metrics.texWidth === 0) {
+      qualityStatsEl.textContent = `Modo: Clássico Flat · ${metrics.triangleCount} tris · sem atlas`;
+      return;
+    }
+    qualityStatsEl.textContent =
+      `Atlas ${metrics.texWidth}×${metrics.texHeight} @ ${metrics.texelsPerMeter}px/m · ` +
+      `${metrics.islandsCount} ilhas · Overlap ${metrics.overlapPairs} · ` +
+      `H=${metrics.meanEntropy.toFixed(2)} · MinAO=${metrics.minVertexAo.toFixed(2)}`;
+  };
+
+  let lastGeneratedAction: (() => void) | null = null;
+  let lastDungeonSeed = 101;
+
+  const notifyFinishChanged = () => {
+    valAoStr.textContent = Number(rngAoStr.value).toFixed(2);
+    valNormStr.textContent = Number(rngNormStr.value).toFixed(2);
+    ctx.onFinishOptionsChanged?.(getFinishOptions());
+  };
+
+  selFinishMode.addEventListener('change', notifyFinishChanged);
+  inpMatSeed.addEventListener('change', notifyFinishChanged);
+  rngAoStr.addEventListener('change', notifyFinishChanged);
+  rngAoStr.addEventListener('input', () => {
+    valAoStr.textContent = Number(rngAoStr.value).toFixed(2);
+  });
+  rngNormStr.addEventListener('change', notifyFinishChanged);
+  rngNormStr.addEventListener('input', () => {
+    valNormStr.textContent = Number(rngNormStr.value).toFixed(2);
+  });
+
+  const runNwlHero = () => {
     const classId = container.querySelector<HTMLSelectElement>('#gen-nwl-class')!
       .value as PlayerClassId;
     const rarity = container.querySelector<HTMLSelectElement>('#gen-nwl-rarity')!
       .value as ItemRarity;
+    const finish = getFinishOptions();
     const player = buildNwlPlayerCharacter(
-      { classId, rarity, pixelSize: 3 },
+      {
+        classId,
+        rarity,
+        pixelSize: 3,
+        finishMode: finish.finishMode,
+        materialSeed: finish.seed,
+        aoStrength: finish.aoStrength,
+        normalStrength: finish.normalStrength,
+      },
       ctx.getSharedMaterialResources()
     );
     ctx.mountNwlPlayer(player);
-    statusEl.textContent = `Herói ${classId.toUpperCase()} (${rarity}) no PlayerBaseShell 1.79m (6 slots equipados)`;
+    statusEl.textContent = `Herói ${classId.toUpperCase()} (${rarity}) no PlayerBaseShell 1.79m (6 slots · ${finish.finishMode})`;
+  };
+
+  container.querySelector('#gen-btn-nwl-hero')!.addEventListener('click', () => {
+    lastGeneratedAction = runNwlHero;
+    runNwlHero();
   });
 
   container.querySelector('#gen-btn-swap-slot')!.addEventListener('click', () => {
@@ -261,60 +375,113 @@ export function mountGeneratorPanel(
       return;
     }
     const def = player.equipSlot(slot, rarity);
+    updateQualityStats(player.root.userData.unwrapMetrics as UnwrapMetricsSummary | undefined);
     statusEl.textContent = `Equipado ao vivo no bone: ${def.displayName}`;
   });
 
-  container.querySelector('#gen-btn-npc')!.addEventListener('click', () => {
+  const runNwlNpc = () => {
     const npcId = container.querySelector<HTMLSelectElement>('#gen-nwl-npc')!.value as NwlNpcId;
-    const res = buildNwlNpc(npcId, { pixelSize: 3 }, ctx.getSharedMaterialResources());
+    const finish = getFinishOptions();
+    const res = buildNwlNpc(
+      npcId,
+      {
+        pixelSize: 3,
+        finishMode: finish.finishMode,
+        seed: finish.seed,
+        aoStrength: finish.aoStrength,
+        normalStrength: finish.normalStrength,
+      },
+      ctx.getSharedMaterialResources()
+    );
     ctx.mountNwlNpc(res);
     statusEl.textContent = `${res.spec.namePt} (${res.id}) · ${res.spec.buildingName}`;
+  };
+
+  container.querySelector('#gen-btn-npc')!.addEventListener('click', () => {
+    lastGeneratedAction = runNwlNpc;
+    runNwlNpc();
   });
 
-  container.querySelector('#gen-btn-monster')!.addEventListener('click', () => {
+  const runNwlMonster = () => {
     const mId = container.querySelector<HTMLSelectElement>('#gen-nwl-monster')!
       .value as NwlMonsterId;
-    const res = buildNwlMonster(mId, { pixelSize: 3 }, ctx.getSharedMaterialResources());
+    const finish = getFinishOptions();
+    const res = buildNwlMonster(
+      mId,
+      {
+        pixelSize: 3,
+        finishMode: finish.finishMode,
+        seed: finish.seed,
+        aoStrength: finish.aoStrength,
+        normalStrength: finish.normalStrength,
+      },
+      ctx.getSharedMaterialResources()
+    );
     ctx.mountNwlMonster(res);
     statusEl.textContent = `${res.spec.namePt} · ${res.spec.targetHeightM}m (~${res.spec.targetHeightPx}px)`;
+  };
+
+  container.querySelector('#gen-btn-monster')!.addEventListener('click', () => {
+    lastGeneratedAction = runNwlMonster;
+    runNwlMonster();
   });
 
-  container.querySelector('#gen-btn-tileset')!.addEventListener('click', () => {
+  const runNwlTileset = () => {
     const biome = container.querySelector<HTMLSelectElement>('#gen-nwl-tileset')!
       .value as NwlTilesetBiome;
-    const cat = buildNwlTilesetCatalog(biome, ctx.getSharedMaterialResources());
+    const finish = getFinishOptions();
+    const cat = buildNwlTilesetCatalog(biome, ctx.getSharedMaterialResources(), finish);
     ctx.mountNwlCustomScene({
       name: `Tileset NWL 1.5m: ${biome}`,
       description: `${cat.pieceCount} peças modulares (chão, paredes 3m, flora, altar, baú, armadilha, destrutíveis).`,
       root: cat.root,
       materials: cat.materials,
       isLargeStructure: true,
+      onCleanup: () => cat.dispose(),
     });
     statusEl.textContent = `Kit Tileset ${biome} (${cat.pieceCount} peças · 1.5m)`;
+  };
+
+  container.querySelector('#gen-btn-tileset')!.addEventListener('click', () => {
+    lastGeneratedAction = runNwlTileset;
+    runNwlTileset();
   });
 
-  container.querySelector('#gen-btn-dungeon1')!.addEventListener('click', () => {
-    const seed = Math.floor(Math.random() * 900 + 100);
-    const dung = buildGreenRuinsFloor1(seed, ctx.getSharedMaterialResources());
+  const runDungeon1 = () => {
+    const finish = getFinishOptions();
+    const dung = buildGreenRuinsFloor1(lastDungeonSeed, ctx.getSharedMaterialResources(), {
+      finishMode: finish.finishMode,
+      seed: finish.seed,
+      aoStrength: finish.aoStrength,
+      normalStrength: finish.normalStrength,
+    });
     ctx.mountNwlCustomScene({
-      name: `Ruínas Verdes · Andar 1 (Seed ${seed})`,
+      name: `Ruínas Verdes · Andar 1 (Seed ${lastDungeonSeed})`,
       description: `${dung.rooms.length} salas conectadas (1.5m/tile) · 5 Inimigos + Boss Demônio (2.95m) + Destrutíveis + Armadilhas.`,
       root: dung.root,
       materials: dung.materials,
       isLargeStructure: true,
       onUpdate: (t) => dung.update(t),
+      onCleanup: () => dung.dispose(),
     });
-    statusEl.textContent = `Ruínas Verdes Andar 1 gerado (Seed ${seed} · ${dung.enemySpawns.length} monstros)`;
+    statusEl.textContent = `Ruínas Verdes Andar 1 gerado (Seed ${lastDungeonSeed} · ${dung.enemySpawns.length} monstros)`;
+  };
+
+  container.querySelector('#gen-btn-dungeon1')!.addEventListener('click', () => {
+    lastDungeonSeed = Math.floor(Math.random() * 900 + 100);
+    lastGeneratedAction = runDungeon1;
+    runDungeon1();
   });
 
   container.querySelector('#gen-btn-spell')!.addEventListener('click', () => {
+    lastGeneratedAction = null;
     const id = container.querySelector<HTMLSelectElement>('#gen-nwl-spell')!.value as NwlSpellVfxId;
     const vfx = buildNwlSpellVfx(id, ctx.getSharedMaterialResources());
     ctx.mountNwlSpellVfx(vfx);
     statusEl.textContent = `VFX 3D: ${vfx.meta.labelPt} (${vfx.triangleCount} tris · zero brilho suave)`;
   });
 
-  container.querySelector('#gen-btn-character')!.addEventListener('click', () => {
+  const runUalCharacter = () => {
     const archetype = container.querySelector<HTMLSelectElement>('#gen-char-arch')!
       .value as CharacterArchetype;
     const genderProfile = container.querySelector<HTMLInputElement>('#gen-char-gender')!
@@ -323,35 +490,79 @@ export function mountGeneratorPanel(
       .value as UalRigBuildMode;
     const visualStyle = container.querySelector<HTMLSelectElement>('#gen-char-style')!
       .value as 'lowpoly' | 'voxel';
-    const seed = Number(container.querySelector<HTMLInputElement>('#gen-char-seed')!.value) || 42;
+    const finish = getFinishOptions();
 
     const result = buildProceduralUalCharacter(
-      { archetype, genderProfile, rigMode, visualStyle, seed, voxelResolution: 24 },
+      {
+        archetype,
+        genderProfile,
+        rigMode,
+        visualStyle,
+        seed: finish.seed,
+        voxelResolution: 24,
+        finishMode: finish.finishMode,
+        aoStrength: finish.aoStrength,
+        normalStrength: finish.normalStrength,
+      },
       ctx.getSharedMaterialResources()
     );
     ctx.mountGeneratedCharacter(result);
-    statusEl.textContent = `UAL ${archetype} (${rigMode}, ${visualStyle})`;
+    statusEl.textContent = `UAL ${archetype} (${rigMode}, ${visualStyle}, ${finish.finishMode})`;
+  };
+
+  container.querySelector('#gen-btn-character')!.addEventListener('click', () => {
+    lastGeneratedAction = runUalCharacter;
+    runUalCharacter();
   });
 
-  container.querySelector('#gen-btn-prop')!.addEventListener('click', () => {
+  const runProp = () => {
     const kind = container.querySelector<HTMLSelectElement>('#gen-prop-kind')!.value as PropKind;
+    const finish = getFinishOptions();
     const result = buildProceduralProp(
-      { kind, visualStyle: 'lowpoly', seed: 1337 },
+      {
+        kind,
+        visualStyle: 'lowpoly',
+        seed: finish.seed,
+        finishMode: finish.finishMode,
+        aoStrength: finish.aoStrength,
+        normalStrength: finish.normalStrength,
+      },
       ctx.getSharedMaterialResources()
     );
     ctx.mountGeneratedProp(result);
-    statusEl.textContent = `Prop ${kind} (${result.dimensions.map((d) => d.toFixed(2)).join('×')}m)`;
+    statusEl.textContent = `Prop ${kind} (${result.dimensions.map((d) => d.toFixed(2)).join('×')}m · ${finish.finishMode})`;
+  };
+
+  container.querySelector('#gen-btn-prop')!.addEventListener('click', () => {
+    lastGeneratedAction = runProp;
+    runProp();
   });
 
-  container.querySelector('#gen-btn-structure')!.addEventListener('click', () => {
+  const runStructure = () => {
     const biome = container.querySelector<HTMLSelectElement>('#gen-struct-biome')!
       .value as StructureBiome;
+    const finish = getFinishOptions();
     const result = buildProceduralStructure(
-      { biome, cols: 4, rows: 4, floors: 1, visualStyle: 'lowpoly', seed: 77 },
+      {
+        biome,
+        cols: 4,
+        rows: 4,
+        floors: 1,
+        visualStyle: 'lowpoly',
+        seed: finish.seed,
+        finishMode: finish.finishMode,
+        aoStrength: finish.aoStrength,
+        normalStrength: finish.normalStrength,
+      },
       ctx.getSharedMaterialResources()
     );
     ctx.mountGeneratedStructure(result);
-    statusEl.textContent = `WFC ${biome} (4×4): ${result.cells.length} células`;
+    statusEl.textContent = `WFC ${biome} (4×4): ${result.cells.length} células (${finish.finishMode})`;
+  };
+
+  container.querySelector('#gen-btn-structure')!.addEventListener('click', () => {
+    lastGeneratedAction = runStructure;
+    runStructure();
   });
 
   container.querySelector('#gen-btn-struct-glb')!.addEventListener('click', () => {
@@ -366,13 +577,21 @@ export function mountGeneratorPanel(
       clone.traverse((o) => {
         if (o instanceof THREE.Mesh) {
           const pm = o.material as PixelizerMaterial;
+          const opts = pm?.options;
+          const isMetal = opts?.workflow === 'metallic';
           const m = new THREE.MeshStandardMaterial({
-            color: '#ffffff',
+            color: opts?.baseColor ? new THREE.Color(opts.baseColor) : '#ffffff',
             vertexColors: Boolean(o.geometry?.getAttribute('color')),
-            metalness: 0.08,
-            roughness: 0.78,
+            map: opts?.albedoMap ?? null,
+            normalMap: opts?.normalMap ?? null,
+            emissive: opts?.emissionColor ? new THREE.Color(opts.emissionColor) : '#000000',
+            emissiveMap: opts?.emissionMap ?? null,
+            emissiveIntensity:
+              opts && opts.emissionIntensity > 0 ? Math.min(0.45, opts.emissionIntensity * 0.3) : 0,
+            metalness: isMetal ? Math.min(0.35, Math.max(0.05, opts.metallic)) : 0.08,
+            roughness: opts ? Math.max(0.25, Math.min(0.95, 1.0 - opts.smoothness)) : 0.78,
+            side: pm?.side ?? THREE.FrontSide,
           });
-          if (pm?.options?.baseColor) m.color.set(pm.options.baseColor);
           dispMats.push(m);
           o.material = m;
         }
@@ -389,4 +608,14 @@ export function mountGeneratorPanel(
       }
     })();
   });
+
+  return {
+    getFinishOptions,
+    updateQualityStats,
+    rebuildLastGenerated: () => {
+      if (!lastGeneratedAction) return false;
+      lastGeneratedAction();
+      return true;
+    },
+  };
 }

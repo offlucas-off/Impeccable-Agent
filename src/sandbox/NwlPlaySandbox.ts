@@ -24,6 +24,7 @@ import {
   type PlayerCharacterInstance,
   type PlayerClassId,
 } from '../engine/procedural/PlayerEquipmentBuilder';
+import type { FinishMode } from '../engine/procedural/ProceduralGeometryKit';
 import { mergeColoredParts, prepareColoredPart } from '../engine/procedural/SdfVoxelPrimitives';
 import {
   buildNwlSpellVfx,
@@ -145,16 +146,37 @@ export function createNwlPlaySandbox(
   callbacks: {
     onExitSandbox: () => void;
     onZoneOrActorChanged?: () => void;
+    finishOptions?: {
+      finishMode?: FinishMode;
+      seed?: number;
+      aoStrength?: number;
+      normalStrength?: number;
+    };
   }
 ): PlaySandboxHandle {
   const root = new THREE.Group();
   root.name = 'NWL_Play_Sandbox';
 
   const res = (): PixelizerMaterialResources => pipeline.getSharedResourcesForMaterial();
+  const sandboxFinish = {
+    finishMode: callbacks.finishOptions?.finishMode ?? ('textured_ao' as FinishMode),
+    seed: Math.floor(callbacks.finishOptions?.seed ?? 101),
+    aoStrength: callbacks.finishOptions?.aoStrength ?? 0.55,
+    normalStrength: callbacks.finishOptions?.normalStrength ?? 0.36,
+  };
 
   // Build Hero (canonical 1.79m base shell + 6 modular equip slots)
   const hero: PlayerCharacterInstance = buildNwlPlayerCharacter(
-    { classId: 'knight', rarity: 'normal', pixelSize: 3, objectId: 10 },
+    {
+      classId: 'knight',
+      rarity: 'normal',
+      pixelSize: 3,
+      objectId: 10,
+      finishMode: sandboxFinish.finishMode,
+      materialSeed: sandboxFinish.seed,
+      aoStrength: sandboxFinish.aoStrength,
+      normalStrength: sandboxFinish.normalStrength,
+    },
     res()
   );
   hero.root.position.set(0, 0, 1.8);
@@ -322,14 +344,14 @@ export function createNwlPlaySandbox(
 
     zone = nextZone;
     if (zone === 'city') {
-      city = buildNwlStarterCity(res());
+      city = buildNwlStarterCity(res(), sandboxFinish);
       root.add(city.root);
       hero.root.position.copy(city.playerSpawnPos);
       heroHp = heroMaxHp;
       lastEventText = 'Cidade Principal dos Portais — fale com NPCs ou entre no Portal!';
     } else {
       dungeonSeed = newSeed ?? Math.floor(Math.random() * 9000 + 100);
-      dungeon = buildGreenRuinsFloor1(dungeonSeed, res());
+      dungeon = buildGreenRuinsFloor1(dungeonSeed, res(), sandboxFinish);
       root.add(dungeon.root);
       hero.root.position.copy(dungeon.playerSpawnPos);
 

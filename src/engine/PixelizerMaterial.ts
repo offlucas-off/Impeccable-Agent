@@ -22,6 +22,38 @@ export interface PixelizerMaterialResources {
 }
 
 /**
+ * Enforces crisp pixel-art sampling (NearestFilter, zero mipmaps, calibrated colorSpace)
+ * without mutating flipY or wrap modes.
+ */
+export function enforcePixelArtTextureSampling<T extends THREE.Texture>(
+  tex: T,
+  kind: 'albedo' | 'normal' | 'emission' = 'albedo'
+): T {
+  const targetSpace = kind === 'normal' ? THREE.NoColorSpace : THREE.SRGBColorSpace;
+  let changed = false;
+  if (tex.magFilter !== THREE.NearestFilter) {
+    tex.magFilter = THREE.NearestFilter;
+    changed = true;
+  }
+  if (tex.minFilter !== THREE.NearestFilter) {
+    tex.minFilter = THREE.NearestFilter;
+    changed = true;
+  }
+  if (tex.generateMipmaps !== false) {
+    tex.generateMipmaps = false;
+    changed = true;
+  }
+  if (tex.colorSpace !== targetSpace) {
+    tex.colorSpace = targetSpace;
+    changed = true;
+  }
+  if (changed) {
+    tex.needsUpdate = true;
+  }
+  return tex;
+}
+
+/**
  * Custom WebGL2 GLSL3 MRT Material replicating ProPixelizer's UberShader:
  * - Sparse Pixel Expansion seed clipping (Attempt #3, 1x1 up to 10x10)
  * - Cel shading via HSV Value sampled through 1D Lighting Ramp
@@ -31,6 +63,7 @@ export interface PixelizerMaterialResources {
  */
 export class PixelizerMaterial extends THREE.ShaderMaterial {
   public options: Required<PixelizerMaterialOptions>;
+  private hasTangentDefine = false;
 
   constructor(
     options: PixelizerMaterialOptions = {},
@@ -52,6 +85,7 @@ export class PixelizerMaterial extends THREE.ShaderMaterial {
       albedoMap: options.albedoMap ?? null,
       normalMap: options.normalMap ?? null,
       normalScale: options.normalScale ?? 1.0,
+      useVertexTangents: options.useVertexTangents ?? false,
       emissionMap: options.emissionMap ?? null,
       emissionColor: options.emissionColor ?? '#000000',
       emissionIntensity: options.emissionIntensity ?? 1.0,
@@ -127,17 +161,24 @@ export class PixelizerMaterial extends THREE.ShaderMaterial {
       },
     ]);
 
+    const defines: Record<string, string | number | boolean> = {};
+    if (resolved.useVertexTangents && resolved.normalMap) {
+      defines.USE_TANGENT = '';
+    }
+
     super({
       glslVersion: THREE.GLSL3,
       vertexShader: OBJECT_VERTEX_SHADER,
       fragmentShader: OBJECT_FRAGMENT_SHADER,
       uniforms,
+      defines,
       lights: true,
       transparent: false,
       depthTest: true,
       depthWrite: true,
     });
 
+    this.hasTangentDefine = Boolean(defines.USE_TANGENT !== undefined);
     this.options = resolved;
     this.syncUniforms();
   }
@@ -164,6 +205,27 @@ export class PixelizerMaterial extends THREE.ShaderMaterial {
   public syncUniforms(): void {
     const o = this.options;
     const white = getFallbackWhiteTexture();
+
+    if (o.albedoMap instanceof THREE.DataTexture) {
+      enforcePixelArtTextureSampling(o.albedoMap, 'albedo');
+    }
+    if (o.normalMap instanceof THREE.DataTexture) {
+      enforcePixelArtTextureSampling(o.normalMap, 'normal');
+    }
+    if (o.emissionMap instanceof THREE.DataTexture) {
+      enforcePixelArtTextureSampling(o.emissionMap, 'emission');
+    }
+
+    const wantTangent = Boolean(o.useVertexTangents && o.normalMap);
+    if (wantTangent !== this.hasTangentDefine) {
+      if (wantTangent) {
+        this.defines = { ...this.defines, USE_TANGENT: '' };
+      } else if (this.defines) {
+        delete this.defines.USE_TANGENT;
+      }
+      this.hasTangentDefine = wantTangent;
+      this.needsUpdate = true;
+    }
 
     this.uniforms.uPixelated.value = o.pixelated ? 1 : 0;
     this.uniforms.uPixelSize.value = Math.max(1, Math.min(10, Math.round(o.pixelSize)));

@@ -1,6 +1,6 @@
-# Shader Pipeline, Palettes, Dithers & Style Presets
+# Shader Pipeline, TBN Normal Mapping, Palettes & Style Presets
 
-Detailed reference for editing the 4-pass WebGL2 `GLSL3` rendering pipeline and color grading system.
+Detailed reference for editing the 4-pass WebGL2 `GLSL3` rendering pipeline, TBN tangent space, and color grading system.
 
 ---
 
@@ -9,10 +9,16 @@ Detailed reference for editing the 4-pass WebGL2 `GLSL3` rendering pipeline and 
 | Pass | Target / Shader | Behavior |
 |---|---|---|
 | **Pass 0** | Shadow Maps (`THREE.BasicShadowMap`) | Casts crisp shadows onto world & characters |
-| **Pass 1** | `objectShader.ts` -> 4 MRT attachments | Evaluates skinning + morphs, performs sparse seed clipping for `pixelSize` `1..10`, cel lighting + Dual LUT + ordered dither |
+| **Pass 1** | `objectShader.ts` -> 4 MRT attachments | Skinning + Morphs + Lengyel TBN (`USE_TANGENT`) / cotangent TBN fallback + Sparse seed clipping (`1..10`) + Cel lighting + Dual LUT + Ordered dither |
 | **Pass 2** | `expansionShader.ts` | Nearest-depth `Attempt #3` expansion across `[-uSearchRadius..+uSearchRadius]` (up to `±6` for `10×10`), packing winner delta into `gMeta.b` |
-| **Pass 3** | `outlineEdgeShader.ts` | Draws depth-tested silhouettes by `objectId`, deterministic 1-macropixel normal creases, staircase depth edges, and light-reactive bevel edges |
+| **Pass 3** | `outlineEdgeShader.ts` | Depth-tested silhouettes by `objectId`, deterministic 1-macropixel normal creases, staircase depth edges, and light-reactive bevel edges |
 | **Pass 4** | `upscaleShader.ts` | Pixel-Art AA (Cole Cecil filter) or Nearest upscale + camera subpixel motion compensation + live A/B split compare |
+
+### TBN Tangent Contract (`PixelizerMaterial.ts` & `objectShader.ts`)
+
+- Whenever procedural geometry supplies a `tangent` (`vec4`) attribute and `normalMap !== null`, pass `useVertexTangents: true` in `PixelizerMaterialOptions`.
+- `PixelizerMaterial` automatically toggles `#define USE_TANGENT` on `syncUniforms()`, transforms tangent + bitangent (`cross(N, T) * sign(tangent.w)`) in view space (including `skinning`/`instancing`), and falls back cleanly to `dFdx/dFdy` screen-space cotangent frames when `USE_TANGENT` is unset.
+- Call `enforcePixelArtTextureSampling(tex, 'albedo' | 'normal' | 'emission')` whenever creating or attaching pixel-art `DataTexture`s (`NearestFilter`, `generateMipmaps = false`, `SRGBColorSpace` for albedo/emission, `NoColorSpace` for tangent-space normals).
 
 ### MRT Color Attachments
 
@@ -33,9 +39,13 @@ Remember that GLSL loop bounds must match `uSearchRadius` (currently capped at `
 
 ---
 
-## 2. Adding a Color Palette (`src/engine/palettes.ts`)
+## 2. Color Palettes & Dithering (`src/engine/palettes.ts`)
 
 Palettes compile on demand via `buildPaletteLutPair` into two `256×16` RGBA textures (`16×16×16` blue-sliced 3D LUTs storing best color `C1` and runner-up dither pair `C2`).
+
+### NWL Official Palette (`snes_pal_nwl`)
+- Contains **24 curated dark-fantasy swatches**: preserves all 18 original SNES Dark Fantasy colors (including skin `#e0a882`, `#b87b56`) plus 6 material midtones (`#3e4356` gunmetal, `#4f3428` oak, `#7c4d32` chestnut, `#4e7a48` sage moss, `#8f8a82` warm stone, `#c8bfa8` parchment plaster).
+- Uses `method: 'oklab_perceptual'` with `ditherStrength: 0.35`, preventing neutral steel armor and wooden props from picking up false green/purple/orange confetti under Dual LUT sampling.
 
 To add a built-in palette, append an entry to `BUILTIN_PALETTES`:
 
@@ -47,37 +57,23 @@ To add a built-in palette, append an entry to `BUILTIN_PALETTES`:
   method: 'oklab_perceptual', // or 'hsv_weighted' | 'hue_priority' | 'rgb_euclidean' | 'value_nearest' | 'posterize_quant'
   hsvWeights: [0.4, 0.3, 1.0],
   enableDither: true,
-  ditherStrength: 0.85, // 0..1
-  valueCurveGamma: 1.0, // >1 deepens midtones, <1 brightens
+  ditherStrength: 0.35, // keep <= 0.45 for textured procedural atlases
+  valueCurveGamma: 1.0,
 }
 ```
 
 ### Selecting Conversion Metric
-- `hue_priority` + `valueCurveGamma: 1.05`: Best for crisp dark-fantasy SNES palettes (`snes_pal_nwl`) preserving saturated reds/oranges/greens.
-- `oklab_perceptual`: Smoothest hue/lightness perception on stylized/painterly palettes (`resurrect64`, `hades_ink`).
-- `value_nearest`: Strict luminance ramp ordering (`gameboy_dmg`, `1bit_ink`).
-- `posterize_quant`: Channel quantization (`rgb64`).
+- `oklab_perceptual`: Best overall hue/chroma neutrality across both procedural textures (`textured_ao`) and painterly palettes (`snes_pal_nwl`, `resurrect64`, `hades_ink`).
+- `hue_priority` (`snes_pal`, `cyber_neon`): Emphasizes saturated primary/accent hues.
+- `value_nearest`: Strict luminance ramp ordering (`gameboy`, `1bit_ink`).
+- `posterize_quant`: Channel quantization (`rgb222`).
 
 ---
 
-## 3. Adding Dither Matrices (`src/engine/dither.ts`) & Lighting Ramps (`src/engine/lightingRamps.ts`)
+## 3. Lighting Ramps (`src/engine/lightingRamps.ts`) & Visual Style Presets
 
-- **Dither pattern** (`4×4` = 16 ints `0..16`; `8×8` = 64 ints `0..64`):
-  Add to `BUILTIN_DITHER_PATTERNS` with `size: 4 | 8` and `thresholds`. `createDitherTexture()` normalizes thresholds into `[0..1]` inside a nearest-sampled `DataTexture`.
-- **Lighting Ramp** (`BUILTIN_LIGHTING_RAMPS`):
-  Define sorted stops `{ position: 0..1, color: '#RRGGBB' }` and `smooth: false` (crisp cel bands) or `true`.
-  **Watch out for shadow legibility**: Setting stop `0.0` too dark (near `#000000`) collapses dark armor/skin silhouettes into black blobs. Keep dramatic shadows around `#2b2042`..`#454860` unless pure 1-bit ink is intended.
-
----
-
-## 4. Adding a Visual Style Preset
-
-In `PixelizerPipeline.ts`:
-1. Extend `export type VisualStylePresetId = 'nwl_snes' | 'hades_lab' | 'my_preset';`.
-2. Add a branch in `applyVisualStylePreset(preset, scene)` setting:
-   - `activePaletteId`, `activeDitherId`, `activeRampId`
-   - `pipelineConfig.filterMode` (`'only_pixelized'` | `'full_scene'` | `'cel_hard'`)
-   - `usePixelExpansion`, `normalEdgeThreshold`, `edgeHighlightStrength`, `edgeBevelStrength`
-   - Light/ambient colors and intensities
-   - Optional `scene.traverse(...)` updating `PixelizerMaterial` (`pixelSize`, `outlineColor`, `edgeHighlight`, `edgeBevelWeight`).
-3. Expose the option in `#sel-style-preset` inside `src/studio/ui/studioApp.ts` and handle syncing UI controls (`selLightingRamp`, `paletteEditor.refresh()`, light rig uniforms).
+- **Dither patterns (`src/engine/dither.ts`)**: `4×4` (16 ints `0..16`) or `8×8` (64 ints `0..64`).
+- **Lighting Ramps (`BUILTIN_LIGHTING_RAMPS`)**: Sorted `{ position, color }` stops (`smooth: false` for crisp cel bands). Keep shadow stop `0.0` lifted (`#2b2042`..`#454860`) so dark armors/hides retain readable silhouette edges.
+- **Visual Style Presets (`applyVisualStylePreset` in `PixelizerPipeline.ts`)**:
+  - `'nwl_snes'` (Official Default): `snes_pal_nwl`, `bayer4x4`, `three_band`, `pixelSize: 3`, `filterMode: 'only_pixelized'`.
+  - `'hades_lab'` (Experimental): `hades_ink`, `bayer4x4`, `hades_graphic_ink`, `pixelSize: 1`, `filterMode: 'only_pixelized'`. Compatible with all `textured_ao` assets.
