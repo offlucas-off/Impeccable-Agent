@@ -4,7 +4,13 @@ import {
   enforcePixelArtTextureSampling,
   type PixelizerMaterialResources,
 } from '../PixelizerMaterial';
-import type { PixelizerMaterialOptions } from '../types';
+import {
+  findDitherPair,
+  hexToRgb,
+  preparePaletteEntry,
+  type RGB,
+} from '../palettes';
+import type { ColorPaletteConfig, PixelizerMaterialOptions } from '../types';
 import {
   computeGeometryTangents,
   createSeededRng,
@@ -1639,4 +1645,126 @@ export function createPixelizerMaterialFromBaked(
   mat.vertexColors = true;
   return mat;
 }
+
+const BAYER4_THRESH = [
+  0, 8, 2, 10,
+  12, 4, 14, 6,
+  3, 11, 1, 9,
+  15, 7, 13, 5,
+];
+
+function extractTextureRgba(tex: THREE.Texture): {
+  data: Uint8Array | Uint8ClampedArray;
+  width: number;
+  height: number;
+} | null {
+  const img = tex.image as
+    | { data?: Uint8Array | Uint8ClampedArray; width?: number; height?: number }
+    | HTMLImageElement
+    | HTMLCanvasElement
+    | undefined;
+  if (!img) return null;
+
+  const w = Math.max(1, Number(img.width ?? 1));
+  const h = Math.max(1, Number(img.height ?? 1));
+
+  if ('data' in img && img.data && img.data.length >= w * h * 4) {
+    return { data: img.data, width: w, height: h };
+  }
+
+  if (typeof document !== 'undefined') {
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      ctx.drawImage(img as CanvasImageSource, 0, 0, w, h);
+      const read = ctx.getImageData(0, 0, w, h);
+      return { data: read.data, width: w, height: h };
+    }
+  }
+  return null;
+}
+
+/**
+ * Quantizes an albedo texture onto an exact discrete palette (optionally with ordered Bayer 4x4 dithering)
+ * so exported .GLB assets retain authentic retro palette reduction in external engines without LUT shaders.
+ */
+export function quantizeTextureToPalette(
+  tex: THREE.Texture,
+  palette: ColorPaletteConfig,
+  applyDither = false
+): THREE.DataTexture {
+  const extracted = extractTextureRgba(tex);
+  if (!extracted || palette.colors.length === 0) {
+    const fallback = new Uint8Array([255, 255, 255, 255]);
+    const dt = new THREE.DataTexture(fallback, 1, 1, THREE.RGBAFormat);
+    dt.colorSpace = THREE.SRGBColorSpace;
+    dt.needsUpdate = true;
+    return enforcePixelArtTextureSampling(dt);
+  }
+
+  const { data: src, width, height } = extracted;
+  const out = new Uint8Array(width * height * 4);
+  const paletteRgb: RGB[] = palette.colors.map(hexToRgb);
+  const prepared = paletteRgb.map(preparePaletteEntry);
+  const ditherStrength = applyDither ? Math.max(0.25, palette.ditherStrength || 0.7) : 0;
+
+  // 15-bit RGB quantization lookup memoizes palette matching across large atlases
+  const lutMemo = new Map<number, { c1: RGB; c2: RGB; ratio: number }>();
+
+  for (let y = 0; y < height; y++) {
+    const rowOff = y * width;
+    for (let x = 0; x < width; x++) {
+      const p4 = (rowOff + x) * 4;
+      const a = src[p4 + 3];
+      if (a === 0) {
+        out[p4 + 3] = 0;
+        continue;
+      }
+      const r = src[p4 + 0];
+      const g = src[p4 + 1];
+      const b = src[p4 + 2];
+      const key = ((r >> 3) << 10) | ((g >> 3) << 5) | (b >> 3);
+      const cached = lutMemo.get(key);
+      let pair: { c1: RGB; c2: RGB; ratio: number };
+      if (cached) {
+        pair = cached;
+      } else {
+        pair = findDitherPair(
+          [r, g, b],
+          paletteRgb,
+          palette.method,
+          palette.hsvWeights,
+          ditherStrength,
+          palette.valueCurveGamma,
+          prepared
+        );
+        lutMemo.set(key, pair);
+      }
+
+      let chosen = pair.c1;
+      if (applyDither && pair.ratio > 0.01) {
+        const thresh = (BAYER4_THRESH[(y & 3) * 4 + (x & 3)] + 0.5) / 16.0;
+        if (pair.ratio > thresh) {
+          chosen = pair.c2;
+        }
+      }
+
+      out[p4 + 0] = Math.max(0, Math.min(255, Math.round(chosen[0])));
+      out[p4 + 1] = Math.max(0, Math.min(255, Math.round(chosen[1])));
+      out[p4 + 2] = Math.max(0, Math.min(255, Math.round(chosen[2])));
+      out[p4 + 3] = a;
+    }
+  }
+
+  const res = new THREE.DataTexture(out, width, height, THREE.RGBAFormat);
+  res.colorSpace = THREE.SRGBColorSpace;
+  res.flipY = tex.flipY;
+  res.wrapS = tex.wrapS;
+  res.wrapT = tex.wrapT;
+  res.needsUpdate = true;
+  return enforcePixelArtTextureSampling(res);
+}
+
 

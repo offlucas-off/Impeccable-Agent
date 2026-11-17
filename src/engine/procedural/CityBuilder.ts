@@ -29,6 +29,10 @@ import {
   synthesizeModularTilesetSheet,
 } from './PixelMaterialSynth';
 import { bakeVertexAoAndCreases } from './VertexAndTexelBaker';
+import {
+  buildInstancedPropBatch,
+  type InstancePlacement,
+} from './InstancedBatchKit';
 
 export type CityHouseKind =
   | 'grimorio'
@@ -818,41 +822,97 @@ export function buildNwlStarterCity(
   );
   colliders.push({ minX: 2.4, maxX: 4.0, minZ: 2.4, maxZ: 4.0, tag: 'well' });
 
-  // Lamp posts around the main crossroad
-  for (const [lIdx, [lx, lz]] of [
-    [-1.8, -1.8],
-    [1.8, -1.8],
-    [-1.8, 5.2],
-    [1.8, 5.2],
-  ].entries()) {
-    const pole = makeLatheProfile(
-      [
-        [0.14, 0],
-        [0.1, 0.5],
-        [0.08, 2.05],
-      ],
-      6,
+  // Lamp posts around the main crossroad -> GPU InstancedMesh batch (single baked archetype)
+  const lampPlacements: InstancePlacement[] = [
+    { position: [-1.8, 0, -1.8] },
+    { position: [1.8, 0, -1.8] },
+    { position: [-1.8, 0, 5.2] },
+    { position: [1.8, 0, 5.2] },
+  ];
+  const lampProtoParts: TaggedGeometryPart[] = [
+    tagPart(
+      makeLatheProfile(
+        [
+          [0.14, 0],
+          [0.1, 0.5],
+          [0.08, 2.05],
+        ],
+        6,
+        CITY_COLORS.stoneDark
+      ),
+      'lamp_pole',
+      'forged_steel',
       CITY_COLORS.stoneDark,
-      { offset: [lx, 0, lz] }
-    );
-    const lanternCap = makeBeveledBox(0.38, 0.1, 0.38, 0.02, CITY_COLORS.stoneDark, {
-      offset: [lx, 2.45, lz],
-    });
-    const lantern = makeBeveledBox(0.28, 0.34, 0.28, 0.03, CITY_COLORS.goldBright, {
-      offset: [lx, 2.24, lz],
-    });
-    propsParts.push(
-      tagPart(pole, `lamp_pole_${lIdx}`, 'forged_steel', CITY_COLORS.stoneDark, {
-        lockVertical: true,
-      }),
-      tagPart(lanternCap, `lamp_cap_${lIdx}`, 'forged_steel', CITY_COLORS.stoneDark, {
-        lockVertical: true,
-      }),
-      tagPart(lantern, `lamp_glow_${lIdx}`, 'runic_glow', CITY_COLORS.goldBright, {
-        lockVertical: false,
-      })
-    );
-  }
+      { lockVertical: true }
+    ),
+    tagPart(
+      makeBeveledBox(0.38, 0.1, 0.38, 0.02, CITY_COLORS.stoneDark, { offset: [0, 2.45, 0] }),
+      'lamp_cap',
+      'forged_steel',
+      CITY_COLORS.stoneDark,
+      { lockVertical: true }
+    ),
+    tagPart(
+      makeBeveledBox(0.28, 0.34, 0.28, 0.03, CITY_COLORS.goldBright, { offset: [0, 2.24, 0] }),
+      'lamp_glow',
+      'runic_glow',
+      CITY_COLORS.goldBright,
+      { lockVertical: false }
+    ),
+  ];
+  const lampBaked = bakeTaggedPartsAsset(lampProtoParts, {
+    finishMode,
+    texelsPerMeter: 32,
+    seed: seed + 13,
+    aoRays: 10,
+    aoStrength,
+    normalStrength,
+    emissiveRuneHex: CITY_COLORS.goldBright,
+    usePool: true,
+    cacheKey: 'city:lamp_post_proto',
+    inspectUvs: false,
+  });
+  for (const p of lampProtoParts) p.geometry.dispose();
+
+  const lampInstMat = createPixelizerMaterialFromBaked(
+    lampBaked,
+    {
+      pixelated: true,
+      pixelSize: px,
+      objectId: 31,
+      outlineColor: '#14101c',
+      outlineAlpha: 1,
+      edgeHighlight: 0.36,
+      edgeBevelWeight: 0.7,
+      smoothness: 0.25,
+      useColorGrading: true,
+    },
+    sharedResources
+  );
+  materials.push(lampInstMat);
+  const lampInstanced = buildInstancedPropBatch({
+    name: 'City_Lamp_Posts_Instanced',
+    geometry: lampBaked.geometry,
+    material: lampInstMat,
+    placements: lampPlacements,
+    pixelSize: px,
+    gridReference: root,
+    castShadow: true,
+    receiveShadow: true,
+  });
+  root.add(lampInstanced);
+
+  // Calibrated dynamic plaza lights (Portal arcane beacon + SpotLight + Forge glow)
+  const portalPointLight = new THREE.PointLight('#249fde', 1.4, 9.5, 1.8);
+  portalPointLight.position.set(0, 2.2, -8.8);
+  const portalSpotTarget = new THREE.Object3D();
+  portalSpotTarget.position.set(0, 0, -8.2);
+  const portalSpotLight = new THREE.SpotLight('#249fde', 1.8, 12.0, Math.PI * 0.28, 0.35, 1.5);
+  portalSpotLight.position.set(0, 4.4, -9.2);
+  portalSpotLight.target = portalSpotTarget;
+  const forgeWarmLight = new THREE.PointLight('#fa6a0a', 1.1, 8.0, 1.8);
+  forgeWarmLight.position.set(-4.8, 2.2, -4.2);
+  root.add(portalPointLight, portalSpotTarget, portalSpotLight, forgeWarmLight);
 
   // Southern City Gate Wall (facing entrance)
   for (const [gIdx, gx] of [-8.2, -5.2, 5.2, 8.2].entries()) {
@@ -1227,6 +1287,7 @@ export function buildNwlStarterCity(
     update,
     dispose: () => {
       root.traverse((obj) => {
+        if (obj instanceof THREE.InstancedMesh) obj.dispose();
         if (obj instanceof THREE.Mesh) obj.geometry?.dispose();
       });
       disposeCityMaterials(materials);

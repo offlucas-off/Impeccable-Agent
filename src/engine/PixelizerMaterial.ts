@@ -76,6 +76,7 @@ export class PixelizerMaterial extends THREE.ShaderMaterial {
       objectId: options.objectId ?? 1,
       outlineColor: options.outlineColor ?? '#14101c',
       outlineAlpha: options.outlineAlpha ?? 1.0,
+      outlineWidthSteps: options.outlineWidthSteps === 2 ? 2 : 1,
       edgeHighlight: options.edgeHighlight ?? 0.35,
       edgeBevelWeight: options.edgeBevelWeight ?? 0.65,
       baseColor: options.baseColor ?? '#ffffff',
@@ -101,9 +102,14 @@ export class PixelizerMaterial extends THREE.ShaderMaterial {
       shadowTintAlpha: options.shadowTintAlpha ?? 0.25,
       ambientConstantColor: options.ambientConstantColor ?? '#485068',
       ambientConstantWeight: options.ambientConstantWeight ?? 0.35,
+      rimColor: options.rimColor ?? '#ffd8a8',
+      rimIntensity: options.rimIntensity ?? 0.0,
+      rimPower: options.rimPower ?? 3.2,
+      rimSteppedThreshold: options.rimSteppedThreshold ?? 0.35,
       useColorGrading: options.useColorGrading ?? true,
       paletteId: options.paletteId ?? '',
       ditherPatternId: options.ditherPatternId ?? '',
+      ditherSpace: options.ditherSpace ?? 'screen_macropixel',
     };
 
     const uniforms = THREE.UniformsUtils.merge([
@@ -116,6 +122,7 @@ export class PixelizerMaterial extends THREE.ShaderMaterial {
         uObjectId: { value: resolved.objectId },
         uOutlineColorSrgb: { value: new THREE.Vector3(0.08, 0.06, 0.11) },
         uOutlineAlpha: { value: resolved.outlineAlpha },
+        uOutlineWidthSteps: { value: resolved.outlineWidthSteps },
         uEdgeHighlight: { value: resolved.edgeHighlight },
         uEdgeBevelWeight: { value: resolved.edgeBevelWeight },
 
@@ -125,6 +132,7 @@ export class PixelizerMaterial extends THREE.ShaderMaterial {
         uUseDitheredTransparency: { value: resolved.useDitheredTransparency ? 1 : 0 },
         uHasAlbedoMap: { value: resolved.albedoMap ? 1 : 0 },
         uAlbedoMap: { value: resolved.albedoMap ?? white },
+        uAlbedoSize: { value: new THREE.Vector2(128, 128) },
         uHasNormalMap: { value: resolved.normalMap ? 1 : 0 },
         uNormalMap: { value: resolved.normalMap ?? white },
         uNormalScale: { value: resolved.normalScale },
@@ -146,6 +154,11 @@ export class PixelizerMaterial extends THREE.ShaderMaterial {
         uAmbientConstantLinear: { value: new THREE.Color(resolved.ambientConstantColor) },
         uAmbientConstantWeight: { value: resolved.ambientConstantWeight },
 
+        uRimColorLinear: { value: new THREE.Color(resolved.rimColor) },
+        uRimIntensity: { value: resolved.rimIntensity },
+        uRimPower: { value: resolved.rimPower },
+        uRimThreshold: { value: resolved.rimSteppedThreshold },
+
         uLightingRampTex: { value: sharedResources?.lightingRampTex ?? white },
         uUseColorGrading: { value: resolved.useColorGrading ? 1 : 0 },
         uPalettePrimaryTex: { value: sharedResources?.palettePrimaryTex ?? white },
@@ -153,6 +166,7 @@ export class PixelizerMaterial extends THREE.ShaderMaterial {
         uPaletteLutSize: { value: sharedResources?.paletteLutSize ?? 16 },
         uDitherTex: { value: sharedResources?.ditherTex ?? white },
         uDitherSize: { value: sharedResources?.ditherSize ?? 4.0 },
+        uDitherSpace: { value: resolved.ditherSpace === 'object_uv' ? 1.0 : 0.0 },
         uForceFlatDither: { value: 0.0 },
 
         uCameraNear: { value: 0.1 },
@@ -241,6 +255,7 @@ export class PixelizerMaterial extends THREE.ShaderMaterial {
     );
 
     this.uniforms.uOutlineAlpha.value = o.outlineAlpha;
+    this.uniforms.uOutlineWidthSteps.value = o.outlineWidthSteps === 2 ? 2 : 1;
     this.uniforms.uEdgeHighlight.value = o.edgeHighlight;
     this.uniforms.uEdgeBevelWeight.value = o.edgeBevelWeight;
 
@@ -251,6 +266,11 @@ export class PixelizerMaterial extends THREE.ShaderMaterial {
 
     this.uniforms.uHasAlbedoMap.value = o.albedoMap ? 1 : 0;
     this.uniforms.uAlbedoMap.value = o.albedoMap ?? white;
+    const albImg = o.albedoMap?.image as { width?: number; height?: number } | undefined;
+    (this.uniforms.uAlbedoSize.value as THREE.Vector2).set(
+      Math.max(1, albImg?.width ?? 128),
+      Math.max(1, albImg?.height ?? 128)
+    );
     this.uniforms.uHasNormalMap.value = o.normalMap ? 1 : 0;
     this.uniforms.uNormalMap.value = o.normalMap ?? white;
     this.uniforms.uNormalScale.value = o.normalScale;
@@ -274,7 +294,13 @@ export class PixelizerMaterial extends THREE.ShaderMaterial {
     (this.uniforms.uAmbientConstantLinear.value as THREE.Color).set(o.ambientConstantColor);
     this.uniforms.uAmbientConstantWeight.value = o.ambientConstantWeight;
 
+    (this.uniforms.uRimColorLinear.value as THREE.Color).set(o.rimColor);
+    this.uniforms.uRimIntensity.value = o.rimIntensity;
+    this.uniforms.uRimPower.value = o.rimPower;
+    this.uniforms.uRimThreshold.value = o.rimSteppedThreshold;
+
     this.uniforms.uUseColorGrading.value = o.useColorGrading ? 1 : 0;
+    this.uniforms.uDitherSpace.value = o.ditherSpace === 'object_uv' ? 1.0 : 0.0;
   }
 }
 

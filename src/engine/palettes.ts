@@ -350,14 +350,14 @@ export function rgbToOklab(r: number, g: number, b: number): OKLab {
   ];
 }
 
-interface PreparedPaletteEntry {
+export interface PreparedPaletteEntry {
   rgb: RGB;
   hsv: [number, number, number];
   lab: OKLab;
   lum: number;
 }
 
-function preparePaletteEntry(rgb: RGB): PreparedPaletteEntry {
+export function preparePaletteEntry(rgb: RGB): PreparedPaletteEntry {
   return {
     rgb,
     hsv: rgbToHsv(rgb[0], rgb[1], rgb[2]),

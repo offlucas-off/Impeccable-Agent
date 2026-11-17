@@ -27,3 +27,4 @@ export * from './procedural/CityBuilder';
 export * from './procedural/MonsterBuilder';
 export * from './procedural/NwlTilesetDungeon';
 export * from './procedural/SpellVfxBuilder';
+export * from './procedural/InstancedBatchKit';

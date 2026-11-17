@@ -663,12 +663,22 @@ input[type='checkbox'] {
   color: var(--text-primary);
 }
 
-/* Texture Upload Row */
+/* Texture Upload Row & Live Preview Thumbnail */
 .tex-slot-row {
   display: grid;
-  grid-template-columns: 1fr auto auto;
+  grid-template-columns: 36px 1fr auto auto;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
+}
+
+.tex-thumb-canvas {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: repeating-conic-gradient(#141720 0% 25%, #1b202b 0% 50%) 50% / 8px 8px;
+  image-rendering: pixelated;
+  flex-shrink: 0;
 }
 
 .tex-status {

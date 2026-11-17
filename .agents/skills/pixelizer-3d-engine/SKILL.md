@@ -54,19 +54,24 @@ src/
 │       ├── SpellVfxBuilder.ts       # 20 low-poly 3D pixelated spells, barriers & telegraphs
 │       ├── PropBuilder.ts           # CC0-calibrated procedural props (chest, barrel, sword, tree, etc.)
 │       ├── CharacterBuilder.ts      # General procedural UAL characters (Rigid/Skinned/Voxel)
-│       └── TilesetStructureSolver.ts# Multi-floor WFC building solver
+│   │   ├── TilesetStructureSolver.ts# Multi-floor WFC building solver
+│   │   └── InstancedBatchKit.ts     # GPU-instanced `THREE.InstancedMesh` batching + pixel snap alignment
 ├── sandbox/
-│   └── NwlPlaySandbox.ts            # Interactive City + Portal -> Randomized Dungeon Floor 1 loop (`finishMode` aware)
+│   └── NwlPlaySandbox.ts            # Interactive City + Portal -> Randomized Dungeon Floor 1 + Spell PointLights
 ├── studio/
+│   ├── state/studioContext.ts       # Shared StudioContext, resource disposal & event registry
 │   ├── loaders/modelLoader.ts       # GLB/GLTF/OBJ/FBX/STL loader + clip binding + ID split/unify
 │   ├── presets/demoScenes.ts        # Built-in NWL & legacy studio presets
-│   └── ui/                          # studioApp.ts, generatorPanel.ts, paletteEditor.ts, animViewerPanel.ts
+│   └── ui/                          # Modular panels: studioApp.ts, pipelinePanel.ts, objectInspectorPanel.ts, exportPanel.ts, stageManager.ts, generatorPanel.ts, paletteEditor.ts, animViewerPanel.ts
+├── scripts/
+│   └── export_nwl_headless.mjs      # Headless Playwright+SwiftShader CLI batch exporter (`npm run export:nwl`)
 └── tests/
     ├── vitest.setup.ts              # Headless Node self + PNG-IHDR createImageBitmap shim for textured .GLB re-import
     ├── engine.test.ts
     ├── rigging_procedural.test.ts
     ├── nwl_production.test.ts
-    └── qualityGate.test.ts          # UV zero-overlap, texture entropy, flat-face, anti-fangs AO & GLB texture gate
+    ├── qualityGate.test.ts          # UV zero-overlap, texture entropy, flat-face, anti-fangs AO & GLB texture gate
+    └── wave3.test.ts                # SpotLight/Rim/2px Outline/UV-dither, InstancedMesh, quantized .GLB & Studio modules
 ```
 
 ---

@@ -135,6 +135,14 @@ uniform float uShadowTintAlpha;
 uniform vec3 uAmbientConstantLinear;
 uniform float uAmbientConstantWeight;
 
+uniform vec3 uRimColorLinear;
+uniform float uRimIntensity;
+uniform float uRimPower;
+uniform float uRimThreshold;
+uniform float uOutlineWidthSteps;
+uniform float uDitherSpace;
+uniform vec2 uAlbedoSize;
+
 uniform sampler2D uLightingRampTex;
 uniform float uUseColorGrading;
 uniform sampler2D uPalettePrimaryTex;
@@ -192,10 +200,12 @@ void main() {
     }
   }
 
-  // Compute macropixel coordinate for consistent object-aligned dithering
-  vec2 ditherCoord = (uPixelated > 0.5)
-    ? floor((fragPx - floor(uPixelGridOriginPx + 0.5)) / P)
-    : fragPx;
+  // Compute macropixel or UV-locked coordinate for ordered dithering
+  vec2 ditherCoord = (uDitherSpace > 0.5)
+    ? floor(vUv * ((uHasAlbedoMap > 0.5) ? max(uAlbedoSize, vec2(32.0)) : vec2(128.0)))
+    : ((uPixelated > 0.5)
+        ? floor((fragPx - floor(uPixelGridOriginPx + 0.5)) / P)
+        : fragPx);
 
   vec4 albedoSample = (uHasAlbedoMap > 0.5) ? texture(uAlbedoMap, vUv) : vec4(1.0);
   float finalAlpha = albedoSample.a * uAlpha * vVertexColor.a;
@@ -244,12 +254,14 @@ void main() {
   vec3 V = (uIsOrthographic > 0.5) ? vec3(0.0, 0.0, 1.0) : normalize(vViewPos);
   float shadowMask = getShadowMask();
 
-  // Compute lighting (Directional + Ambient + Specular/Metallic)
+  // Compute lighting (Directional + Point + Spot + Ambient + Specular/Metallic)
   vec3 directLight = vec3(0.0);
   vec3 specAccum = vec3(0.0);
   float ndotlMax = 0.0;
+  vec3 mainLightDir = normalize(vec3(0.5, 0.8, 0.4));
 
   #if NUM_DIR_LIGHTS > 0
+    mainLightDir = normalize(directionalLights[0].direction);
     for (int i = 0; i < NUM_DIR_LIGHTS; i++) {
       vec3 L = normalize(directionalLights[i].direction);
       float ndl = max(dot(N, L), 0.0);
@@ -268,7 +280,7 @@ void main() {
       }
     }
   #else
-    ndotlMax = max(dot(N, normalize(vec3(0.5, 0.8, 0.4))), 0.0) * shadowMask;
+    ndotlMax = max(dot(N, mainLightDir), 0.0) * shadowMask;
     directLight = vec3(ndotlMax);
   #endif
 
@@ -287,6 +299,26 @@ void main() {
             ? mix(vec3(0.04), albedoLinear, uMetallic)
             : uSpecularColorLinear;
           specAccum += ptLight.color * specColor * specTerm * ndl;
+        }
+      }
+    }
+  #endif
+
+  #if NUM_SPOT_LIGHTS > 0
+    for (int i = 0; i < NUM_SPOT_LIGHTS; i++) {
+      IncidentLight spLight;
+      getSpotLightInfo(spotLights[i], -vViewPos, spLight);
+      if (spLight.visible) {
+        float ndl = max(dot(N, spLight.direction), 0.0);
+        directLight += spLight.color * ndl;
+        if (uSmoothness > 0.01 && ndl > 0.0) {
+          vec3 H = normalize(spLight.direction + V);
+          float shininess = mix(4.0, 128.0, uSmoothness * uSmoothness);
+          float specTerm = pow(max(dot(N, H), 0.0), shininess) * (uSmoothness * 0.85);
+          vec3 specColor = (uIsMetallicWorkflow > 0.5)
+            ? mix(vec3(0.04), albedoLinear, uMetallic)
+            : uSpecularColorLinear;
+          specAccum += spLight.color * specColor * specTerm * ndl;
         }
       }
     }
@@ -325,19 +357,32 @@ void main() {
     celSrgb = rawLitSrgb;
   }
 
-  // Add HDR emission
+  // Stepped cel rim light (sharp fresnel edge highlight gated by main light alignment)
+  vec3 rimSrgb = vec3(0.0);
+  if (uRimIntensity > 0.001) {
+    float ndv = clamp(dot(N, V), 0.0, 1.0);
+    float fresnel = pow(1.0 - ndv, max(0.5, uRimPower));
+    float dirGate = smoothstep(-0.25, 0.55, dot(N, mainLightDir)) * (0.35 + 0.65 * shadowMask);
+    float rimStep = step(uRimThreshold, fresnel * dirGate);
+    rimSrgb = linearToSrgb(uRimColorLinear * uRimIntensity * rimStep);
+  }
+
+  // Add HDR emission + stepped rim light
   vec3 emissionSample = (uHasEmissionMap > 0.5) ? texture(uEmissionMap, vUv).rgb : vec3(1.0);
   vec3 emissiveTint = mix(vec3(1.0), vVertexColor.rgb, uEmissiveVertexColorWeight);
   vec3 emissionSrgb = linearToSrgb(emissionSample * uEmissionColorLinear * emissiveTint * uEmissionIntensity);
-  vec3 combinedSrgb = celSrgb + emissionSrgb;
+  vec3 combinedSrgb = celSrgb + rimSrgb + emissionSrgb;
 
-  // Color grading via dual Palette LUT + 4x4 ordered dither
+  // Color grading via dual Palette LUT + 4x4/8x8 ordered dither
   if (uUseColorGrading > 0.5) {
     combinedSrgb = samplePaletteDualLut(combinedSrgb, ditherCoord);
   }
 
   // Linear normalized camera depth in [0, 1] across both ortho & perspective
   float linearDepth = clamp((vViewPos.z - uCameraNear) / max(1e-5, uCameraFar - uCameraNear), 0.0, 1.0);
+  float clampedP = clamp(P, 1.0, 15.0);
+  float wideFlag = (uOutlineWidthSteps >= 1.5) ? 16.0 : 0.0;
+  float encodedMetaG = (uPixelated > 0.5) ? clamp((clampedP + wideFlag) / 32.0, 0.0, 1.0) : 0.0;
 
   gColor = vec4(combinedSrgb, 1.0);
   gOutline = (uPixelated > 0.5)
@@ -345,7 +390,7 @@ void main() {
     : vec4(0.0);
   gMeta = vec4(
     clamp(uObjectId / 255.0, 0.0, 1.0),
-    (uPixelated > 0.5) ? clamp(P / 16.0, 0.0, 1.0) : 0.0,
+    encodedMetaG,
     expansionActive ? 1.0 : 0.0,
     clamp(uEdgeBevelWeight, 0.0, 1.0)
   );

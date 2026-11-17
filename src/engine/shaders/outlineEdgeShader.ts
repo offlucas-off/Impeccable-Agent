@@ -56,7 +56,9 @@ void main() {
   vec4 cND = texelFetch(tNormalDepth, p, 0);
 
   int objId = int(floor(cMeta.r * 255.0 + 0.5));
-  int pixelSize = int(floor(cMeta.g * 16.0 + 0.5));
+  int metaCode = int(floor(cMeta.g * 32.0 + 0.5));
+  int pixelSize = metaCode % 16;
+  int outlineSteps = (metaCode >= 16) ? 2 : 1;
   float bevelWeight = cMeta.a;
   vec3 N = octDecode(cND.rg);
   float edgeHighlightVal = cND.b;
@@ -150,6 +152,34 @@ void main() {
           isCreaseEdge = true;
           avgNeighborNormal += nN;
           normalCount += 1.0;
+        }
+      }
+    }
+  }
+
+  // Optional 2-macropixel bold silhouette outline (for Bosses & Hades Graphic Ink v2)
+  if (!isSilhouetteOutline && outlineSteps >= 2 && objId > 0) {
+    ivec2 ring2[8];
+    ring2[0] = ivec2(stepPx * 2, 0);
+    ring2[1] = ivec2(-stepPx * 2, 0);
+    ring2[2] = ivec2(0, stepPx * 2);
+    ring2[3] = ivec2(0, -stepPx * 2);
+    ring2[4] = ivec2(stepPx, stepPx);
+    ring2[5] = ivec2(-stepPx, stepPx);
+    ring2[6] = ivec2(stepPx, -stepPx);
+    ring2[7] = ivec2(-stepPx, -stepPx);
+    for (int i = 0; i < 8; i++) {
+      ivec2 nCoord = seedP + ring2[i];
+      if (nCoord.x < 0 || nCoord.y < 0 || nCoord.x >= uResolution.x || nCoord.y >= uResolution.y) {
+        isSilhouetteOutline = true;
+        break;
+      }
+      int nId = int(floor(texelFetch(tMeta, nCoord, 0).r * 255.0 + 0.5));
+      if (nId != objId) {
+        float nDepth = texelFetch(tNormalDepth, nCoord, 0).a;
+        if ((uUseDepthTestForId < 0.5) || (depth < nDepth + uIdDepthThreshold)) {
+          isSilhouetteOutline = true;
+          silhouetteAwayDir += vec2(ring2[i]);
         }
       }
     }

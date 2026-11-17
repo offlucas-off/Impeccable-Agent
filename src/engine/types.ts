@@ -13,6 +13,8 @@ export type AngleSnapMode = 'none' | 'world_space' | 'camera_space_y';
 
 export type ShadingWorkflow = 'specular' | 'metallic';
 
+export type DitherSpaceMode = 'screen_macropixel' | 'object_uv';
+
 export type ColorReductionMethod =
   | 'rgb_euclidean'
   | 'hsv_weighted'
@@ -76,6 +78,8 @@ export interface PixelizerMaterialOptions {
   outlineColor?: string;
   /** Silhouette outline strength 0..1 */
   outlineAlpha?: number;
+  /** Silhouette outline width in macropixel steps (1 = crisp 1px, 2 = bold boss/Hades ink) */
+  outlineWidthSteps?: 1 | 2;
   /** Interior crease edge tint (< 0.5 darkens, 0.5 neutral, > 0.5 lightens) */
   edgeHighlight?: number;
   /** Light-reactive edge normal bevel weight 0..1 */
@@ -109,10 +113,27 @@ export interface PixelizerMaterialOptions {
   ambientConstantColor?: string;
   ambientConstantWeight?: number;
 
+  /** Stepped cel rim light (Fresnel highlight gated by main light) */
+  rimColor?: string;
+  rimIntensity?: number;
+  rimPower?: number;
+  rimSteppedThreshold?: number;
+
   /** Color grading & dithering */
   useColorGrading?: boolean;
   paletteId?: string;
   ditherPatternId?: string;
+  /** Coordinate domain for ordered dithering ('screen_macropixel' | 'object_uv') */
+  ditherSpace?: DitherSpaceMode;
+}
+
+export interface RenderTelemetryStats {
+  drawCalls: number;
+  triangles: number;
+  passWidth: number;
+  passHeight: number;
+  lastRenderMs: number;
+  avgRenderMs: number;
 }
 
 export interface SnapOptions {

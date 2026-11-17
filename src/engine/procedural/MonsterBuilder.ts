@@ -965,9 +965,27 @@ export function buildNwlMonster(
     pixelSize: px,
   });
 
+  if (id === 'demons.boss_demon') {
+    for (const m of rigidRes.meshes) {
+      m.userData.nwlIsBoss = true;
+    }
+    for (const mat of rigidRes.materials) {
+      mat.updateOptions({
+        outlineWidthSteps: 2,
+        rimColor: '#fa6a0a',
+        rimIntensity: 0.35,
+        rimPower: 3.0,
+        rimSteppedThreshold: 0.36,
+      });
+    }
+  }
+
   const root = new THREE.Group();
   root.name = id;
   root.userData.unwrapMetrics = keyMetrics;
+  if (id === 'demons.boss_demon') {
+    root.userData.nwlIsBoss = true;
+  }
   root.add(rig.armature);
 
   return {

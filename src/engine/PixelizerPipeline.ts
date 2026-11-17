@@ -102,6 +102,21 @@ export class PixelizerPipeline {
   private lastGrid: ComputedCameraGrid | null = null;
   private renderWidth = 1;
   private renderHeight = 1;
+  private telemetry: {
+    drawCalls: number;
+    triangles: number;
+    passWidth: number;
+    passHeight: number;
+    lastRenderMs: number;
+    avgRenderMs: number;
+  } = {
+    drawCalls: 0,
+    triangles: 0,
+    passWidth: 1,
+    passHeight: 1,
+    lastRenderMs: 0,
+    avgRenderMs: 0,
+  };
 
   constructor(
     renderer: THREE.WebGLRenderer,
@@ -346,9 +361,13 @@ export class PixelizerPipeline {
     return this.lastGrid;
   }
 
+  public getRenderStats() {
+    return { ...this.telemetry };
+  }
+
   /**
    * Applies an official visual preset across palette, dither, lighting ramp, outline thresholds,
-   * and optionally updates all pixelated scene materials to match.
+   * and updates all pixelated scene materials (including Wave 3 rim light, outline width, and dither domain).
    */
   public applyVisualStylePreset(
     preset: VisualStylePresetId,
@@ -376,11 +395,16 @@ export class PixelizerPipeline {
             const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
             for (const m of mats) {
               if (m instanceof PixelizerMaterial && m.options.pixelated) {
+                const isBoss = Boolean(obj.userData?.nwlIsBoss);
                 m.updateOptions({
                   pixelSize: obj.userData.nwlFixedPixelSize ?? 3,
                   outlineColor: '#14101c',
+                  outlineWidthSteps: isBoss ? 2 : 1,
                   edgeHighlight: 0.35,
                   edgeBevelWeight: 0.75,
+                  rimIntensity: isBoss ? 0.35 : 0.0,
+                  rimColor: '#fa6a0a',
+                  ditherSpace: 'screen_macropixel',
                 });
               }
             }
@@ -396,8 +420,8 @@ export class PixelizerPipeline {
       this.pipelineConfig.useDepthTestForIdOutlines = true;
       this.pipelineConfig.useNormalsForEdgeDetection = true;
       this.pipelineConfig.normalEdgeThreshold = 0.14;
-      this.pipelineConfig.edgeHighlightStrength = 0.25;
-      this.pipelineConfig.edgeBevelStrength = 0.4;
+      this.pipelineConfig.edgeHighlightStrength = 0.28;
+      this.pipelineConfig.edgeBevelStrength = 0.45;
       this.pipelineConfig.backgroundColor = '#07060b';
       this.pipelineConfig.lightColor = '#ffd8a8';
       this.pipelineConfig.lightIntensity = 1.65;
@@ -408,11 +432,18 @@ export class PixelizerPipeline {
             const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
             for (const m of mats) {
               if (m instanceof PixelizerMaterial && m.options.pixelated) {
+                const hasEmit = (m.options.emissionIntensity ?? 0) > 0.3;
                 m.updateOptions({
                   pixelSize: 1,
                   outlineColor: '#07060b',
-                  edgeHighlight: 0.12,
-                  edgeBevelWeight: 0.45,
+                  outlineWidthSteps: 2,
+                  edgeHighlight: 0.14,
+                  edgeBevelWeight: 0.5,
+                  rimColor: hasEmit ? '#249fde' : '#ffd8a8',
+                  rimIntensity: 0.72,
+                  rimPower: 2.8,
+                  rimSteppedThreshold: 0.34,
+                  ditherSpace: 'object_uv',
                 });
               }
             }
@@ -537,6 +568,7 @@ export class PixelizerPipeline {
     camera: THREE.Camera,
     outputTarget: THREE.WebGLRenderTarget | null = null
   ): void {
+    const tStart = performance.now();
     const screenW = outputTarget ? outputTarget.width : this.renderWidth;
     const screenH = outputTarget ? outputTarget.height : this.renderHeight;
     const cfg = this.pipelineConfig;
@@ -716,6 +748,8 @@ export class PixelizerPipeline {
 
     this.renderer.autoClear = false;
     this.renderer.render(scene, camera);
+    const sceneCalls = this.renderer.info.render.calls;
+    const sceneTris = this.renderer.info.render.triangles;
     this.renderer.autoClear = true;
 
     // Restore object & camera transforms immediately after scene render
@@ -813,6 +847,19 @@ export class PixelizerPipeline {
     this.fsQuad.material = this.upscaleMat;
     this.renderer.setRenderTarget(outputTarget);
     this.renderer.render(this.fsScene, this.fsCamera);
+
+    const frameMs = Math.max(0.01, performance.now() - tStart);
+    this.telemetry = {
+      drawCalls: sceneCalls,
+      triangles: sceneTris,
+      passWidth: passW,
+      passHeight: passH,
+      lastRenderMs: Number(frameMs.toFixed(2)),
+      avgRenderMs:
+        this.telemetry.avgRenderMs > 0
+          ? Number((this.telemetry.avgRenderMs * 0.85 + frameMs * 0.15).toFixed(2))
+          : Number(frameMs.toFixed(2)),
+    };
   }
 
   public dispose(): void {

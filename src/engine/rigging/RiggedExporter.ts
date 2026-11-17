@@ -2,6 +2,9 @@ import * as THREE from 'three';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
 import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { PixelizerMaterial } from '../PixelizerMaterial';
+import { BUILTIN_PALETTES } from '../palettes';
+import { quantizeTextureToPalette } from '../procedural/PixelMaterialSynth';
+import type { ColorPaletteConfig } from '../types';
 
 export interface RiggedExportOptions {
   name?: string;
@@ -9,6 +12,10 @@ export interface RiggedExportOptions {
   resetToRestPose?: boolean;
   /** Clamp metalness <= 0.35 so engines without HDR EnvMaps (Godot/Three/Unity) don't render dark silhouettes */
   safeMaxMetalness?: number;
+  /** Optional Wave 3 palette quantization pass on exported albedo textures */
+  quantizeAlbedo?: boolean;
+  quantizePalette?: ColorPaletteConfig;
+  quantizeDither?: boolean;
 }
 
 export interface RiggedExportValidation {
@@ -20,20 +27,38 @@ export interface RiggedExportValidation {
   warnings: string[];
 }
 
+interface QuantizeBakeCtx {
+  palette: ColorPaletteConfig;
+  dither: boolean;
+  cache: Map<THREE.Texture, THREE.DataTexture>;
+  disposableTex: THREE.Texture[];
+}
+
 function convertToExportStandardMaterial(
   src: THREE.Material | null | undefined,
   hasVertexColors: boolean,
-  safeMaxMetalness: number
+  safeMaxMetalness: number,
+  quantizeOpts?: QuantizeBakeCtx
 ): THREE.MeshStandardMaterial {
   if (src instanceof PixelizerMaterial) {
     const o = src.options;
     const isMetal = o.workflow === 'metallic';
     const metalness = isMetal ? Math.min(safeMaxMetalness, Math.max(0.05, o.metallic)) : 0.08;
     const roughness = Math.max(0.25, Math.min(0.95, 1.0 - o.smoothness));
+    let albedoMap: THREE.Texture | null = o.albedoMap ?? null;
+    if (quantizeOpts && albedoMap) {
+      let cached = quantizeOpts.cache.get(albedoMap);
+      if (!cached) {
+        cached = quantizeTextureToPalette(albedoMap, quantizeOpts.palette, quantizeOpts.dither);
+        quantizeOpts.cache.set(albedoMap, cached);
+        quantizeOpts.disposableTex.push(cached);
+      }
+      albedoMap = cached;
+    }
     return new THREE.MeshStandardMaterial({
       color: new THREE.Color(o.baseColor),
       vertexColors: hasVertexColors || src.vertexColors,
-      map: o.albedoMap ?? null,
+      map: albedoMap,
       normalMap: o.normalMap ?? null,
       emissiveMap: o.emissionMap ?? null,
       emissive: new THREE.Color(o.emissionColor),
@@ -211,65 +236,122 @@ function encodeRgbaToPngBlob(rgba: Uint8ClampedArray | Uint8Array, width: number
 }
 
 function installHeadlessCanvasShimIfNeeded(): () => void {
-  if (typeof document !== 'undefined' || typeof OffscreenCanvas !== 'undefined') {
+  const g = globalThis as Record<string, unknown>;
+  const needCanvasShim = typeof document === 'undefined' && typeof OffscreenCanvas === 'undefined';
+  const needFileReader = typeof FileReader === 'undefined';
+  if (!needCanvasShim && !needFileReader) {
     return () => {};
   }
-  const g = globalThis as Record<string, unknown>;
+
   const hadImageData = 'ImageData' in g;
   const prevImageData = g.ImageData;
   const hadOffscreen = 'OffscreenCanvas' in g;
   const prevOffscreen = g.OffscreenCanvas;
+  const hadFileReader = 'FileReader' in g;
+  const prevFileReader = g.FileReader;
 
-  if (!hadImageData) {
-    g.ImageData = class HeadlessImageData {
-      readonly data: Uint8ClampedArray;
-      readonly width: number;
-      readonly height: number;
-      constructor(data: Uint8ClampedArray, width: number, height: number) {
-        this.data = data;
-        this.width = width;
-        this.height = height;
+  if (needFileReader) {
+    g.FileReader = class HeadlessFileReader {
+      result: ArrayBuffer | string | null = null;
+      error: unknown = null;
+      onload: (() => void) | null = null;
+      onloadend: (() => void) | null = null;
+      onerror: ((err: unknown) => void) | null = null;
+
+      readAsArrayBuffer(blob: Blob): void {
+        blob
+          .arrayBuffer()
+          .then((buf) => {
+            this.result = buf;
+            this.onload?.();
+            this.onloadend?.();
+          })
+          .catch((err) => {
+            this.error = err;
+            this.onerror?.(err);
+          });
+      }
+
+      readAsDataURL(blob: Blob): void {
+        blob
+          .arrayBuffer()
+          .then((buf) => {
+            const bytes = new Uint8Array(buf);
+            let bin = '';
+            for (let i = 0; i < bytes.length; i += 0x8000) {
+              bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+            }
+            const b64 = typeof btoa === 'function' ? btoa(bin) : '';
+            this.result = `data:${blob.type || 'application/octet-stream'};base64,${b64}`;
+            this.onload?.();
+            this.onloadend?.();
+          })
+          .catch((err) => {
+            this.error = err;
+            this.onerror?.(err);
+          });
       }
     };
   }
 
-  g.OffscreenCanvas = class HeadlessOffscreenCanvas {
-    width: number;
-    height: number;
-    private pixels: Uint8ClampedArray | null = null;
-    private flipY = false;
-
-    constructor(width: number, height: number) {
-      this.width = width;
-      this.height = height;
-    }
-
-    getContext(_type: string) {
-      return {
-        translate: (_x: number, _y: number) => {},
-        scale: (_sx: number, sy: number) => {
-          if (sy < 0) this.flipY = !this.flipY;
-        },
-        putImageData: (img: { data: Uint8ClampedArray; width: number; height: number }) => {
-          this.pixels = img.data;
-          this.width = img.width;
-          this.height = img.height;
-        },
-        drawImage: () => {},
+  if (needCanvasShim) {
+    if (!hadImageData) {
+      g.ImageData = class HeadlessImageData {
+        readonly data: Uint8ClampedArray;
+        readonly width: number;
+        readonly height: number;
+        constructor(data: Uint8ClampedArray, width: number, height: number) {
+          this.data = data;
+          this.width = width;
+          this.height = height;
+        }
       };
     }
 
-    convertToBlob(): Promise<Blob> {
-      const data = this.pixels ?? new Uint8ClampedArray(this.width * this.height * 4);
-      return Promise.resolve(encodeRgbaToPngBlob(data, this.width, this.height, this.flipY));
-    }
-  };
+    g.OffscreenCanvas = class HeadlessOffscreenCanvas {
+      width: number;
+      height: number;
+      private pixels: Uint8ClampedArray | null = null;
+      private flipY = false;
+
+      constructor(width: number, height: number) {
+        this.width = width;
+        this.height = height;
+      }
+
+      getContext(_type: string) {
+        return {
+          translate: (_x: number, _y: number) => {},
+          scale: (_sx: number, sy: number) => {
+            if (sy < 0) this.flipY = !this.flipY;
+          },
+          putImageData: (img: { data: Uint8ClampedArray; width: number; height: number }) => {
+            this.pixels = img.data;
+            this.width = img.width;
+            this.height = img.height;
+          },
+          drawImage: () => {},
+        };
+      }
+
+      convertToBlob(): Promise<Blob> {
+        const data = this.pixels ?? new Uint8ClampedArray(this.width * this.height * 4);
+        return Promise.resolve(encodeRgbaToPngBlob(data, this.width, this.height, this.flipY));
+      }
+    };
+  }
 
   return () => {
-    if (!hadOffscreen) delete g.OffscreenCanvas;
-    else g.OffscreenCanvas = prevOffscreen;
-    if (!hadImageData) delete g.ImageData;
-    else g.ImageData = prevImageData;
+    if (needFileReader) {
+      if (!hadFileReader) delete g.FileReader;
+      else g.FileReader = prevFileReader;
+    }
+    if (needCanvasShim) {
+      if (!hadOffscreen) delete g.OffscreenCanvas;
+      else g.OffscreenCanvas = prevOffscreen;
+      if (!hadImageData) delete g.ImageData;
+      else g.ImageData = prevImageData;
+    }
   };
 }
 
@@ -285,13 +367,41 @@ export async function exportRiggedAssetToGlb(
   const safeMaxMetalness = options.safeMaxMetalness ?? 0.35;
   const resetToRestPose = options.resetToRestPose !== false;
 
-  // Safely deep clone preserving Skeleton + Bone references without mutating viewport live state
-  const clone = SkeletonUtils.clone(sourceRoot);
+  // Temporarily detach userData.pixelizer (contains Object3D gridReference pointers) so Three.Object3D.copy JSON clone never throws circular errors
+  const stashedPixelizer = new Map<THREE.Object3D, unknown>();
+  sourceRoot.traverse((obj) => {
+    if (obj.userData && 'pixelizer' in obj.userData) {
+      stashedPixelizer.set(obj, obj.userData.pixelizer);
+      delete obj.userData.pixelizer;
+    }
+  });
+
+  let clone: THREE.Object3D;
+  try {
+    // Safely deep clone preserving Skeleton + Bone references without mutating viewport live state
+    clone = SkeletonUtils.clone(sourceRoot);
+  } finally {
+    for (const [obj, val] of stashedPixelizer) {
+      obj.userData.pixelizer = val;
+    }
+  }
   if (options.name) {
     clone.name = options.name;
   }
 
   const disposableMats: THREE.Material[] = [];
+  const disposableTex: THREE.Texture[] = [];
+  const quantizeOpts = options.quantizeAlbedo
+    ? {
+        palette:
+          options.quantizePalette ??
+          BUILTIN_PALETTES.find((p) => p.id === 'snes_pal_nwl') ??
+          BUILTIN_PALETTES[0],
+        dither: Boolean(options.quantizeDither),
+        cache: new Map<THREE.Texture, THREE.DataTexture>(),
+        disposableTex,
+      }
+    : undefined;
   const boneNamesInClone = new Set<string>();
 
   clone.traverse((obj) => {
@@ -305,13 +415,13 @@ export async function exportRiggedAssetToGlb(
       const hasCol = Boolean(obj.geometry?.getAttribute('color'));
       if (Array.isArray(obj.material)) {
         const nextMats = obj.material.map((m) => {
-          const conv = convertToExportStandardMaterial(m, hasCol, safeMaxMetalness);
+          const conv = convertToExportStandardMaterial(m, hasCol, safeMaxMetalness, quantizeOpts);
           disposableMats.push(conv);
           return conv;
         });
         obj.material = nextMats;
       } else {
-        const conv = convertToExportStandardMaterial(obj.material, hasCol, safeMaxMetalness);
+        const conv = convertToExportStandardMaterial(obj.material, hasCol, safeMaxMetalness, quantizeOpts);
         disposableMats.push(conv);
         obj.material = conv;
       }
@@ -355,6 +465,9 @@ export async function exportRiggedAssetToGlb(
     cleanupCanvasShim();
     for (const m of disposableMats) {
       m.dispose();
+    }
+    for (const t of disposableTex) {
+      t.dispose();
     }
   }
 

@@ -67,7 +67,8 @@ void main() {
       vec4 qMeta = texelFetch(tMeta, q, 0);
       if (qMeta.b < 0.5) continue; // Not an expanded seed pixel
 
-      int Pq = int(floor(qMeta.g * 16.0 + 0.5));
+      int qCode = int(floor(qMeta.g * 32.0 + 0.5));
+      int Pq = qCode % 16;
       if (Pq <= 1) continue;
 
       int minOff = -(Pq / 2);

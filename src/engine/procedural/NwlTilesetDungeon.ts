@@ -33,6 +33,10 @@ import {
   synthesizeModularTilesetSheet,
 } from './PixelMaterialSynth';
 import { bakeVertexAoAndCreases } from './VertexAndTexelBaker';
+import {
+  buildInstancedPropBatch,
+  type InstancePlacement,
+} from './InstancedBatchKit';
 
 export type NwlTilesetBiome = 'green_ruins' | 'city' | 'training_field';
 export type DungeonRoomKind = 'entrance' | 'corridor' | 'combat' | 'treasure' | 'boss';
@@ -662,6 +666,8 @@ export function buildGreenRuinsFloor1(
   const floorGeos: THREE.BufferGeometry[] = [];
   const wallGeos: THREE.BufferGeometry[] = [];
   const decorTaggedParts: TaggedGeometryPart[] = [];
+  const torchPlacements: InstancePlacement[] = [];
+  const treePlacements: InstancePlacement[] = [];
 
   const pushMappedTile = (
     geo: THREE.BufferGeometry,
@@ -736,20 +742,9 @@ export function buildGreenRuinsFloor1(
         pushMappedTile(w, isBroken ? 'wall_moss' : 'wall_stone', wallGeos);
 
         if (rng() > 0.8) {
-          const sconce = makeBeveledBox(0.18, 0.35, 0.22, 0.018, RUINS_PAL.stoneDark, {
-            offset: [wp.x, 1.85, wp.z - NWL_TILE_M * 0.35],
+          torchPlacements.push({
+            position: [wp.x, 1.85, wp.z - NWL_TILE_M * 0.35],
           });
-          const flame = makeBeveledBox(0.2, 0.24, 0.2, 0.04, RUINS_PAL.ember, {
-            offset: [wp.x, 2.15, wp.z - NWL_TILE_M * 0.3],
-          });
-          decorTaggedParts.push(
-            tagPart(sconce, `sconce_${c}_${r}`, 'forged_steel', RUINS_PAL.stoneDark, {
-              lockVertical: true,
-            }),
-            tagPart(flame, `flame_${c}_${r}`, 'runic_glow', RUINS_PAL.ember, {
-              lockVertical: false,
-            })
-          );
         }
       }
       if (!hasW) {
@@ -788,40 +783,143 @@ export function buildGreenRuinsFloor1(
         pushMappedTile(curb, 'wall_moss', wallGeos);
       }
 
-      // Outer Ruins Foliage / Twisted Trees on random borders (kept concise for sharp silhouette)
+      // Outer Ruins Foliage / Twisted Trees on random borders (collected for InstancedMesh batching)
       if ((!hasN || !hasW) && rng() > 0.9) {
         const tx = wp.x + (!hasW ? -0.95 : 0);
         const tz = wp.z + (!hasN ? -0.95 : 0);
-        const trunk = makeLatheProfile(
-          [
-            [0.28, 0],
-            [0.2, 0.5],
-            [0.15, 1.75],
-          ],
-          7,
-          RUINS_PAL.wood,
-          { offset: [tx, 0, tz], staveGrooveAmplitude: 0.04 }
-        );
-        const crown = makeSdfOrganicMesh(
-          (px0, py0, pz0) => {
-            const d1 = sdEllipsoid(px0, py0, pz0, tx, 2.2, tz, 0.82, 0.68, 0.82);
-            return d1 + sdfHashNoise3D(px0 * 2.5, py0 * 2.5, pz0 * 2.5, seed + r) * 0.07;
-          },
-          [tx - 1.0, 1.4, tz - 1.0],
-          [tx + 1.0, 3.05, tz + 1.0],
-          10,
-          RUINS_PAL.floraGreen
-        );
-        decorTaggedParts.push(
-          tagPart(trunk, `ruin_tree_t_${c}_${r}`, 'timber_frame', RUINS_PAL.wood, {
-            lockVertical: true,
-          }),
-          tagPart(crown, `ruin_tree_c_${c}_${r}`, 'foliage_leaf', RUINS_PAL.floraGreen, {
-            lockVertical: true,
-          })
-        );
+        treePlacements.push({
+          position: [tx, 0, tz],
+          rotationY: ((c * 1.7 + r * 2.3) % (Math.PI * 2)),
+          scale: 0.9 + ((c + r) % 3) * 0.08,
+        });
       }
     }
+  }
+
+  // Build InstancedMesh batches for repeated dungeon wall torches & twisted ruin trees
+  if (torchPlacements.length > 0) {
+    const torchProtoParts: TaggedGeometryPart[] = [
+      tagPart(
+        makeBeveledBox(0.18, 0.35, 0.22, 0.018, RUINS_PAL.stoneDark),
+        'ruins_torch_sconce',
+        'forged_steel',
+        RUINS_PAL.stoneDark,
+        { lockVertical: true }
+      ),
+      tagPart(
+        makeBeveledBox(0.2, 0.24, 0.2, 0.04, RUINS_PAL.ember, { offset: [0, 0.3, 0.05] }),
+        'ruins_torch_flame',
+        'runic_glow',
+        RUINS_PAL.ember,
+        { lockVertical: false }
+      ),
+    ];
+    const torchBaked = bakeTaggedPartsAsset(torchProtoParts, {
+      finishMode,
+      texelsPerMeter: 32,
+      seed: seed + 19,
+      aoRays: 8,
+      aoStrength,
+      normalStrength,
+      emissiveRuneHex: RUINS_PAL.ember,
+      usePool: true,
+      cacheKey: 'nwl_ruins:torch_proto',
+      inspectUvs: false,
+    });
+    for (const p of torchProtoParts) p.geometry.dispose();
+    const torchMat = createPixelizerMaterialFromBaked(
+      torchBaked,
+      {
+        pixelated: true,
+        pixelSize: px,
+        objectId: 55,
+        outlineColor: '#14101c',
+        outlineAlpha: 1,
+        edgeHighlight: 0.36,
+        edgeBevelWeight: 0.68,
+        useColorGrading: true,
+      },
+      sharedResources
+    );
+    materials.push(torchMat);
+    root.add(
+      buildInstancedPropBatch({
+        name: 'Ruins_Torches_Instanced',
+        geometry: torchBaked.geometry,
+        material: torchMat,
+        placements: torchPlacements,
+        pixelSize: px,
+        gridReference: root,
+        castShadow: false,
+        receiveShadow: true,
+      })
+    );
+  }
+
+  if (treePlacements.length > 0) {
+    const trunk = makeLatheProfile(
+      [
+        [0.28, 0],
+        [0.2, 0.5],
+        [0.15, 1.75],
+      ],
+      7,
+      RUINS_PAL.wood,
+      { staveGrooveAmplitude: 0.04 }
+    );
+    const crown = makeSdfOrganicMesh(
+      (px0, py0, pz0) => {
+        const d1 = sdEllipsoid(px0, py0, pz0, 0, 2.2, 0, 0.82, 0.68, 0.82);
+        return d1 + sdfHashNoise3D(px0 * 2.5, py0 * 2.5, pz0 * 2.5, seed + 7) * 0.07;
+      },
+      [-1.0, 1.4, -1.0],
+      [1.0, 3.05, 1.0],
+      10,
+      RUINS_PAL.floraGreen
+    );
+    const treeProtoParts: TaggedGeometryPart[] = [
+      tagPart(trunk, 'ruins_tree_trunk', 'timber_frame', RUINS_PAL.wood, { lockVertical: true }),
+      tagPart(crown, 'ruins_tree_crown', 'foliage_leaf', RUINS_PAL.floraGreen, { lockVertical: true }),
+    ];
+    const treeBaked = bakeTaggedPartsAsset(treeProtoParts, {
+      finishMode,
+      texelsPerMeter: 32,
+      seed: seed + 23,
+      aoRays: 10,
+      aoStrength,
+      normalStrength,
+      usePool: true,
+      cacheKey: `nwl_ruins:tree_proto:${seed}`,
+      inspectUvs: false,
+    });
+    for (const p of treeProtoParts) p.geometry.dispose();
+    const treeMat = createPixelizerMaterialFromBaked(
+      treeBaked,
+      {
+        pixelated: true,
+        pixelSize: px,
+        objectId: 59,
+        outlineColor: '#14101c',
+        outlineAlpha: 1,
+        edgeHighlight: 0.34,
+        edgeBevelWeight: 0.65,
+        useColorGrading: true,
+      },
+      sharedResources
+    );
+    materials.push(treeMat);
+    root.add(
+      buildInstancedPropBatch({
+        name: 'Ruins_Trees_Instanced',
+        geometry: treeBaked.geometry,
+        material: treeMat,
+        placements: treePlacements,
+        pixelSize: px,
+        gridReference: root,
+        castShadow: true,
+        receiveShadow: true,
+      })
+    );
   }
 
   const floorGeo = mergeColoredParts(floorGeos);
@@ -1330,6 +1428,23 @@ export function buildGreenRuinsFloor1(
 
   root.userData.unwrapMetrics = landmarkBaked.unwrapMetrics;
 
+  // Wave 3: Dynamic short-range PointLights (Return Portal, Sacred Altar, Boss Arena)
+  const portalLight = new THREE.PointLight(RUINS_PAL.portalBlue, 2.6, 8.0, 1.8);
+  portalLight.name = 'Ruins_ReturnPortal_Light';
+  portalLight.position.set(returnPortalPos.x, 2.0, returnPortalPos.z);
+  root.add(portalLight);
+
+  const altarLight = new THREE.PointLight(RUINS_PAL.portalBlue, 2.0, 6.5, 1.8);
+  altarLight.name = 'Ruins_Altar_Light';
+  altarLight.position.set(altarPos.x, 1.85, altarPos.z);
+  root.add(altarLight);
+
+  const bossArenaPos = cellToWorld(9, 22);
+  const bossLight = new THREE.PointLight(RUINS_PAL.ember, 3.0, 10.5, 1.6);
+  bossLight.name = 'Ruins_BossArena_Light';
+  bossLight.position.set(bossArenaPos.x, 2.8, bossArenaPos.z);
+  root.add(bossLight);
+
   const isWalkableWorld = (wx: number, wz: number): boolean => {
     const fc = Math.round(wx / NWL_TILE_M + (cols - 1) * 0.5);
     const fr = Math.round((rows - 1) * 0.5 - wz / NWL_TILE_M);
@@ -1339,6 +1454,8 @@ export function buildGreenRuinsFloor1(
 
   const update = (time: number) => {
     returnPortalCore.rotation.y = time * 1.6;
+    portalLight.intensity = 2.4 + Math.sin(time * 3.5) * 0.35;
+    bossLight.intensity = 2.8 + Math.sin(time * 2.4) * 0.4;
     const trapPhase = Math.sin(time * 2.2);
     const active = trapPhase > 0.25;
     for (const tr of traps) {
@@ -1370,6 +1487,7 @@ export function buildGreenRuinsFloor1(
     update,
     dispose: () => {
       root.traverse((obj) => {
+        if (obj instanceof THREE.InstancedMesh) obj.dispose();
         if (obj instanceof THREE.Mesh) obj.geometry.dispose();
       });
       disposeMaterialsAndOwnedTextures(materials);

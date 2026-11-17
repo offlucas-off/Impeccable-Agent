@@ -262,8 +262,40 @@ export function createNwlPlaySandbox(
     enemies = [];
   };
 
+  const attachSpellPointLight = (id: NwlSpellVfxId, targetRoot: THREE.Object3D): void => {
+    let colorHex: string | null = null;
+    let intensity = 2.0;
+    let distance = 5.5;
+    if (id === 'seta_fogo' || id === 'meteoro' || id === 'impact_spark') {
+      colorHex = '#fa6a0a';
+      intensity = id === 'meteoro' ? 2.6 : 1.75;
+      distance = id === 'meteoro' ? 7.0 : 5.0;
+    } else if (
+      id === 'barreira' ||
+      id === 'egide_refletora' ||
+      id === 'nova_arcana' ||
+      id === 'corrente_de_raios' ||
+      id === 'armadilha_de_gelo' ||
+      id === 'prisao_gelo' ||
+      id === 'projetil.orbe'
+    ) {
+      colorHex = '#249fde';
+      intensity = 1.8;
+      distance = 5.2;
+    } else if (id === 'investida' || id === 'grito_de_guerra') {
+      colorHex = '#ffd541';
+      intensity = 1.5;
+      distance = 4.6;
+    }
+    if (!colorHex) return;
+    const pl = new THREE.PointLight(colorHex, intensity, distance, 1.5);
+    pl.position.set(0, 0.75, 0);
+    targetRoot.add(pl);
+  };
+
   const spawnVfxAt = (id: NwlSpellVfxId, pos: THREE.Vector3, yaw = 0, durationOverride?: number) => {
     const vfx = buildNwlSpellVfx(id, res(), 170);
+    attachSpellPointLight(id, vfx.root);
     vfx.root.position.copy(pos);
     vfx.root.rotation.y = yaw;
     root.add(vfx.root);
@@ -457,6 +489,7 @@ export function createNwlPlaySandbox(
       playHeroClip('Spell_Simple_Shoot');
       const projId: NwlSpellVfxId = hero.classId === 'archer' ? 'projetil.flecha' : 'seta_fogo';
       const vfx = buildNwlSpellVfx(projId, res(), 175);
+      attachSpellPointLight(projId, vfx.root);
       vfx.root.position.copy(hero.root.position).add(new THREE.Vector3(0, 1.0, 0));
       vfx.root.rotation.y = heroYaw;
       root.add(vfx.root);
@@ -489,6 +522,7 @@ export function createNwlPlaySandbox(
       hitEnemiesInRadius(hero.root.position, spell.range, spell.damage);
     } else if (spell.isProjectile) {
       const vfx = buildNwlSpellVfx(spell.vfxId, res(), 176);
+      attachSpellPointLight(spell.vfxId, vfx.root);
       vfx.root.position.copy(hero.root.position).add(new THREE.Vector3(0, 1.0, 0));
       vfx.root.rotation.y = heroYaw;
       root.add(vfx.root);
@@ -822,6 +856,7 @@ export function createNwlPlaySandbox(
               const pId: NwlSpellVfxId =
                 e.spawnId === 'orcs.goblin_02' ? 'projetil.orbe' : 'projetil.flecha';
               const vfx = buildNwlSpellVfx(pId, res(), 179);
+              attachSpellPointLight(pId, vfx.root);
               vfx.root.position.copy(ePos).add(new THREE.Vector3(0, 0.9, 0));
               const dir = toHero.clone().setY(0).normalize();
               vfx.root.rotation.y = Math.atan2(dir.x, dir.z);
