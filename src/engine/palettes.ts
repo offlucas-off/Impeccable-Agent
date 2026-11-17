@@ -144,6 +144,37 @@ export const BUILTIN_PALETTES: ColorPaletteConfig[] = [
     valueCurveGamma: 1.05,
   },
   {
+    id: 'snes_pal_nwl',
+    name: 'NWL SNES Dark Fantasy (+Skin)',
+    colors: [
+      '#141013', '#3b1725', '#73172d', '#b4202a',
+      '#df3e23', '#fa6a0a', '#f9a31b', '#ffd541',
+      '#24523b', '#1a7a3e', '#285cc4', '#249fde',
+      '#6d758d', '#b3b9d1', '#dae0ea', '#4a3052',
+      '#e0a882', '#b87b56',
+    ],
+    method: 'hue_priority',
+    hsvWeights: [0.55, 0.35, 1.0],
+    enableDither: true,
+    ditherStrength: 0.9,
+    valueCurveGamma: 1.05,
+  },
+  {
+    id: 'hades_ink',
+    name: 'Lab: Hades Graphic Ink (16)',
+    colors: [
+      '#07060b', '#151320', '#1d243b', '#35436e',
+      '#73172d', '#bf1b2c', '#ff6a00', '#f9a31b',
+      '#ffe44d', '#18e89e', '#0d7a5f', '#249fde',
+      '#df2bff', '#a066ff', '#d4a234', '#f2ece4',
+    ],
+    method: 'oklab_perceptual',
+    hsvWeights: [0.45, 0.35, 1.0],
+    enableDither: false,
+    ditherStrength: 0.15,
+    valueCurveGamma: 0.95,
+  },
+  {
     id: 'nes',
     name: 'NES 2C02 (Console)',
     colors: [

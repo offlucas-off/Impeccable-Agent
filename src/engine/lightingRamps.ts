@@ -22,6 +22,15 @@ export const BUILTIN_LIGHTING_RAMPS: LightingRampConfig[] = [
     ],
   },
   {
+    id: 'hades_graphic_ink',
+    name: 'Hades Graphic Ink (Lab)',
+    smooth: false,
+    stops: [
+      { position: 0.0, color: '#2b2042' },
+      { position: 0.34, color: '#ffffff' },
+    ],
+  },
+  {
     id: 'four_band',
     name: '4-Band Sprite Shading',
     smooth: false,

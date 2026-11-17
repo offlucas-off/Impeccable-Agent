@@ -4,12 +4,33 @@ import { PixelizerMaterial } from '../../engine/PixelizerMaterial';
 import {
   PixelizerPipeline,
   type PixelizerObjectAttachment,
+  type VisualStylePresetId,
 } from '../../engine/PixelizerPipeline';
 import {
   buildProceduralUalCharacter,
   type GeneratedCharacterResult,
 } from '../../engine/procedural/CharacterBuilder';
+import { buildNwlStarterCity } from '../../engine/procedural/CityBuilder';
+import {
+  NWL_MONSTER_IDS,
+  buildNwlMonster,
+  type GeneratedMonsterResult,
+} from '../../engine/procedural/MonsterBuilder';
+import { type GeneratedNpcResult } from '../../engine/procedural/NpcBuilder';
+import {
+  buildGreenRuinsFloor1,
+  buildNwlTilesetCatalog,
+} from '../../engine/procedural/NwlTilesetDungeon';
+import {
+  buildNwlPlayerCharacter,
+  type PlayerCharacterInstance,
+  type PlayerClassId,
+} from '../../engine/procedural/PlayerEquipmentBuilder';
 import { type GeneratedPropResult } from '../../engine/procedural/PropBuilder';
+import {
+  buildSpellVfxShowcase,
+  type GeneratedSpellVfxResult,
+} from '../../engine/procedural/SpellVfxBuilder';
 import {
   buildProceduralStructure,
   type GeneratedStructureResult,
@@ -41,6 +62,10 @@ import type {
   VoxelGridResult,
 } from '../../engine/types';
 import {
+  createNwlPlaySandbox,
+  type PlaySandboxHandle,
+} from '../../sandbox/NwlPlaySandbox';
+import {
   loadModelFromFile,
   loadModelFromUrl,
   pickPreferredClipIndex,
@@ -64,6 +89,7 @@ interface ActiveStage {
   sceneRoot: THREE.Group;
   items: SceneItemEntry[];
   updateAnimation: (quantizedTime: number, motionTest: boolean) => void;
+  onCleanup?: () => void;
 }
 
 interface ActiveVoxelPreview {
@@ -158,57 +184,73 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
           </div>
         </div>
         <select id="sel-demo-scene" class="select-ctrl" aria-label="Demo Scene Preset">
-          <optgroup label="Procedural Demos">
-            <option value="rover">Preset: Hover Rover &amp; Drone</option>
-            <option value="knight">Preset: Pixel Knight &amp; Gear</option>
-            <option value="creep_lab">Preset: Creep &amp; Edge Lab</option>
-            <option value="relic_chest">Preset: Relic Chest &amp; Crystal</option>
-            <option value="hybrid_diorama">Preset: Hybrid 3D + Pixel</option>
+          <optgroup label="Nowhereland (NWL Oficial)">
+            <option value="nwl_knight">NWL: Herói Cavaleiro (1.79m · Shell)</option>
+            <option value="nwl_archer">NWL: Herói Arqueiro (1.79m · Arco)</option>
+            <option value="nwl_mage">NWL: Herói Mago (1.79m · Cajado)</option>
+            <option value="nwl_starter_city">NWL: Cidade dos Portais (6 Casas + 9 NPCs)</option>
+            <option value="nwl_bestiary">NWL: Bestiário (5 Inimigos + Boss Demônio)</option>
+            <option value="nwl_dungeon_floor1">NWL: Ruínas Verdes · Andar 1</option>
+            <option value="nwl_tileset_ruins">NWL: Tileset Modular 1.5m</option>
+            <option value="nwl_spells_vfx">NWL: Magias &amp; VFX 3D Pixelados</option>
           </optgroup>
-          <optgroup label="UAL 65-Bone Autonomous (85 Anims)">
-            <option value="ual_knight">UAL: Knight (Skinned + Sword)</option>
-            <option value="ual_knight_rigid">UAL: NWL Rigid Knight (0 Skin)</option>
-            <option value="ual_zombie">UAL: Zombie (Voxel Rigged)</option>
-            <option value="ual_dungeon">WFC: Procedural Dungeon 4×4</option>
+          <optgroup label="Referência Visual">
+            <option value="char_fox">Ref: Wild Fox (SNES Dark Fantasy 3×3)</option>
           </optgroup>
-          <optgroup label="Articulated 3D Characters (GLB)">
-            <option value="char_knight">Char: RPG Knight (CC0 · 76 Clips)</option>
-            <option value="char_robot">Char: Expressive Bot (MIT · 14 Clips)</option>
-            <option value="char_soldier">Char: Tactical Soldier (MIT · 4 Clips)</option>
-            <option value="char_fox">Char: Wild Fox (CC0 · 3 Clips)</option>
+          <optgroup label="Legacy Archive (Genéricos)">
+            <option value="rover">Legacy: Hover Rover &amp; Drone</option>
+            <option value="knight">Legacy: Pixel Knight &amp; Gear</option>
+            <option value="creep_lab">Legacy: Creep &amp; Edge Lab</option>
+            <option value="relic_chest">Legacy: Relic Chest &amp; Crystal</option>
+            <option value="hybrid_diorama">Legacy: Hybrid 3D + Pixel</option>
+            <option value="ual_knight">Legacy UAL: Skinned Knight</option>
+            <option value="ual_knight_rigid">Legacy UAL: Rigid Knight</option>
+            <option value="ual_zombie">Legacy UAL: Zombie (Voxel)</option>
+            <option value="ual_dungeon">Legacy WFC: Dungeon 4×4</option>
+            <option value="char_knight">Legacy GLB: RPG Knight (76 Clips)</option>
+            <option value="char_robot">Legacy GLB: Expressive Bot</option>
+            <option value="char_soldier">Legacy GLB: Tactical Soldier</option>
           </optgroup>
         </select>
-        <label class="btn" title="Import .glb, .gltf, .obj, .fbx or .stl">
+        <select id="sel-style-preset" class="select-ctrl" aria-label="Visual Style Preset" title="Preset Visual Oficial vs Teste Experimental">
+          <option value="nwl_snes">Estilo: NWL SNES Dark Fantasy (3×3)</option>
+          <option value="hades_lab">Lab: Hades Graphic Ink (1×1)</option>
+        </select>
+        <button id="btn-play-sandbox" class="btn btn-primary" type="button" title="Abrir Sandbox Jogável (Cidade + Ruínas Andar 1)">
+          ${ICONS.play}
+          <span>Play Sandbox</span>
+        </button>
+      </div>
+
+      <div class="topbar-center">
+        <label class="btn btn-sm" title="Import .glb, .gltf, .obj, .fbx or .stl">
           ${ICONS.upload}
           <span>Import 3D</span>
           <input id="file-model-input" type="file" accept=".glb,.gltf,.obj,.fbx,.stl" style="display:none;" />
         </label>
-      </div>
-
-      <div class="topbar-center">
-        <button id="btn-split-compare" class="btn" type="button" title="Toggle Raw 3D vs Pixelized Split Compare">
+        <button id="btn-split-compare" class="btn btn-sm" type="button" title="Toggle Raw 3D vs Pixelized Split Compare">
           ${ICONS.split}
-          <span>A/B Split</span>
+          <span>A/B</span>
         </button>
-        <button id="btn-motion-test" class="btn" type="button" title="Sweep object across grid to test Pixel Creep snapping">
+        <button id="btn-motion-test" class="btn btn-sm" type="button" title="Sweep object across grid to test Pixel Creep snapping">
           ${ICONS.grid}
-          <span>Creep Test</span>
+          <span>Creep</span>
         </button>
-        <select id="sel-debug-view" class="select-ctrl" aria-label="Debug Render Pass">
-          <option value="final">View: Final Composite</option>
-          <option value="raw_3d">View: Raw 3D (Unpixelized)</option>
-          <option value="seed_dither">View: Pass 1 Seeds</option>
+        <select id="sel-debug-view" class="select-ctrl select-ctrl-sm" aria-label="Debug Render Pass">
+          <option value="final">View: Final</option>
+          <option value="raw_3d">View: Raw 3D</option>
+          <option value="seed_dither">View: Seeds</option>
           <option value="object_ids">View: Object IDs</option>
-          <option value="normals">View: Encoded Normals</option>
-          <option value="depth">View: Linear Depth</option>
-          <option value="edges">View: Outlines &amp; Edges</option>
+          <option value="normals">View: Normals</option>
+          <option value="depth">View: Depth</option>
+          <option value="edges">View: Outlines</option>
         </select>
       </div>
 
       <div class="topbar-right">
-        <button id="btn-quick-png" class="btn btn-primary" type="button">
+        <button id="btn-quick-png" class="btn" type="button">
           ${ICONS.camera}
-          <span>Snapshot PNG</span>
+          <span>Snapshot</span>
         </button>
       </div>
     </header>
@@ -636,12 +678,12 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
           <!-- TAB 6: EXPORT (SPRITES + NWL + 3D VOXEL MESH) -->
           <div class="tab-pane" data-pane="export">
             <div class="ctrl-section">
-              <div class="ctrl-section-head"><span>NWL 40px Isometric Sheet (8 Real Dirs)</span></div>
+              <div class="ctrl-section-head"><span>NWL 108px Isometric Sheet (8 Real Dirs)</span></div>
               <div class="ctrl-section-body">
                 <div class="field-row">
                   <span class="field-label">Target Height / Frames</span>
                   <div class="field-control">
-                    <input id="num-nwl-h" class="input-ctrl" type="number" min="24" max="128" value="40" style="width:66px;height:26px;" title="Target Character Height (px)" />
+                    <input id="num-nwl-h" class="input-ctrl" type="number" min="24" max="256" value="108" style="width:66px;height:26px;" title="Target Character Height (px · NWL=108)" />
                     <input id="num-nwl-frames" class="input-ctrl" type="number" min="1" max="16" value="8" style="width:66px;height:26px;" title="Frames per direction" />
                   </div>
                 </div>
@@ -649,7 +691,7 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
                   <span>Export NWL 8-Dir Sheet (Zero Clipping)</span>
                 </button>
                 <div id="nwl-sheet-stats" class="voxel-stats-box">
-                  <span>8 Real Dirs (No flipX) · Binary Hard Alpha · ≥96px Safe Box</span>
+                  <span>8 Real Dirs (No flipX) · Escala 1m=60px (108px) · Binary Alpha</span>
                 </div>
               </div>
             </div>
@@ -870,6 +912,8 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
   let animViewerHandle: AnimViewerPanelHandle | null = null;
   let nativeModelClips: THREE.AnimationClip[] = [];
   let activeStructureRoot: THREE.Object3D | null = null;
+  let activePlayerInstance: PlayerCharacterInstance | null = null;
+  let activeSandbox: PlaySandboxHandle | null = null;
 
   let activeStage: ActiveStage | null = null;
   let activeVoxel: ActiveVoxelPreview | null = null;
@@ -885,6 +929,8 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
   const selAnimClip = rootElement.querySelector<HTMLSelectElement>('#sel-anim-clip')!;
   const sceneItemList = rootElement.querySelector<HTMLDivElement>('#scene-item-list')!;
   const selLightingRamp = rootElement.querySelector<HTMLSelectElement>('#sel-lighting-ramp')!;
+  const selStylePreset = rootElement.querySelector<HTMLSelectElement>('#sel-style-preset')!;
+  const btnPlaySandbox = rootElement.querySelector<HTMLButtonElement>('#btn-play-sandbox')!;
   const valConvMode = rootElement.querySelector<HTMLElement>('#val-conv-mode')!;
   const filterBtns = rootElement.querySelectorAll<HTMLButtonElement>('[data-filter]');
   const btnModeVoxel = rootElement.querySelector<HTMLButtonElement>('#btn-mode-voxel')!;
@@ -1034,18 +1080,18 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
       box.getSize(size);
       box.getCenter(center);
       const nextH = Number(
-        Math.max(8.5, Math.min(20.0, Math.max(size.x, size.z) * 0.72 + size.y * 0.88)).toFixed(1)
+        Math.max(8.5, Math.min(28.0, Math.max(size.x, size.z) * 0.84 + size.y * 0.90)).toFixed(1)
       );
       pipeline.cameraConfig.orthoHeight = nextH;
       if (rngOrtho) rngOrtho.value = String(nextH);
       if (valOrtho) valOrtho.textContent = nextH.toFixed(1);
-      orbitTarget.set(center.x, Math.max(1.2, center.y * 0.78), center.z);
-      dirLight.shadow.camera.left = -12;
-      dirLight.shadow.camera.right = 12;
-      dirLight.shadow.camera.top = 12;
-      dirLight.shadow.camera.bottom = -12;
+      orbitTarget.set(center.x, Math.max(1.2, center.y * 0.72), center.z);
+      dirLight.shadow.camera.left = -22;
+      dirLight.shadow.camera.right = 22;
+      dirLight.shadow.camera.top = 22;
+      dirLight.shadow.camera.bottom = -22;
       dirLight.shadow.camera.updateProjectionMatrix();
-      setCameraPose(30, 45, 22);
+      setCameraPose(30, 45, 32);
     } else {
       pipeline.cameraConfig.orthoHeight = 5.8;
       if (rngOrtho) rngOrtho.value = '5.8';
@@ -1060,15 +1106,89 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
     }
   }
 
-  function applyStage(next: ActiveStage): void {
+  function exitPlaySandbox(reloadPreset = true): void {
+    if (!activeSandbox) return;
+    scene.remove(activeSandbox.root);
+    activeSandbox.dispose();
+    activeSandbox = null;
+    controls.enablePan = true;
+    btnPlaySandbox.classList.remove('is-active');
+    const scEl = rootElement.querySelector<HTMLElement>('#scene-caption');
+    if (scEl && !pipeline.pipelineConfig.splitCompare) scEl.style.display = 'block';
+    if (reloadPreset) {
+      void loadPresetSelection(selDemo.value || 'nwl_knight');
+    }
+  }
+
+  function enterPlaySandbox(): void {
+    if (activeSandbox) {
+      exitPlaySandbox(true);
+      return;
+    }
+    loadRequestToken++;
     isVoxelMode = false;
     disposeVoxelPreview();
     if (activeStage) {
+      activeStage.onCleanup?.();
+      scene.remove(activeStage.sceneRoot);
+      disposeGroupResources(activeStage.sceneRoot);
+      activeStage = null;
+    }
+    activePlayerInstance = null;
+    activeStructureRoot = null;
+    nativeModelClips = [];
+    animCtrl.dispose();
+    syncAnimClipSelector([], 0);
+
+    activeSandbox = createNwlPlaySandbox(stageEl, pipeline, {
+      onExitSandbox: () => exitPlaySandbox(true),
+      onZoneOrActorChanged: () => {
+        if (!activeSandbox) return;
+        const target = activeSandbox.getCameraTarget();
+        orbitTarget.copy(target);
+        setCameraPose(30, 45, 16);
+      },
+    });
+    scene.add(activeSandbox.root);
+    if (selStylePreset.value === 'hades_lab') {
+      pipeline.applyVisualStylePreset('hades_lab', scene);
+    }
+
+    pipeline.cameraConfig.orthoHeight = 10.5;
+    const rngOrtho = rootElement.querySelector<HTMLInputElement>('#rng-ortho-h');
+    const valOrtho = rootElement.querySelector<HTMLElement>('#val-ortho-h');
+    if (rngOrtho) rngOrtho.value = '10.5';
+    if (valOrtho) valOrtho.textContent = '10.5';
+    dirLight.shadow.camera.left = -16;
+    dirLight.shadow.camera.right = 16;
+    dirLight.shadow.camera.top = 16;
+    dirLight.shadow.camera.bottom = -16;
+    dirLight.shadow.camera.updateProjectionMatrix();
+
+    controls.enablePan = false;
+    btnPlaySandbox.classList.add('is-active');
+    const scEl = rootElement.querySelector<HTMLElement>('#scene-caption');
+    if (scEl) scEl.style.display = 'none';
+
+    orbitTarget.copy(activeSandbox.getCameraTarget());
+    setCameraPose(30, 45, 16);
+  }
+
+  function applyStage(next: ActiveStage, preservePlayer = false): void {
+    if (activeSandbox) exitPlaySandbox(false);
+    isVoxelMode = false;
+    disposeVoxelPreview();
+    if (!preservePlayer) activePlayerInstance = null;
+    if (activeStage) {
+      activeStage.onCleanup?.();
       scene.remove(activeStage.sceneRoot);
       disposeGroupResources(activeStage.sceneRoot);
     }
     activeStage = next;
     scene.add(next.sceneRoot);
+    if (selStylePreset.value === 'hades_lab') {
+      pipeline.applyVisualStylePreset('hades_lab', scene);
+    }
     applyStageCameraFraming(next.subjectRoot, activeStructureRoot === next.subjectRoot);
     captionTitle.textContent = next.name;
     captionDesc.textContent = next.description;
@@ -1206,6 +1326,160 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
     }
   }
 
+  function mountNwlPlayer(
+    player: PlayerCharacterInstance,
+    preferredClip?: string
+  ): void {
+    activeStructureRoot = null;
+    nativeModelClips = [];
+    const { wrapScene, items } = buildStageWrapAndItems(
+      player.root,
+      `NWL ${player.classId}`,
+      player.materials
+    );
+    animCtrl.dispose();
+    syncAnimClipSelector([], 0);
+    activePlayerInstance = player;
+
+    const clip =
+      preferredClip ??
+      (player.classId === 'knight'
+        ? 'Sword_Regular_A'
+        : player.classId === 'mage'
+        ? 'Spell_Simple_Shoot'
+        : 'Idle_Loop');
+
+    applyStage(
+      {
+        name: `NWL Herói: ${player.classId.toUpperCase()} (1.79m · Shell)`,
+        description: `BaseShell padronizado (65 bones UAL) com 6 slots modulares (Elmo, Peitoral, Calça, Bota, Luva, Arma) · 1m=60px (108px).`,
+        subjectRoot: player.root,
+        sceneRoot: wrapScene,
+        items,
+        updateAnimation: (t, motionTest) => {
+          player.root.position.x = motionTest ? Math.sin(t * 1.1) * 1.25 : 0;
+        },
+        onCleanup: () => player.dispose(),
+      },
+      true
+    );
+    bindUalClipsToSubject(player.root, clip);
+  }
+
+  function mountNwlNpc(npc: GeneratedNpcResult): void {
+    activeStructureRoot = null;
+    nativeModelClips = [];
+    const { wrapScene, items } = buildStageWrapAndItems(
+      npc.root,
+      npc.spec.namePt,
+      npc.materials
+    );
+    animCtrl.dispose();
+    syncAnimClipSelector([], 0);
+
+    applyStage({
+      name: `NWL NPC: ${npc.spec.namePt} (${npc.id})`,
+      description: `${npc.spec.rolePt} · Estrutura: ${npc.spec.buildingName} · ${npc.id === 'npc.bau' ? 'Baú interativo animado' : 'Rig UAL 1.70m (~102px)'}.`,
+      subjectRoot: npc.root,
+      sceneRoot: wrapScene,
+      items,
+      updateAnimation: (t, motionTest) => {
+        if (npc.setChestOpen) {
+          npc.setChestOpen(Math.sin(t * 1.8) > 0);
+        }
+        npc.root.position.x = motionTest ? Math.sin(t * 1.1) * 1.25 : 0;
+      },
+    });
+    if (npc.rig) bindUalClipsToSubject(npc.root, 'Idle_Loop');
+  }
+
+  function mountNwlMonster(monster: GeneratedMonsterResult): void {
+    activeStructureRoot = null;
+    nativeModelClips = [];
+    const floorR = monster.spec.role === 'boss' ? 7.2 : 5.5;
+    const { wrapScene, items } = buildStageWrapAndItems(
+      monster.root,
+      monster.spec.namePt,
+      monster.materials,
+      floorR
+    );
+    animCtrl.dispose();
+    syncAnimClipSelector([], 0);
+
+    applyStage({
+      name: `Bestiário NWL: ${monster.spec.namePt}`,
+      description: `Escala oficial ${monster.spec.targetHeightM.toFixed(2)}m (~${monster.spec.targetHeightPx}px @ 60px/m) · HP ${monster.spec.maxHp} · Dano ${monster.spec.damage}.`,
+      subjectRoot: monster.root,
+      sceneRoot: wrapScene,
+      items,
+      updateAnimation: (t, motionTest) => {
+        monster.root.position.x = motionTest ? Math.sin(t * 1.1) * 1.25 : 0;
+      },
+    });
+    bindUalClipsToSubject(monster.root, 'Sword_Regular_A');
+  }
+
+  function mountNwlSpellVfx(vfx: GeneratedSpellVfxResult): void {
+    activeStructureRoot = null;
+    nativeModelClips = [];
+    animCtrl.dispose();
+    syncAnimClipSelector([], 0);
+    const { wrapScene, items } = buildStageWrapAndItems(
+      vfx.root,
+      vfx.meta.labelPt,
+      vfx.materials
+    );
+
+    applyStage({
+      name: `Magia / VFX NWL: ${vfx.meta.labelPt}`,
+      description: `VFX 3D pixelado sem blur suave (${vfx.triangleCount} tris · Flat Palette LUT · duração ${vfx.meta.durationSec}s).`,
+      subjectRoot: vfx.root,
+      sceneRoot: wrapScene,
+      items,
+      updateAnimation: (t, motionTest) => {
+        const dur = Math.max(0.25, vfx.meta.durationSec);
+        vfx.updatePhase((t % dur) / dur);
+        vfx.root.position.x = motionTest ? Math.sin(t * 1.1) * 1.0 : 0;
+      },
+      onCleanup: () => vfx.dispose(),
+    });
+  }
+
+  function mountNwlCustomScene(opts: {
+    name: string;
+    description: string;
+    root: THREE.Group;
+    materials: PixelizerMaterial[];
+    isLargeStructure?: boolean;
+    onUpdate?: (t: number) => void;
+    onCleanup?: () => void;
+  }): void {
+    activeStructureRoot = opts.isLargeStructure ? opts.root : null;
+    nativeModelClips = [];
+    animCtrl.dispose();
+    syncAnimClipSelector([], 0);
+    const floorR = opts.isLargeStructure ? 18 : 6;
+    const { wrapScene, items } = buildStageWrapAndItems(
+      opts.root,
+      opts.name,
+      opts.materials,
+      floorR
+    );
+
+    applyStage({
+      name: opts.name,
+      description: opts.description,
+      subjectRoot: opts.root,
+      sceneRoot: wrapScene,
+      items,
+      updateAnimation: (t, motionTest) => {
+        opts.onUpdate?.(t);
+        opts.root.position.x = motionTest ? Math.sin(t * 0.6) * 0.8 : 0;
+      },
+      onCleanup: opts.onCleanup,
+    });
+  }
+
   function mountGeneratedCharacter(
     res: GeneratedCharacterResult,
     preferredClip = 'Sword_Regular_A'
@@ -1293,6 +1567,142 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
   }
 
   async function loadPresetSelection(value: string): Promise<void> {
+    if (value === 'nwl_knight' || value === 'nwl_archer' || value === 'nwl_mage') {
+      loadRequestToken++;
+      const classMap: Record<string, PlayerClassId> = {
+        nwl_knight: 'knight',
+        nwl_archer: 'archer',
+        nwl_mage: 'mage',
+      };
+      const cls = classMap[value];
+      const player = buildNwlPlayerCharacter(
+        { classId: cls, rarity: 'normal', pixelSize: 3 },
+        pipeline.getSharedResourcesForMaterial()
+      );
+      mountNwlPlayer(player);
+      return;
+    }
+    if (value === 'nwl_starter_city') {
+      loadRequestToken++;
+      const city = buildNwlStarterCity(pipeline.getSharedResourcesForMaterial());
+      const bank = AnimationLibraryBank.getInstance();
+      const npcMixers: THREE.AnimationMixer[] = [];
+      const attachNpcIdles = () => {
+        const idle = bank.getClip('Idle_Loop');
+        if (!idle) return;
+        for (const p of city.npcs) {
+          if (p.instance.rig) {
+            const mx = new THREE.AnimationMixer(p.instance.root);
+            mx.clipAction(idle.clone()).play();
+            npcMixers.push(mx);
+          }
+        }
+      };
+      if (bank.isLoaded()) attachNpcIdles();
+      else void bank.ensureLoaded().then(attachNpcIdles);
+
+      let prevT = 0;
+      mountNwlCustomScene({
+        name: city.name,
+        description: `6 casas entráveis (base/capa/porta), 9 NPCs (~1.70m), Baú do Herói e Portal das Profundezas · Grid 1.5m.`,
+        root: city.root,
+        materials: city.materials,
+        isLargeStructure: true,
+        onUpdate: (t) => {
+          const dt = Math.max(0, Math.min(0.1, t - prevT));
+          prevT = t;
+          for (const mx of npcMixers) mx.update(dt);
+          city.update(t);
+        },
+        onCleanup: () => city.dispose(),
+      });
+      return;
+    }
+    if (value === 'nwl_bestiary') {
+      loadRequestToken++;
+      const group = new THREE.Group();
+      group.name = 'NWL_Bestiary_Lineup';
+      const allMats: PixelizerMaterial[] = [];
+      const actors: GeneratedMonsterResult[] = [];
+      const xs = [-5.4, -3.5, -1.7, 0.2, 2.5, 5.4];
+      NWL_MONSTER_IDS.forEach((id, i) => {
+        const m = buildNwlMonster(id, { pixelSize: 3 }, pipeline.getSharedResourcesForMaterial());
+        m.root.position.set(xs[i], 0, 0);
+        group.add(m.root);
+        actors.push(m);
+        allMats.push(...m.materials);
+      });
+      const mixers: THREE.AnimationMixer[] = [];
+      const bank = AnimationLibraryBank.getInstance();
+      const attachClips = () => {
+        const clip = bank.getClip('Idle_Loop') ?? bank.getClip('Sword_Regular_A');
+        if (!clip) return;
+        for (const a of actors) {
+          const mx = new THREE.AnimationMixer(a.root);
+          mx.clipAction(clip.clone()).play();
+          mixers.push(mx);
+        }
+      };
+      if (bank.isLoaded()) attachClips();
+      else void bank.ensureLoaded().then(attachClips);
+
+      let prevT = 0;
+      mountNwlCustomScene({
+        name: 'Bestiário NWL: 5 Inimigos + Boss Demônio',
+        description: `Comparativo real de escala: 4 Goblins (1.35m / 82px), Orc Bruto (2.10m / 125px) e Lorde Demônio (2.95m / 177px).`,
+        root: group,
+        materials: allMats,
+        isLargeStructure: true,
+        onUpdate: (t) => {
+          const dt = Math.max(0, Math.min(0.1, t - prevT));
+          prevT = t;
+          for (const mx of mixers) mx.update(dt);
+        },
+      });
+      return;
+    }
+    if (value === 'nwl_dungeon_floor1') {
+      loadRequestToken++;
+      const dung = buildGreenRuinsFloor1(101, pipeline.getSharedResourcesForMaterial());
+      mountNwlCustomScene({
+        name: dung.name,
+        description: `${dung.rooms.length} salas conectadas (1.5m/tile) · 5 Inimigos + Boss Demônio + Armadilhas + Destrutíveis.`,
+        root: dung.root,
+        materials: dung.materials,
+        isLargeStructure: true,
+        onUpdate: (t) => dung.update(t),
+        onCleanup: () => dung.dispose(),
+      });
+      return;
+    }
+    if (value === 'nwl_tileset_ruins') {
+      loadRequestToken++;
+      const cat = buildNwlTilesetCatalog('green_ruins', pipeline.getSharedResourcesForMaterial());
+      mountNwlCustomScene({
+        name: cat.name,
+        description: `${cat.pieceCount} peças modulares 1.5m (chão, paredes 3m, flora, altar, baú, armadilha, destrutíveis).`,
+        root: cat.root,
+        materials: cat.materials,
+        isLargeStructure: true,
+        onCleanup: () => cat.dispose(),
+      });
+      return;
+    }
+    if (value === 'nwl_spells_vfx') {
+      loadRequestToken++;
+      const showcase = buildSpellVfxShowcase(pipeline.getSharedResourcesForMaterial());
+      mountNwlCustomScene({
+        name: 'NWL: Magias & VFX 3D Pixelados',
+        description: `Catálogo com ${showcase.vfxItems.length} efeitos (projéteis, skills de classe, telegraphs e impactos sem blur suave).`,
+        root: showcase.root,
+        materials: showcase.materials,
+        isLargeStructure: true,
+        onUpdate: (t) => showcase.update(t),
+        onCleanup: () => showcase.dispose(),
+      });
+      return;
+    }
+
     if (value === 'ual_knight') {
       loadRequestToken++;
       const res = buildProceduralUalCharacter(
@@ -1670,13 +2080,17 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
   });
 
   // Palette & Dither Tab
-  mountPaletteEditorTab(rootElement.querySelector<HTMLElement>('#pane-palette-host')!, pipeline, {
-    onPaletteOrDitherChanged: () => {
-      if (isVoxelMode && chkVoxelPal.checked) {
-        scheduleVoxelRebuild();
-      }
-    },
-  });
+  const paletteEditor = mountPaletteEditorTab(
+    rootElement.querySelector<HTMLElement>('#pane-palette-host')!,
+    pipeline,
+    {
+      onPaletteOrDitherChanged: () => {
+        if (isVoxelMode && chkVoxelPal.checked) {
+          scheduleVoxelRebuild();
+        }
+      },
+    }
+  );
 
   // Tab Navigation
   const tabBtns = rootElement.querySelectorAll<HTMLButtonElement>('.tab-btn');
@@ -1693,6 +2107,23 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
   const selDemo = rootElement.querySelector<HTMLSelectElement>('#sel-demo-scene')!;
   selDemo.addEventListener('change', () => {
     void loadPresetSelection(selDemo.value);
+  });
+
+  selStylePreset.addEventListener('change', () => {
+    const preset = selStylePreset.value as VisualStylePresetId;
+    pipeline.applyVisualStylePreset(preset, scene);
+    dirLight.color.set(pipeline.pipelineConfig.lightColor);
+    dirLight.intensity = pipeline.pipelineConfig.lightIntensity;
+    hemiLight.color.set(pipeline.pipelineConfig.ambientSkyColor);
+    ambientLight.color.set(pipeline.pipelineConfig.ambientSkyColor);
+    selLightingRamp.value = pipeline.activeRampId;
+    paletteEditor.refresh();
+    syncConversionModeUi();
+    syncObjectInspector();
+  });
+
+  btnPlaySandbox.addEventListener('click', () => {
+    enterPlaySandbox();
   });
 
   const fileModelInput = rootElement.querySelector<HTMLInputElement>('#file-model-input')!;
@@ -1995,6 +2426,12 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
     mountGeneratedCharacter: (res) => mountGeneratedCharacter(res, 'Sword_Regular_A'),
     mountGeneratedProp,
     mountGeneratedStructure,
+    mountNwlPlayer: (res) => mountNwlPlayer(res),
+    mountNwlNpc,
+    mountNwlMonster,
+    mountNwlCustomScene,
+    mountNwlSpellVfx,
+    getCurrentPlayerInstance: () => activePlayerInstance,
     getCurrentStructureRoot: () => activeStructureRoot,
     downloadBlob,
   });
@@ -2195,8 +2632,12 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
   ro.observe(stageEl);
   handleResize();
 
-  // Initialize Default Scene
-  loadDemoPreset('rover');
+  // Initialize Default NWL Scene & Official Style Preset
+  pipeline.applyVisualStylePreset('nwl_snes', scene);
+  selLightingRamp.value = pipeline.activeRampId;
+  paletteEditor.refresh();
+  selDemo.value = 'nwl_knight';
+  void loadPresetSelection('nwl_knight');
 
   // Animation & Render Loop
   let rafId = 0;
@@ -2207,12 +2648,22 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
     const dt = Math.min(0.1, (now - lastNow) / 1000);
     lastNow = now;
 
-    const qTime = animCtrl.update(dt);
-    activeStage?.updateAnimation(qTime, motionCreepTest);
-    if (activeVoxel && activeStage) {
-      activeVoxel.group.position.copy(activeStage.subjectRoot.position);
-      activeVoxel.group.rotation.copy(activeStage.subjectRoot.rotation);
-      activeVoxel.group.scale.copy(activeStage.subjectRoot.scale);
+    if (activeSandbox) {
+      activeSandbox.update(dt);
+      const tgt = activeSandbox.getCameraTarget();
+      const nextTarget = controls.target.clone().lerp(tgt, Math.min(1, dt * 8));
+      const delta = nextTarget.clone().sub(controls.target);
+      controls.target.copy(nextTarget);
+      orthoCamera.position.add(delta);
+      perspCamera.position.add(delta);
+    } else {
+      const qTime = animCtrl.update(dt);
+      activeStage?.updateAnimation(qTime, motionCreepTest);
+      if (activeVoxel && activeStage) {
+        activeVoxel.group.position.copy(activeStage.subjectRoot.position);
+        activeVoxel.group.rotation.copy(activeStage.subjectRoot.rotation);
+        activeVoxel.group.scale.copy(activeStage.subjectRoot.scale);
+      }
     }
     controls.update();
 
@@ -2274,13 +2725,21 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
       skeletonHelper.dispose();
     }
     disposeVoxelPreview();
+    if (activeSandbox) {
+      scene.remove(activeSandbox.root);
+      activeSandbox.dispose();
+      activeSandbox = null;
+    }
     ro.disconnect();
     stageEl.removeEventListener('dragover', onDragOver);
     stageEl.removeEventListener('dragleave', onDragLeave);
     stageEl.removeEventListener('drop', onDrop);
     animCtrl.dispose();
     controls.dispose();
-    if (activeStage) disposeGroupResources(activeStage.sceneRoot);
+    if (activeStage) {
+      activeStage.onCleanup?.();
+      disposeGroupResources(activeStage.sceneRoot);
+    }
     pipeline.dispose();
     renderer.dispose();
   };

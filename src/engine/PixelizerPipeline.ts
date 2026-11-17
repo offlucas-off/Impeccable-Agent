@@ -30,6 +30,8 @@ import type {
   SnapOptions,
 } from './types';
 
+export type VisualStylePresetId = 'nwl_snes' | 'hades_lab';
+
 export interface PixelizerObjectAttachment {
   snap: SnapOptions;
   gridReference?: THREE.Object3D | null;
@@ -92,9 +94,10 @@ export class PixelizerPipeline {
   private paletteMap = new Map<string, { config: ColorPaletteConfig; lut: PaletteLutPair | null }>();
   private rampMap = new Map<string, { config: LightingRampConfig; tex: THREE.DataTexture }>();
 
-  public activePaletteId = 'endesga32';
+  public activePaletteId = 'snes_pal_nwl';
   public activeDitherId = 'bayer4x4';
   public activeRampId = 'three_band';
+  public activeStylePreset: VisualStylePresetId = 'nwl_snes';
 
   private lastGrid: ComputedCameraGrid | null = null;
   private renderWidth = 1;
@@ -341,6 +344,82 @@ export class PixelizerPipeline {
 
   public getLastGrid(): ComputedCameraGrid | null {
     return this.lastGrid;
+  }
+
+  /**
+   * Applies an official visual preset across palette, dither, lighting ramp, outline thresholds,
+   * and optionally updates all pixelated scene materials to match.
+   */
+  public applyVisualStylePreset(
+    preset: VisualStylePresetId,
+    scene?: THREE.Scene
+  ): void {
+    this.activeStylePreset = preset;
+    if (preset === 'nwl_snes') {
+      this.activePaletteId = 'snes_pal_nwl';
+      this.activeDitherId = 'bayer4x4';
+      this.activeRampId = 'three_band';
+      this.pipelineConfig.filterMode = 'only_pixelized';
+      this.pipelineConfig.usePixelExpansion = true;
+      this.pipelineConfig.useDepthTestForIdOutlines = true;
+      this.pipelineConfig.useNormalsForEdgeDetection = true;
+      this.pipelineConfig.normalEdgeThreshold = 0.22;
+      this.pipelineConfig.edgeHighlightStrength = 0.9;
+      this.pipelineConfig.edgeBevelStrength = 1.0;
+      this.pipelineConfig.backgroundColor = '#141722';
+      this.pipelineConfig.lightColor = '#fff6e8';
+      this.pipelineConfig.lightIntensity = 1.4;
+      this.pipelineConfig.ambientSkyColor = '#7f93c2';
+      if (scene) {
+        scene.traverse((obj) => {
+          if (obj instanceof THREE.Mesh) {
+            const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+            for (const m of mats) {
+              if (m instanceof PixelizerMaterial && m.options.pixelated) {
+                m.updateOptions({
+                  pixelSize: obj.userData.nwlFixedPixelSize ?? 3,
+                  outlineColor: '#14101c',
+                  edgeHighlight: 0.35,
+                  edgeBevelWeight: 0.75,
+                });
+              }
+            }
+          }
+        });
+      }
+    } else {
+      this.activePaletteId = 'hades_ink';
+      this.activeDitherId = 'crosshatch';
+      this.activeRampId = 'hades_graphic_ink';
+      this.pipelineConfig.filterMode = 'cel_hard';
+      this.pipelineConfig.usePixelExpansion = false;
+      this.pipelineConfig.useDepthTestForIdOutlines = true;
+      this.pipelineConfig.useNormalsForEdgeDetection = true;
+      this.pipelineConfig.normalEdgeThreshold = 0.14;
+      this.pipelineConfig.edgeHighlightStrength = 0.25;
+      this.pipelineConfig.edgeBevelStrength = 0.4;
+      this.pipelineConfig.backgroundColor = '#07060b';
+      this.pipelineConfig.lightColor = '#ffd8a8';
+      this.pipelineConfig.lightIntensity = 1.65;
+      this.pipelineConfig.ambientSkyColor = '#283254';
+      if (scene) {
+        scene.traverse((obj) => {
+          if (obj instanceof THREE.Mesh) {
+            const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+            for (const m of mats) {
+              if (m instanceof PixelizerMaterial && m.options.pixelated) {
+                m.updateOptions({
+                  pixelSize: 1,
+                  outlineColor: '#07060b',
+                  edgeHighlight: 0.12,
+                  edgeBevelWeight: 0.45,
+                });
+              }
+            }
+          }
+        });
+      }
+    }
   }
 
   private supportsColorBufferFloat(): boolean {

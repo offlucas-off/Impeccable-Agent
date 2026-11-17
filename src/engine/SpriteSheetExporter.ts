@@ -200,7 +200,7 @@ export function exportTurntableSpriteSheet(
 }
 
 export interface NwlIsometricSheetOptions {
-  targetCharHeightPx?: number; // default 40
+  targetCharHeightPx?: number; // default 108 (NWL official: 1.79m = 108px, 1m = 60px)
   boxSizePx?: number;          // auto >= max(96, round(charH * 2.4)) to prevent Death01 clipping
   framesPerDirection?: number; // default 8
   alphaThreshold?: number;     // default 110 -> binary hard alpha 0 / 255
@@ -211,8 +211,8 @@ export const NWL_8_DIRECTIONS = ['S', 'SE', 'E', 'NE', 'N', 'NW', 'W', 'SW'] as 
 
 /**
  * Exports a strict non-mirrored 8-direction (S, SE, E, NE, N, NW, W, SW) isometric spritesheet
- * calibrated for NWL target height (40px default) with binary hard alpha (`0`/`255`) and safe padding
- * so extended clips (e.g., Death01) never clip against tile edges (`edge_clipping_count == 0`).
+ * calibrated for NWL scale (1m = 60px -> 108px for 1.79m hero, or 40px legacy option) with binary
+ * hard alpha (`0`/`255`) and safe padding so extended clips (e.g., Death01) or giant bosses never clip.
  */
 export function exportNwlIsometricSheet(
   pipeline: PixelizerPipeline,
@@ -221,17 +221,28 @@ export function exportNwlIsometricSheet(
   options: NwlIsometricSheetOptions = {},
   animController?: SteppedAnimationController
 ): SpriteSheetExportResult & { clippedFrames: number } {
-  const charH = Math.max(24, Math.min(256, Math.round(options.targetCharHeightPx ?? 40)));
+  const charH = Math.max(24, Math.min(320, Math.round(options.targetCharHeightPx ?? 108)));
   const boxPx = Math.max(96, Math.round(options.boxSizePx ?? charH * 2.4));
   const cols = Math.max(1, options.framesPerDirection ?? 8);
   const dirs = options.directions ?? NWL_8_DIRECTIONS;
   const rows = dirs.length;
   const alphaThresh = options.alphaThreshold ?? 110;
 
+  // Measure target bounds so giant creatures (e.g., Demon Boss ~2.95m) also fit cleanly inside boxPx
+  targetObject.updateMatrixWorld(true);
+  const bounds = new THREE.Box3().setFromObject(targetObject);
+  const sizeVec = new THREE.Vector3();
+  const centerVec = new THREE.Vector3();
+  bounds.getSize(sizeVec);
+  bounds.getCenter(centerVec);
+  const actorHeightM = Math.max(1.79, sizeVec.y || 1.79);
+  const actorSpanScale = actorHeightM / 1.79;
+  const focusY = Number.isFinite(centerVec.y) && sizeVec.y > 0.2 ? centerVec.y : 0.88;
+
   // Isometric orthographic camera looking down at pitch ~35.264°
-  // Calibrated so a ~1.83m UAL humanoid (~1.494m projected height at 35.264° pitch) occupies `charH` pixels inside `boxPx`
-  const orthoSpan = 1.494 * (boxPx / charH);
-  const camDist = 12;
+  // Calibrated so a 1.79m UAL humanoid (~1.494m projected height at 35.264° pitch) occupies `charH` pixels
+  const orthoSpan = 1.494 * actorSpanScale * (boxPx / charH);
+  const camDist = 14;
   const pitchRad = Math.atan(1 / Math.SQRT2); // ~35.264°
   const isoCam = new THREE.OrthographicCamera(
     -orthoSpan * 0.5,
@@ -239,14 +250,14 @@ export function exportNwlIsometricSheet(
     orthoSpan * 0.5,
     -orthoSpan * 0.5,
     0.1,
-    50
+    60
   );
   isoCam.position.set(
     0,
-    0.88 + camDist * Math.sin(pitchRad),
+    focusY + camDist * Math.sin(pitchRad),
     camDist * Math.cos(pitchRad)
   );
-  isoCam.lookAt(0, 0.88, 0);
+  isoCam.lookAt(0, focusY, 0);
   isoCam.updateProjectionMatrix();
 
   const sheetW = cols * boxPx;

@@ -917,6 +917,96 @@ input[type='checkbox'] {
   color: var(--cyan-tech);
 }
 
+/* NWL Playable Sandbox HUD */
+.nwl-sandbox-hud {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 12px 14px 54px 14px;
+  z-index: 15;
+}
+
+.sb-top-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  pointer-events: auto;
+}
+
+.sb-status-pill {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 12px;
+  background: rgba(14, 16, 20, 0.88);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.sb-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.sb-event-banner {
+  align-self: center;
+  padding: 6px 14px;
+  background: rgba(20, 16, 28, 0.9);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-weight: 500;
+  color: #ffd541;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
+}
+
+.sb-bottom-bar {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  pointer-events: auto;
+}
+
+.sb-spell-row {
+  display: flex;
+  gap: 6px;
+}
+
+.sb-spell-btn {
+  padding: 6px 10px;
+  background: rgba(18, 22, 30, 0.92);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.sb-spell-btn:hover {
+  background: var(--bg-hover);
+}
+
+.sb-controls-hint {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 4px 10px;
+  background: rgba(14, 16, 20, 0.8);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
 @media (max-width: 960px) {
   body {
     overflow: auto;
