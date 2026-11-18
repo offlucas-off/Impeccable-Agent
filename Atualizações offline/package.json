@@ -1,0 +1,26 @@
+{
+  "name": "pixelizer-engine",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Real-time 3D-to-Pixel-Art WebGL2/Three.js engine & interactive studio inspired by ProPixelizer",
+  "scripts": {
+    "start": "vite --open",
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "export:nwl": "node scripts/export_nwl_headless.mjs"
+  },
+  "dependencies": {
+    "three": "^0.174.0"
+  },
+  "devDependencies": {
+    "@types/three": "^0.174.0",
+    "playwright": "^1.52.0",
+    "typescript": "^5.8.2",
+    "vite": "^6.2.2",
+    "vitest": "^3.0.9"
+  }
+}

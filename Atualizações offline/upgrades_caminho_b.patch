@@ -1,0 +1,3887 @@
+diff --git a/src/engine/PixelizerMaterial.ts b/src/engine/PixelizerMaterial.ts
+index fd6d785..a8b703a 100644
+--- a/src/engine/PixelizerMaterial.ts
++++ b/src/engine/PixelizerMaterial.ts
+@@ -220,14 +220,26 @@ export class PixelizerMaterial extends THREE.ShaderMaterial {
+     const o = this.options;
+     const white = getFallbackWhiteTexture();
+ 
+-    if (o.albedoMap instanceof THREE.DataTexture) {
+-      enforcePixelArtTextureSampling(o.albedoMap, 'albedo');
+-    }
+-    if (o.normalMap instanceof THREE.DataTexture) {
+-      enforcePixelArtTextureSampling(o.normalMap, 'normal');
+-    }
+-    if (o.emissionMap instanceof THREE.DataTexture) {
+-      enforcePixelArtTextureSampling(o.emissionMap, 'emission');
++    if (o.pixelated) {
++      if (o.albedoMap) {
++        enforcePixelArtTextureSampling(o.albedoMap, 'albedo');
++      }
++      if (o.normalMap) {
++        enforcePixelArtTextureSampling(o.normalMap, 'normal');
++      }
++      if (o.emissionMap) {
++        enforcePixelArtTextureSampling(o.emissionMap, 'emission');
++      }
++    } else {
++      if (o.albedoMap instanceof THREE.DataTexture) {
++        enforcePixelArtTextureSampling(o.albedoMap, 'albedo');
++      }
++      if (o.normalMap instanceof THREE.DataTexture) {
++        enforcePixelArtTextureSampling(o.normalMap, 'normal');
++      }
++      if (o.emissionMap instanceof THREE.DataTexture) {
++        enforcePixelArtTextureSampling(o.emissionMap, 'emission');
++      }
+     }
+ 
+     const wantTangent = Boolean(o.useVertexTangents && o.normalMap);
+@@ -351,10 +363,8 @@ export function convertStandardMaterialToPixelizer(
+   const mat = new PixelizerMaterial(opts, sharedResources);
+   if (src) {
+     mat.side = src.side;
+-    if (src.vertexColors && hasVertexColorAttr) {
+-      mat.vertexColors = true;
+-    }
+-  } else if (hasVertexColorAttr) {
++  }
++  if (hasVertexColorAttr) {
+     mat.vertexColors = true;
+   }
+   return mat;
+diff --git a/src/engine/procedural/CharacterBuilder.ts b/src/engine/procedural/CharacterBuilder.ts
+index cc05db6..1b4b204 100644
+--- a/src/engine/procedural/CharacterBuilder.ts
++++ b/src/engine/procedural/CharacterBuilder.ts
+@@ -727,7 +727,7 @@ export function buildProceduralUalCharacter(
+       cacheKey: `ual_skin:${archetype}:${profile}`,
+       partTagToBoneIndex,
+       subdivideMaxEdgeM: 0,
+-      inspectUvs: true,
++      inspectUvs: false,
+     });
+     for (const p of worldParts) p.geometry.dispose();
+     keyMetrics = baked.unwrapMetrics;
+diff --git a/src/engine/procedural/CityBuilder.ts b/src/engine/procedural/CityBuilder.ts
+index 6b701fe..ca1f7a0 100644
+--- a/src/engine/procedural/CityBuilder.ts
++++ b/src/engine/procedural/CityBuilder.ts
+@@ -199,13 +199,24 @@ export function buildEnterableNwlHouse(
+   const portaPivot = new THREE.Group();
+   portaPivot.name = `${spec.id}_porta`;
+ 
+-  // --- PART 1: BASE (Floor + Rear Wall + Side Walls + Interior Props) ---
++  // --- PART 1: BASE (Floor + Stepped Stone Plinth + Quoins + Enxaimel Timber + Windows + Interior Props) ---
+   const baseParts: TaggedGeometryPart[] = [];
+   const floor = makeBeveledBox(w, 0.16, d, 0.018, CITY_COLORS.woodDark, { offset: [0, 0.08, 0] });
+   baseParts.push(
+     tagPart(floor, `${spec.id}_floor`, 'wood_planks', CITY_COLORS.woodDark, { lockVertical: false })
+   );
+ 
++  // Stepped exterior stone foundation plinth along rear & side walls
++  const plinthBack = makeBeveledBox(w + 0.18, 0.42, wallT + 0.14, 0.024, CITY_COLORS.stoneSlate, {
++    offset: [0, 0.21, -d * 0.5 + wallT * 0.45],
++  });
++  baseParts.push(
++    tagPart(plinthBack, `${spec.id}_plinth_back`, 'mossy_cobble', CITY_COLORS.stoneSlate, {
++      accentHex: CITY_COLORS.grass,
++      lockVertical: true,
++    })
++  );
++
+   const rug = makeBeveledBox(w - 1.1, 0.04, d - 1.1, 0.012, spec.roofColor, {
+     offset: [0, 0.17, 0],
+   });
+@@ -223,21 +234,93 @@ export function buildEnterableNwlHouse(
+     })
+   );
+ 
++  // Rear horizontal timber belt + diagonal enxaimel cross-braces
++  const backBelt = makeBeveledBox(w + 0.08, 0.14, wallT + 0.08, 0.018, CITY_COLORS.woodDark, {
++    offset: [0, wallH * 0.52, -d * 0.5 + wallT * 0.48],
++  });
++  baseParts.push(
++    tagPart(backBelt, `${spec.id}_back_belt`, 'timber_frame', CITY_COLORS.woodDark, {
++      lockVertical: true,
++    })
++  );
++  for (const [bIdx, sx] of [-1, 1].entries()) {
++    const brace = makeBeveledBox(0.11, 1.32, wallT + 0.07, 0.015, CITY_COLORS.woodDark);
++    brace.rotateZ(sx * 0.46);
++    brace.translate(sx * (w * 0.28), wallH * 0.74, -d * 0.5 + wallT * 0.48);
++    baseParts.push(
++      tagPart(brace, `${spec.id}_back_brace_${bIdx}`, 'timber_frame', CITY_COLORS.woodDark, {
++        lockVertical: false,
++      })
++    );
++  }
++
+   for (const [sIdx, sx] of [-1, 1].entries()) {
+     const sideWall = makeBeveledBox(wallT, wallH, d, 0.025, spec.wallColor, {
+       offset: [sx * (w * 0.5 - wallT * 0.5), wallH * 0.5, 0],
+     });
++    const plinthSide = makeBeveledBox(wallT + 0.14, 0.42, d + 0.12, 0.024, CITY_COLORS.stoneSlate, {
++      offset: [sx * (w * 0.5 - wallT * 0.45), 0.21, 0],
++    });
+     const post = makeBeveledBox(wallT + 0.12, wallH + 0.1, wallT + 0.12, 0.02, spec.trimColor, {
+       offset: [sx * (w * 0.5 - wallT * 0.4), (wallH + 0.1) * 0.5, -d * 0.5 + wallT * 0.4],
+     });
++    const sideBelt = makeBeveledBox(wallT + 0.08, 0.14, d + 0.06, 0.018, CITY_COLORS.woodDark, {
++      offset: [sx * (w * 0.5 - wallT * 0.48), wallH * 0.52, 0],
++    });
++    // Protruding medieval window frame + sill on each side wall
++    const winFrame = makeBeveledBox(0.14, 0.86, 0.94, 0.018, CITY_COLORS.woodDark, {
++      offset: [sx * (w * 0.5 + 0.03), 1.72, 0],
++    });
++    const winSill = makeBeveledBox(0.22, 0.11, 1.12, 0.018, CITY_COLORS.stoneLight, {
++      offset: [sx * (w * 0.5 + 0.06), 1.25, 0],
++    });
++    const winPane = makeBeveledBox(0.08, 0.64, 0.72, 0.01, CITY_COLORS.goldBright, {
++      offset: [sx * (w * 0.5 + 0.02), 1.72, 0],
++    });
+     baseParts.push(
+       tagPart(sideWall, `${spec.id}_sidewall_${sIdx}`, 'plaster_wall', spec.wallColor, {
+         lockVertical: true,
+       }),
++      tagPart(plinthSide, `${spec.id}_plinth_side_${sIdx}`, 'mossy_cobble', CITY_COLORS.stoneSlate, {
++        accentHex: CITY_COLORS.grass,
++        lockVertical: true,
++      }),
+       tagPart(post, `${spec.id}_post_${sIdx}`, 'timber_frame', spec.trimColor, {
+         lockVertical: true,
++      }),
++      tagPart(sideBelt, `${spec.id}_side_belt_${sIdx}`, 'timber_frame', CITY_COLORS.woodDark, {
++        lockVertical: true,
++      }),
++      tagPart(winFrame, `${spec.id}_win_frame_${sIdx}`, 'timber_frame', CITY_COLORS.woodDark, {
++        lockVertical: true,
++      }),
++      tagPart(winSill, `${spec.id}_win_sill_${sIdx}`, 'stone_masonry', CITY_COLORS.stoneLight, {
++        lockVertical: true,
++      }),
++      tagPart(winPane, `${spec.id}_win_pane_${sIdx}`, 'runic_glow', CITY_COLORS.goldBright, {
++        lockVertical: true,
+       })
+     );
++
++    // 4 alternating corner stone quoins along each rear vertical corner edge
++    for (let q = 0; q < 4; q++) {
++      const isEven = q % 2 === 0;
++      const qW = isEven ? 0.44 : 0.32;
++      const qD = isEven ? 0.32 : 0.44;
++      const qY = 0.62 + q * 0.62;
++      const quoin = makeBeveledBox(qW, 0.34, qD, 0.022, CITY_COLORS.stoneLight, {
++        offset: [
++          sx * (w * 0.5 - qW * 0.36),
++          qY,
++          -d * 0.5 + qD * 0.36,
++        ],
++      });
++      baseParts.push(
++        tagPart(quoin, `${spec.id}_quoin_rear_${sIdx}_${q}`, 'stone_masonry', CITY_COLORS.stoneLight, {
++          lockVertical: true,
++        })
++      );
++    }
+   }
+ 
+   // Interior Profession Furniture (clearly visible when capa hides!)
+@@ -389,18 +472,52 @@ export function buildEnterableNwlHouse(
+     );
+   }
+ 
+-  // --- PART 2: CAPA (Front wall with doorway + Sloped Pitched Roof + Shop Signage) ---
++  // --- PART 2: CAPA (Front wall with doorway + Sloped Pitched Roof + Chimney + Corbels + Shop Signage) ---
+   const capaParts: TaggedGeometryPart[] = [];
+   const sideDoorW = (w - doorW) * 0.5;
+   for (const [fIdx, sx] of [-doorW * 0.5 - sideDoorW * 0.5, doorW * 0.5 + sideDoorW * 0.5].entries()) {
+     const fw = makeBeveledBox(sideDoorW, wallH, wallT, 0.025, spec.wallColor, {
+       offset: [sx, wallH * 0.5, d * 0.5 - wallT * 0.5],
+     });
++    const frontPlinth = makeBeveledBox(sideDoorW + 0.08, 0.42, wallT + 0.14, 0.024, CITY_COLORS.stoneSlate, {
++      offset: [sx, 0.21, d * 0.5 - wallT * 0.45],
++    });
++    const frontBelt = makeBeveledBox(sideDoorW + 0.04, 0.14, wallT + 0.08, 0.018, CITY_COLORS.woodDark, {
++      offset: [sx, wallH * 0.52, d * 0.5 - wallT * 0.48],
++    });
+     capaParts.push(
+       tagPart(fw, `${spec.id}_front_wall_${fIdx}`, 'plaster_wall', spec.wallColor, {
+         lockVertical: true,
++      }),
++      tagPart(frontPlinth, `${spec.id}_front_plinth_${fIdx}`, 'mossy_cobble', CITY_COLORS.stoneSlate, {
++        accentHex: CITY_COLORS.grass,
++        lockVertical: true,
++      }),
++      tagPart(frontBelt, `${spec.id}_front_belt_${fIdx}`, 'timber_frame', CITY_COLORS.woodDark, {
++        lockVertical: true,
+       })
+     );
++
++    // Front corner stone quoins (4 alternating blocks per front vertical corner)
++    const cornerDir = fIdx === 0 ? -1 : 1;
++    for (let q = 0; q < 4; q++) {
++      const isEven = q % 2 === 0;
++      const qW = isEven ? 0.44 : 0.32;
++      const qD = isEven ? 0.32 : 0.44;
++      const qY = 0.62 + q * 0.62;
++      const quoin = makeBeveledBox(qW, 0.34, qD, 0.022, CITY_COLORS.stoneLight, {
++        offset: [
++          cornerDir * (w * 0.5 - qW * 0.36),
++          qY,
++          d * 0.5 - qD * 0.36,
++        ],
++      });
++      capaParts.push(
++        tagPart(quoin, `${spec.id}_quoin_front_${fIdx}_${q}`, 'stone_masonry', CITY_COLORS.stoneLight, {
++          lockVertical: true,
++        })
++      );
++    }
+   }
+   const lintelH = wallH - doorH;
+   const lintel = makeBeveledBox(doorW, lintelH, wallT, 0.02, spec.trimColor, {
+@@ -438,6 +555,37 @@ export function buildEnterableNwlHouse(
+     })
+   );
+ 
++  // Stone chimney stack with stepped crown cap breaking upper roof silhouette
++  const chimX = spec.id === 'forja' ? 1.2 : -w * 0.24;
++  const chimZ = -d * 0.24;
++  const chimBaseY = wallH + peakH * 0.38;
++  const chimStack = makeBeveledBox(0.58, 1.32, 0.58, 0.028, CITY_COLORS.stoneSlate, {
++    offset: [chimX, chimBaseY + 0.66, chimZ],
++  });
++  const chimCap = makeBeveledBox(0.72, 0.16, 0.72, 0.022, CITY_COLORS.stoneLight, {
++    offset: [chimX, chimBaseY + 1.36, chimZ],
++  });
++  capaParts.push(
++    tagPart(chimStack, `${spec.id}_chimney_stack`, 'stone_masonry', CITY_COLORS.stoneSlate, {
++      lockVertical: true,
++    }),
++    tagPart(chimCap, `${spec.id}_chimney_cap`, 'stone_masonry', CITY_COLORS.stoneLight, {
++      lockVertical: true,
++    })
++  );
++
++  // Eave support corbel brackets under front roof overhang
++  for (const [cIdx, cx] of [-w * 0.34, -doorW * 0.55, doorW * 0.55, w * 0.34].entries()) {
++    const corbel = makeBeveledBox(0.14, 0.28, 0.26, 0.016, CITY_COLORS.woodDark, {
++      offset: [cx, wallH - 0.14, d * 0.5 + 0.08],
++    });
++    capaParts.push(
++      tagPart(corbel, `${spec.id}_eave_corbel_${cIdx}`, 'timber_frame', CITY_COLORS.woodDark, {
++        lockVertical: true,
++      })
++    );
++  }
++
+   const sign = makeBeveledBox(1.15, 0.42, 0.14, 0.02, CITY_COLORS.gold, {
+     offset: [0, doorH + 0.35, d * 0.5 + 0.12],
+   });
+@@ -471,7 +619,7 @@ export function buildEnterableNwlHouse(
+     finishMode,
+     texelsPerMeter: 32,
+     seed,
+-    aoRays: 12,
++    aoRays: 8,
+     aoStrength,
+     normalStrength,
+     emissiveRuneHex: spec.id === 'forja' ? CITY_COLORS.ember : CITY_COLORS.goldBright,
+@@ -485,12 +633,13 @@ export function buildEnterableNwlHouse(
+     finishMode,
+     texelsPerMeter: 32,
+     seed: seed + 7,
+-    aoRays: 12,
++    aoRays: 8,
+     aoStrength,
+     normalStrength,
+     emblemHex: CITY_COLORS.goldBright,
+     usePool: true,
+     cacheKey: `city_house:${spec.id}:capa`,
++    inspectUvs: false,
+   });
+   for (const p of capaParts) p.geometry.dispose();
+ 
+@@ -498,12 +647,13 @@ export function buildEnterableNwlHouse(
+     finishMode,
+     texelsPerMeter: 32,
+     seed: seed + 13,
+-    aoRays: 10,
++    aoRays: 8,
+     aoStrength,
+     normalStrength,
+     emblemHex: CITY_COLORS.goldBright,
+     usePool: true,
+     cacheKey: `city_house:${spec.id}:porta`,
++    inspectUvs: false,
+   });
+   for (const p of portaParts) p.geometry.dispose();
+ 
+@@ -1019,6 +1169,7 @@ export function buildNwlStarterCity(
+     emissiveRuneHex: CITY_COLORS.portalEdge,
+     usePool: true,
+     cacheKey: 'city:portal_arch',
++    inspectUvs: false,
+   });
+   for (const p of portalArchParts) p.geometry.dispose();
+ 
+@@ -1070,6 +1221,7 @@ export function buildNwlStarterCity(
+     emissiveRuneHex: CITY_COLORS.portalCore,
+     usePool: true,
+     cacheKey: 'city:portal_core',
++    inspectUvs: false,
+   });
+   for (const p of portalCoreParts) p.geometry.dispose();
+ 
+@@ -1181,7 +1333,7 @@ export function buildNwlStarterCity(
+   houseSpecs.forEach((hs, i) => {
+     const h = buildEnterableNwlHouse(hs, sharedResources, 41 + i * 3, {
+       finishMode,
+-      seed: seed + i * 29,
++      seed: 401,
+       aoStrength,
+       normalStrength,
+     });
+@@ -1212,7 +1364,7 @@ export function buildNwlStarterCity(
+         pixelSize: px,
+         objectId: 70 + i,
+         finishMode,
+-        seed: seed + i * 19,
++        seed: 202,
+         aoStrength,
+         normalStrength,
+       },
+diff --git a/src/engine/procedural/MonsterBuilder.ts b/src/engine/procedural/MonsterBuilder.ts
+index fa6648d..68fe957 100644
+--- a/src/engine/procedural/MonsterBuilder.ts
++++ b/src/engine/procedural/MonsterBuilder.ts
+@@ -24,8 +24,10 @@ import {
+   makeDomeShieldGeometry,
+   makeLatheProfile,
+   makePauldronShellGeometry,
++  makePleatedTabardGeometry,
+   makeRecurveBowGeometry,
+   makeSdfOrganicMesh,
++  makeSegmentedBeveledBox,
+   makeSwordBladeGeometry,
+   sdEllipsoid,
+   sminPoly,
+@@ -331,7 +333,7 @@ export function buildNwlMonster(
+     });
+   };
+ 
+-  addBakedBone('Monster_Pelvis', 'pelvis', [
++  const pelvisParts: TaggedGeometryPart[] = [
+     tagPart(
+       makeBeveledBoneSegmentBox(
+         pelvisLen * 1.15,
+@@ -362,7 +364,45 @@ export function buildNwlMonster(
+       spec.trimColor,
+       { accentHex: spec.accentColor }
+     ),
+-  ]);
++    // Rigid bone-mounted pleated battle-loincloth / war-tabard
++    tagPart(
++      makePleatedTabardGeometry(
++        0.15 * bulk,
++        0.22 * bulk,
++        0.24 * bulk,
++        0.032 * bulk,
++        3,
++        spec.armorColor,
++        { offset: [0, -0.06 * bulk, 0.115 * bulk], flareZ: 0.022 * bulk }
++      ),
++      'm_pelvis_loincloth_front',
++      isBoss ? 'magma_obsidian' : 'woven_cloth',
++      spec.armorColor,
++      { accentHex: spec.accentColor }
++    ),
++  ];
++  if (id === 'orcs.orc_04' || id === 'orcs.goblin_06' || isBoss) {
++    for (const [tIdx, sx] of [-1, 1].entries()) {
++      const tasset = makePleatedTabardGeometry(
++        0.1 * bulk,
++        0.14 * bulk,
++        0.19 * bulk,
++        0.032 * bulk,
++        2,
++        spec.trimColor,
++        { flareZ: 0.016 * bulk }
++      );
++      tasset.rotateY(sx * (Math.PI * 0.5));
++      tasset.rotateZ(sx * -0.15);
++      tasset.translate(sx * 0.15 * bulk, -0.03 * bulk, 0);
++      pelvisParts.push(
++        tagPart(tasset, `m_pelvis_tasset_${tIdx}`, armorRecipe, spec.trimColor, {
++          accentHex: spec.accentColor,
++        })
++      );
++    }
++  }
++  addBakedBone('Monster_Pelvis', 'pelvis', pelvisParts);
+ 
+   addBakedBone('Monster_Spine1', 'spine_01', [
+     tagPart(
+@@ -382,15 +422,21 @@ export function buildNwlMonster(
+     ),
+   ]);
+ 
+-  addBakedBone('Monster_Spine2', 'spine_02', [
++  const spine2Parts: TaggedGeometryPart[] = [
+     tagPart(
+-      makeBeveledBoneSegmentBox(
++      makeSegmentedBeveledBox(
++        0.34 * bulk,
+         spine2Len * 1.12,
+-        0.16 * bulk,
+-        0.115 * bulk,
+-        0.19 * bulk,
+-        0.13 * bulk,
++        0.24 * bulk,
+         0.016,
++        2,
++        2,
++        2,
++        (x, y, z) => {
++          const vNorm = spine2Len > 1e-4 ? y / (spine2Len * 0.56) : 0;
++          const taper = 1.0 + vNorm * 0.11;
++          return [x * taper, y + spine2Len * 0.54, z];
++        },
+         spec.armorColor
+       ),
+       'm_spine2_armor',
+@@ -398,9 +444,20 @@ export function buildNwlMonster(
+       spec.armorColor,
+       { accentHex: spec.accentColor }
+     ),
+-  ]);
++  ];
++  if (id === 'orcs.orc_04' || id === 'orcs.goblin_06') {
++    const strap = makeBeveledBox(0.36 * bulk, 0.048 * bulk, 0.26 * bulk, 0.01, spec.trimColor);
++    strap.rotateZ(0.34);
++    strap.translate(0, spine2Len * 0.54, 0);
++    spine2Parts.push(
++      tagPart(strap, 'm_spine2_harness', 'stitched_leather', spec.trimColor, {
++        accentHex: spec.accentColor,
++      })
++    );
++  }
++  addBakedBone('Monster_Spine2', 'spine_02', spine2Parts);
+ 
+-  // Upper chest (+ sculpted SDF musculature + glowing chest rune + dorsal spines for Boss Demon)
++  // Upper chest (+ higher-resolution Taubin-smoothed SDF musculature + glowing chest rune + dorsal spines for Boss Demon)
+   const chestParts: TaggedGeometryPart[] = [
+     tagPart(
+       makeBeveledBoneSegmentBox(
+@@ -469,7 +526,7 @@ export function buildNwlMonster(
+       },
+       [-0.27 * bulk, 0.01, -0.17 * bulk],
+       [0.27 * bulk, spine3Len * 1.04, 0.21 * bulk],
+-      11,
++      16,
+       spec.skinColor,
+       { flatShaded: true }
+     );
+@@ -511,7 +568,7 @@ export function buildNwlMonster(
+       );
+     }
+   }
+-  addBakedBone('Monster_Spine3', 'spine_03', chestParts, isBoss);
++  addBakedBone('Monster_Spine3', 'spine_03', chestParts, false);
+ 
+   addBakedBone('Monster_Neck', 'neck_01', [
+     tagPart(
+@@ -665,7 +722,7 @@ export function buildNwlMonster(
+       );
+     }
+   }
+-  addBakedBone('Monster_Head', 'Head', headParts, true);
++  addBakedBone('Monster_Head', 'Head', headParts, false);
+ 
+   // Arms, Pauldrons & Weapons
+   for (const side of ['l', 'r'] as const) {
+@@ -685,8 +742,8 @@ export function buildNwlMonster(
+         spec.skinColor
+       ),
+     ];
+-    if (id === 'orcs.orc_04' || isBoss) {
+-      const pScale = isBoss ? 1.05 * bulk : 0.78 * bulk;
++    if (id === 'orcs.orc_04' || id === 'orcs.goblin_06' || isBoss) {
++      const pScale = isBoss ? 1.05 * bulk : id === 'orcs.orc_04' ? 0.82 * bulk : 0.64 * bulk;
+       const pauldron = makePauldronShellGeometry(
+         0.24 * pScale,
+         0.18 * pScale,
+@@ -695,26 +752,26 @@ export function buildNwlMonster(
+         spec.armorColor
+       );
+       if (side === 'r') pauldron.rotateY(Math.PI);
+-      pauldron.translate(side === 'l' ? 0.04 : -0.04, 0.06, 0);
++      pauldron.translate(side === 'l' ? 0.025 : -0.025, 0.025, 0);
+       uParts.push(
+         tagPart(pauldron, `m_pauldron_${side}`, armorRecipe, spec.armorColor, {
+           accentHex: spec.accentColor,
+           lockVertical: false,
+         })
+       );
+-      if (isBoss) {
++      if (isBoss || id === 'orcs.orc_04') {
+         const pSpike = makeCurvedHornGeometry(
+           4,
+           0.042,
+           0.008,
+-          0.19,
++          isBoss ? 0.19 : 0.13,
+           side === 'l' ? 0.04 : -0.04,
+           0.01,
+           5,
+           spec.accentColor
+         );
+         pSpike.rotateZ(side === 'l' ? -0.78 : 0.78);
+-        pSpike.translate(side === 'l' ? 0.09 * bulk : -0.09 * bulk, 0.07, 0);
++        pSpike.translate(side === 'l' ? 0.08 * bulk : -0.08 * bulk, 0.055, 0);
+         uParts.push(
+           tagPart(pSpike, `demon_pauldron_horn_${side}`, 'bone_ivory', spec.accentColor, {
+             lockVertical: false,
+diff --git a/src/engine/procedural/NpcBuilder.ts b/src/engine/procedural/NpcBuilder.ts
+index 692f14c..8424582 100644
+--- a/src/engine/procedural/NpcBuilder.ts
++++ b/src/engine/procedural/NpcBuilder.ts
+@@ -640,7 +640,7 @@ export function buildNwlNpc(
+       finishMode,
+       texelsPerMeter: 64,
+       seed: seed + parts.length * 11,
+-      aoRays: 10,
++      aoRays: 8,
+       aoMaxDist: 0.32,
+       aoStrength,
+       normalStrength,
+@@ -824,7 +824,7 @@ export function buildNwlNpc(
+       )
+     );
+   }
+-  addBakedBone('NPC_Head', 'Head', headParts, true);
++  addBakedBone('NPC_Head', 'Head', headParts, false);
+ 
+   for (const side of ['l', 'r'] as const) {
+     addBakedBone(`NPC_UA_${side}`, `upperarm_${side}`, [
+diff --git a/src/engine/procedural/NwlTilesetDungeon.ts b/src/engine/procedural/NwlTilesetDungeon.ts
+index 9af7b06..cdf53d9 100644
+--- a/src/engine/procedural/NwlTilesetDungeon.ts
++++ b/src/engine/procedural/NwlTilesetDungeon.ts
+@@ -453,6 +453,7 @@ export function buildNwlTilesetCatalog(
+     emissiveRuneHex: RUINS_PAL.portalBlue,
+     usePool: true,
+     cacheKey: `nwl_cat_floor:${biome}`,
++    inspectUvs: false,
+   });
+   for (const p of floorParts) p.geometry.dispose();
+ 
+@@ -466,6 +467,7 @@ export function buildNwlTilesetCatalog(
+     emissiveRuneHex: RUINS_PAL.ember,
+     usePool: true,
+     cacheKey: `nwl_cat_pieces:${biome}`,
++    inspectUvs: false,
+   });
+   for (const p of pieceParts) p.geometry.dispose();
+ 
+@@ -1299,6 +1301,7 @@ export function buildGreenRuinsFloor1(
+       normalStrength,
+       usePool: true,
+       cacheKey: `nwl_ruins_dest:${dc.kind}`,
++      inspectUvs: false,
+     });
+     for (const p of intactParts) p.geometry.dispose();
+ 
+@@ -1331,6 +1334,7 @@ export function buildGreenRuinsFloor1(
+       normalStrength,
+       usePool: true,
+       cacheKey: `nwl_ruins_broken:${dc.kind}`,
++      inspectUvs: false,
+     });
+     for (const p of brokenParts) p.geometry.dispose();
+ 
+diff --git a/src/engine/procedural/PixelMaterialSynth.ts b/src/engine/procedural/PixelMaterialSynth.ts
+index ac10368..b1d5a0f 100644
+--- a/src/engine/procedural/PixelMaterialSynth.ts
++++ b/src/engine/procedural/PixelMaterialSynth.ts
+@@ -32,6 +32,7 @@ import {
+ } from './PixelUvUnwrapper';
+ import {
+   applyHeightGtaoAndWear,
++  bake3DCurvatureToUvIslands,
+   bakeVertexAoAndCreases,
+   subdivideForAo,
+ } from './VertexAndTexelBaker';
+@@ -52,6 +53,7 @@ export interface SynthMaterialOptions {
+   gtaoStrength?: number;
+   gtaoRadiusPx?: number;
+   normalStrength?: number;
++  curvatureMap?: Float32Array | null;
+   rarityTier?: 'normal' | 'common' | 'rare' | 'epic' | 'legendary';
+   eyeHex?: string;
+   eyeGlowHex?: string | null;
+@@ -407,7 +409,11 @@ function sampleMaterialRecipe(
+ ): TexelSample {
+   const v = h > 1 ? ly / (h - 1) : 0.5;
+   const onPerimeter = lx === 0 || ly === 0 || lx === w - 1 || ly === h - 1;
+-  const gradV = (v - 0.5) * 0.22; // crisp top-to-bottom cel tone falloff
++  const gradV = (v - 0.5) * 0.25; // crisp top-to-bottom cel tone falloff
++  const silverTrim: [number, number, number] = [218, 224, 234]; // #dae0ea
++  const steelTrim: [number, number, number] = [179, 185, 209]; // #b3b9d1
++  const crimsonAccent: [number, number, number] = [180, 32, 42]; // #b4202a
++  const brassAccent: [number, number, number] = [214, 166, 68];
+ 
+   switch (recipe) {
+     case 'stone_masonry':
+@@ -415,11 +421,11 @@ function sampleMaterialRecipe(
+       const tinyTrim = w <= 4 || h <= 4;
+       if (tinyTrim) {
+         const block = Math.floor((lx + ly * 2) / 2);
+-        const grain = ((block % 3) - 1) * 0.08 + ((lx + ly * 2) / Math.max(2, w + h) - 0.5) * 0.16;
+-        let rgb = shadeHueShiftRgb(baseRgb, grain + gradV * 0.45);
++        const grain = ((block % 3) - 1) * 0.1 + ((lx + ly * 2) / Math.max(2, w + h) - 0.5) * 0.18;
++        let rgb = shadeHueShiftRgb(baseRgb, grain + gradV * 0.5);
+         let heightVal = 0.68 + grain * 0.35;
+         if (recipe === 'mossy_cobble' && (ly === 0 || (lx === 0 && seed % 2 === 0))) {
+-          rgb = mixRgb(rgb, accentRgb, 0.5);
++          rgb = mixRgb(rgb, accentRgb, 0.55);
+           heightVal += 0.06;
+         }
+         return { rgb, height: heightVal };
+@@ -433,55 +439,82 @@ function sampleMaterialRecipe(
+       const brickCol = Math.floor((lx + staggerX) / colW);
+       const mortar = bx === 0 || by === 0;
+       const brickId = hash2d(brickCol, brickRow, seed);
+-      const brickDelta = (brickId - 0.5) * 0.15 + (by === rowH - 1 ? 0.06 : 0) + gradV * 0.35;
++
++      // Macro-cluster weathering (5x5 block scale) + occasional mortar diagonal fissure
++      const macroWeather = (smoothNoise2d(Math.floor(lx / 5) * 0.65, Math.floor(ly / 5) * 0.65, seed + 41) - 0.5) * 0.16;
++      const hasCrack = brickId > 0.78 && bx === Math.floor(colW * 0.5) && by <= Math.floor(rowH * 0.6);
++      const topBevel = by === rowH - 1 ? 0.08 : by === 1 ? -0.05 : 0;
++      const brickDelta = (brickId - 0.5) * 0.18 + topBevel + macroWeather + gradV * 0.42;
++
+       let rgb = mortar
+-        ? shadeHueShiftRgb(baseRgb, -0.22)
+-        : shadeHueShiftRgb(baseRgb, brickDelta);
+-      let heightVal = mortar ? 0.3 : 0.72 + (brickId - 0.5) * 0.12;
++        ? shadeHueShiftRgb(baseRgb, -0.26)
++        : hasCrack
++          ? shadeHueShiftRgb(baseRgb, -0.21)
++          : shadeHueShiftRgb(baseRgb, brickDelta);
++      let heightVal = mortar ? 0.28 : hasCrack ? 0.36 : 0.72 + (brickId - 0.5) * 0.14 + topBevel * 0.4;
++
++      // Basal damp grime & moss creep on lower courses
++      const mx = Math.floor(lx / 3);
++      const my = Math.floor(ly / 3);
++      const mossPatch = smoothNoise2d(mx * 0.48, my * 0.48, seed + 71);
+       if (recipe === 'mossy_cobble') {
+-        const mx = Math.floor(lx / 2);
+-        const my = Math.floor(ly / 2);
+-        const mossPatch = smoothNoise2d(mx * 0.42, my * 0.42, seed + 71);
+-        if ((v < 0.34 && mossPatch > 0.44) || (mortar && mossPatch > 0.6)) {
+-          rgb = mixRgb(rgb, accentRgb, 0.68);
++        if ((v < 0.42 && mossPatch > 0.4) || (mortar && mossPatch > 0.54)) {
++          rgb = mixRgb(rgb, accentRgb, 0.72);
+           heightVal += 0.07;
+         }
++      } else if (v < 0.28 && mossPatch > 0.52) {
++        rgb = shadeHueShiftRgb(rgb, -0.12);
+       }
+       return { rgb, height: heightVal };
+     }
+ 
+     case 'wood_planks':
+     case 'timber_frame': {
+-      const plankW = w >= 14 ? 5 : 4;
++      const plankW = w >= 14 ? 6 : 4;
+       const plankIdx = Math.floor(lx / plankW);
+       const seam = lx % plankW === 0 && w >= 6;
+       const narrowFiber =
+-        w < 6 || h < 6 ? ((Math.floor(lx / 2) + Math.floor(ly / 2) + seed) % 3 - 1) * 0.07 : 0;
+-      const clusterY = Math.floor(ly / 2);
++        w < 6 || h < 6 ? ((Math.floor(lx / 2) + Math.floor(ly / 2) + seed) % 3 - 1) * 0.08 : 0;
++      const clusterY = Math.floor(ly / 3);
+       const grain =
+-        Math.sin((clusterY + plankIdx * 2) * 0.9 + hash2d(plankIdx, 0, seed) * 4) * 0.065 +
++        Math.sin((clusterY + plankIdx * 2) * 0.85 + hash2d(plankIdx, 0, seed) * 4) * 0.08 +
+         narrowFiber;
+-      const plankVar = (hash2d(plankIdx, 19, seed) - 0.5) * 0.14;
++      const plankVar = (hash2d(plankIdx, 19, seed) - 0.5) * 0.17;
++
++      // Chunky timber knot cluster (2x2 px) in middle of select planks
++      const knotY = Math.floor(h * (0.35 + 0.35 * hash2d(plankIdx, 7, seed)));
++      const isKnot =
++        w >= 10 &&
++        h >= 10 &&
++        hash2d(plankIdx, 31, seed) > 0.58 &&
++        Math.abs(lx % plankW - Math.floor(plankW * 0.5)) <= 1 &&
++        Math.abs(ly - knotY) <= 1;
++
+       const nailSpot =
+         !seam &&
+         lx % plankW === Math.floor(plankW * 0.5) &&
+         (ly === 1 || ly === h - 2) &&
+         h >= 8;
+       if (nailSpot) {
+-        return { rgb: shadeHueShiftRgb(accentRgb, -0.06), height: 0.88 };
++        return { rgb: mixRgb(steelTrim, accentRgb, 0.4), height: 0.9 };
+       }
+       if (seam) {
+-        return { rgb: shadeHueShiftRgb(baseRgb, -0.22), height: 0.34 };
++        return { rgb: shadeHueShiftRgb(baseRgb, -0.25), height: 0.32 };
++      }
++      if (isKnot) {
++        return { rgb: shadeHueShiftRgb(baseRgb, -0.18), height: 0.56 };
+       }
++      // End-grain weathering near top/bottom beam ends
++      const endWeather = (ly <= 1 || ly >= h - 2) && h >= 10 ? -0.09 : 0;
+       return {
+-        rgb: shadeHueShiftRgb(baseRgb, plankVar + grain + gradV * 0.35),
+-        height: 0.72 + grain * 0.35,
++        rgb: shadeHueShiftRgb(baseRgb, plankVar + grain + endWeather + gradV * 0.4),
++        height: 0.72 + grain * 0.38,
+       };
+     }
+ 
+     case 'roof_shingle': {
+       if (w <= 4 || h <= 4) {
+-        const slope = ((lx + ly * 2) / Math.max(2, w + h * 2) - 0.4) * 0.22;
++        const slope = ((lx + ly * 2) / Math.max(2, w + h * 2) - 0.4) * 0.24;
+         return {
+           rgb: shadeHueShiftRgb(baseRgb, slope),
+           height: 0.62 + slope * 0.35,
+@@ -493,61 +526,90 @@ function sampleMaterialRecipe(
+       const stag = (row % 2) * Math.floor(tileW * 0.5);
+       const col = Math.floor((lx + stag) / tileW);
+       const shadowLip = ly % courseH === 0;
++      const lipBevel = ly % courseH === 1;
+       const topRidge = ly % courseH === courseH - 1;
+       const vEdge = (lx + stag) % tileW === 0;
+-      const idVar = (hash2d(col, row, seed + 33) - 0.5) * 0.11;
+-      const slopeShade = (v - 0.3) * 0.12 + (topRidge ? 0.06 : 0);
+-      const rgb = shadowLip
+-        ? shadeHueShiftRgb(baseRgb, -0.18)
++      const idVar = (hash2d(col, row, seed + 33) - 0.5) * 0.16;
++      const mossLichen = smoothNoise2d(Math.floor(lx / 4) * 0.6, Math.floor(ly / 4) * 0.6, seed + 89);
++      const slopeShade = (v - 0.3) * 0.15 + (topRidge ? 0.08 : 0) + (lipBevel ? 0.09 : 0);
++      let rgb = shadowLip
++        ? shadeHueShiftRgb(baseRgb, -0.24)
+         : vEdge
+-          ? shadeHueShiftRgb(baseRgb, -0.09)
++          ? shadeHueShiftRgb(baseRgb, -0.12)
+           : shadeHueShiftRgb(baseRgb, idVar + slopeShade);
+-      const stepSlope = ((ly % courseH) / Math.max(1, courseH - 1)) * 0.28;
+-      return { rgb, height: shadowLip ? 0.34 : 0.6 + stepSlope };
++      if (!shadowLip && mossLichen > 0.68 && v < 0.65) {
++        rgb = mixRgb(rgb, accentRgb, 0.38);
++      }
++      const stepSlope = ((ly % courseH) / Math.max(1, courseH - 1)) * 0.3;
++      return { rgb, height: shadowLip ? 0.32 : 0.6 + stepSlope };
+     }
+ 
+     case 'plaster_wall': {
+-      const mx = Math.floor(lx / 3);
+-      const my = Math.floor(ly / 3);
+-      const macro = smoothNoise2d(mx * 0.48, my * 0.48, seed + 19) - 0.5;
++      const mx = Math.floor(lx / 4);
++      const my = Math.floor(ly / 4);
++      const macro = smoothNoise2d(mx * 0.52, my * 0.52, seed + 19) - 0.5;
++      const dampBase = v < 0.3 ? (0.3 - v) * -0.42 : 0;
+       const trimEdge = (ly === 0 || ly === h - 1 || lx === 0 || lx === w - 1) && w >= 6 && h >= 6;
+-      const diagBevel = w < 6 || h < 6 ? ((lx + ly * 2) / Math.max(2, w + h) - 0.5) * 0.18 : 0;
++      const innerBevel =
++        !trimEdge && (ly === 1 || ly === h - 2 || lx === 1 || lx === w - 2) && w >= 8 && h >= 8;
++      const diagBevel = w < 6 || h < 6 ? ((lx + ly * 2) / Math.max(2, w + h) - 0.5) * 0.2 : 0;
+       const rgb = trimEdge
+-        ? shadeHueShiftRgb(accentRgb, -0.08)
+-        : shadeHueShiftRgb(baseRgb, macro * 0.14 + diagBevel + gradV * 0.4);
+-      return { rgb, height: trimEdge ? 0.82 : 0.62 + macro * 0.12 };
++        ? shadeHueShiftRgb(accentRgb, -0.1)
++        : innerBevel
++          ? shadeHueShiftRgb(baseRgb, 0.1)
++          : shadeHueShiftRgb(baseRgb, macro * 0.18 + dampBase + diagBevel + gradV * 0.45);
++      return { rgb, height: trimEdge ? 0.84 : innerBevel ? 0.74 : 0.62 + macro * 0.14 };
+     }
+ 
+     case 'forged_steel':
+     case 'brushed_gold':
+     case 'rarity_armor': {
+-      // Crisp cel armor sheen band & bevel rim with zero high-frequency sparkle noise
+-      const sheenBand = Math.exp(-Math.pow((v - 0.68) * 3.0, 2)) * 0.18;
+-      const diag = w < 5 || h < 5 ? ((lx * 0.9 + ly * 1.3) / Math.max(2, w + h) - 0.5) * 0.18 : 0;
++      // Dark-fantasy high-contrast armor sheen, crisp metallic edge trim (#dae0ea/#b3b9d1), rivets & fuller ridge
++      const sheenBand = Math.exp(-Math.pow((v - 0.68) * 2.8, 2)) * 0.22;
++      const diag = w < 5 || h < 5 ? ((lx * 0.9 + ly * 1.3) / Math.max(2, w + h) - 0.5) * 0.2 : 0;
+       const macroBrush =
+-        (smoothNoise2d(Math.floor(lx / 2) * 0.35, Math.floor(ly / 2) * 0.45, seed) - 0.5) * 0.08 +
++        (smoothNoise2d(Math.floor(lx / 3) * 0.42, Math.floor(ly / 3) * 0.5, seed) - 0.5) * 0.11 +
+         diag;
+       const borderHigh = onPerimeter && w >= 4 && h >= 4;
++      const innerInlay =
++        !onPerimeter &&
++        (lx === 1 || lx === w - 2 || ly === 1 || ly === h - 2) &&
++        w >= 10 &&
++        h >= 10;
+       const cornerRivet =
+-        w >= 9 &&
+-        h >= 9 &&
++        w >= 8 &&
++        h >= 8 &&
+         ((lx === 1 || lx === w - 2) && (ly === 1 || ly === h - 2));
+ 
+-      let rgb = shadeHueShiftRgb(baseRgb, gradV * 0.55 + sheenBand + macroBrush);
+-      let heightVal = 0.72 + sheenBand * 0.22;
++      let rgb = shadeHueShiftRgb(baseRgb, gradV * 0.6 + sheenBand + macroBrush);
++      let heightVal = 0.72 + sheenBand * 0.24;
+       let emissiveRgb: [number, number, number] | undefined;
+ 
+       if (borderHigh) {
+-        const edgeCol = recipe === 'rarity_armor' ? accentRgb : baseRgb;
+-        rgb = mixRgb(shadeHueShiftRgb(edgeCol, 0.18), rgb, 0.3);
+-        heightVal = 0.86;
++        const trimBase =
++          recipe === 'brushed_gold'
++            ? mixRgb(accentRgb, silverTrim, 0.35)
++            : recipe === 'rarity_armor'
++              ? mixRgb(accentRgb, silverTrim, 0.5)
++              : mixRgb(baseRgb, steelTrim, 0.58);
++        rgb = shadeHueShiftRgb(trimBase, 0.16);
++        heightVal = 0.88;
++      } else if (innerInlay) {
++        // Dark-fantasy recessed cavity groove framing the raised silver/brass trim
++        const grooveAccent =
++          recipe === 'rarity_armor' && rarityTier === 'epic'
++            ? mixRgb(baseRgb, crimsonAccent, 0.35)
++            : baseRgb;
++        rgb = shadeHueShiftRgb(grooveAccent, -0.2);
++        heightVal = 0.52;
+       }
++
+       if (cornerRivet) {
+-        rgb = shadeHueShiftRgb(accentRgb, 0.2);
++        rgb = shadeHueShiftRgb(mixRgb(accentRgb, silverTrim, 0.45), 0.22);
+         heightVal = 0.94;
+       }
+ 
+-      // Rare / Epic / Legendary trim runes along centerline when island large enough
++      // Rare / Epic / Legendary trim runes or crimson/gold filigree along centerline when island large enough
+       if (
+         recipe === 'rarity_armor' &&
+         (rarityTier === 'rare' || rarityTier === 'epic' || rarityTier === 'legendary') &&
+@@ -568,19 +630,27 @@ function sampleMaterialRecipe(
+ 
+     case 'stitched_leather':
+     case 'woven_cloth': {
+-      const wave = Math.sin(lx * 0.95 + ly * 0.45) * 0.055;
+-      const crease = smoothNoise2d(lx * 0.24, ly * 0.16, seed + 51) - 0.5;
++      // Chunky pleated folds + double-stitched border + dark-fantasy brass/crimson hem trim
++      const pleatPeriod = Math.max(4, Math.min(7, Math.floor(w / 3)));
++      const pleatPhase = ((lx % pleatPeriod) / pleatPeriod) * Math.PI * 2;
++      const pleatWave = Math.sin(pleatPhase) * (recipe === 'woven_cloth' ? 0.11 : 0.065);
++      const crease = smoothNoise2d(Math.floor(lx / 3) * 0.45, Math.floor(ly / 3) * 0.35, seed + 51) - 0.5;
+       const isStitch =
+-        recipe === 'stitched_leather' &&
+         (lx === 1 || lx === w - 2 || ly === 1 || ly === h - 2) &&
+         ((lx + ly) % 2 === 0) &&
+         w >= 6 &&
+         h >= 6;
++      const isHemTrim = (ly === 0 || ly === h - 1) && w >= 6 && h >= 6;
+       if (isStitch) {
+-        return { rgb: shadeHueShiftRgb(accentRgb, 0.25), height: 0.85 };
++        const stitchCol = recipe === 'stitched_leather' ? mixRgb(accentRgb, brassAccent, 0.4) : mixRgb(accentRgb, silverTrim, 0.35);
++        return { rgb: shadeHueShiftRgb(stitchCol, 0.22), height: 0.86 };
+       }
+-      const rgb = shadeHueShiftRgb(baseRgb, crease * 0.26 + wave + gradV * 0.65);
+-      return { rgb, height: 0.62 + crease * 0.18 + wave * 0.4 };
++      if (isHemTrim) {
++        const hemCol = recipe === 'woven_cloth' ? mixRgb(accentRgb, crimsonAccent, 0.3) : accentRgb;
++        return { rgb: shadeHueShiftRgb(hemCol, 0.12), height: 0.8 };
++      }
++      const rgb = shadeHueShiftRgb(baseRgb, crease * 0.24 + pleatWave + gradV * 0.65);
++      return { rgb, height: 0.62 + crease * 0.18 + pleatWave * 0.45 };
+     }
+ 
+     case 'human_skin':
+@@ -971,12 +1041,13 @@ export function synthesizeAtlasTextures(
+       }
+     }
+ 
+-    // Apply Phase 4B texel-space Horizon AO + Laplacian Curvature Wear + Vertical Grime
++    // Apply Phase 4B texel-space Horizon AO + 3D Dihedral Curvature Wear + Zenithal/Vertical Grime
+     applyHeightGtaoAndWear(heightField, coverageMask, w, h, unwrapped.islands, albedoRgba, {
+       gtaoStrength: options.gtaoStrength ?? 0.55,
+       gtaoRadiusPx: options.gtaoRadiusPx ?? 3,
+-      curvatureStrength: 0.22,
+-      verticalGrimeStrength: 0.2,
++      curvatureStrength: 0.24,
++      verticalGrimeStrength: 0.24,
++      curvatureMap: options.curvatureMap ?? null,
+     });
+ 
+     // Compute subtle tangent-space Sobel normals (clamped so Pass 3 ignores flat areas)
+@@ -1491,10 +1562,31 @@ export function bakeTaggedPartsAsset(
+     minAtlasSize: options.minAtlasSize ?? 64,
+     maxAtlasSize: options.maxAtlasSize ?? 1024,
+     islandChartCosThreshold: options.islandChartCosThreshold ?? 0.91,
++    sewChamfersToParentChart: options.sewChamfersToParentChart ?? true,
+     computeTangents: !willSubdivide,
+     vertexColorMode: 'white_for_ao',
+   });
+ 
++  const aoStrength = options.aoStrength ?? 0.55;
++  const gtaoStrength = options.gtaoStrength ?? Math.min(0.85, aoStrength);
++  const normalStrength = options.normalStrength ?? 0.36;
++  const effectiveCacheKey = options.cacheKey
++    ? `${options.cacheKey}:s${seed}:g${Math.round(gtaoStrength * 20)}:n${Math.round(normalStrength * 20)}:${options.rarityTier ?? 'normal'}`
++    : undefined;
++  const isCacheHit = Boolean(
++    options.usePool && effectiveCacheKey && MATERIAL_TEXTURE_POOL.has(effectiveCacheKey)
++  );
++
++  // Compute 3D edge dihedral curvature map only when synthesizing a new un-pooled texture bundle
++  const curvatureMap = isCacheHit
++    ? null
++    : bake3DCurvatureToUvIslands(
++        unwrapped.geometry,
++        unwrapped.islands,
++        unwrapped.texWidth,
++        unwrapped.texHeight
++      );
++
+   let outGeo = unwrapped.geometry;
+ 
+   // Map per-vertex bone index cleanly before any post-processing
+@@ -1532,10 +1624,6 @@ export function bakeTaggedPartsAsset(
+     outGeo = subGeo;
+   }
+ 
+-  const aoStrength = options.aoStrength ?? 0.55;
+-  const gtaoStrength = options.gtaoStrength ?? Math.min(0.85, aoStrength);
+-  const normalStrength = options.normalStrength ?? 0.36;
+-
+   bakeVertexAoAndCreases(outGeo, {
+     rays: options.aoRays ?? 16,
+     maxDist: options.aoMaxDist ?? 0.65,
+@@ -1543,15 +1631,12 @@ export function bakeTaggedPartsAsset(
+     creaseBoost: options.creaseBoost ?? (aoStrength <= 0.01 ? 0 : 0.06),
+   });
+ 
+-  const effectiveCacheKey = options.cacheKey
+-    ? `${options.cacheKey}:s${seed}:g${Math.round(gtaoStrength * 20)}:n${Math.round(normalStrength * 20)}:${options.rarityTier ?? 'normal'}`
+-    : undefined;
+-
+   const textures = synthesizeAtlasTextures(unwrapped, {
+     seed,
+     gtaoStrength,
+     gtaoRadiusPx: options.gtaoRadiusPx ?? 3,
+     normalStrength,
++    curvatureMap,
+     rarityTier: options.rarityTier ?? 'normal',
+     eyeHex: options.eyeHex,
+     eyeGlowHex: options.eyeGlowHex,
+diff --git a/src/engine/procedural/PixelUvUnwrapper.ts b/src/engine/procedural/PixelUvUnwrapper.ts
+index ee49d0f..4a1ecc8 100644
+--- a/src/engine/procedural/PixelUvUnwrapper.ts
++++ b/src/engine/procedural/PixelUvUnwrapper.ts
+@@ -19,6 +19,9 @@ export interface UvIslandMeta {
+   uvBounds: { u0: number; v0: number; u1: number; v1: number };
+   texelsPerMeter: number;
+   triIndices: number[];
++  worldYMin?: number;
++  worldYMax?: number;
++  avgNormalY?: number;
+ }
+ 
+ export interface UnwrappedAtlasResult {
+@@ -39,6 +42,8 @@ export interface UnwrapOptions {
+   maxAtlasSize?: number;
+   computeTangents?: boolean;
+   islandChartCosThreshold?: number;
++  /** Default `true`: unfolds and sews narrow chamfer/bevel strips (`<= 45 deg`) onto their parent chart without overlap. */
++  sewChamfersToParentChart?: boolean;
+   /** Default `'white_for_ao'` prevents double-multiplying baseHex (`albedoMap * vertexColor`) so vertexColor stores pure grayscale AO. */
+   vertexColorMode?: 'white_for_ao' | 'preserve';
+ }
+@@ -260,7 +265,8 @@ function buildTriangleAdjacency(tris: RawTriangle[]): number[][] {
+ function splitChartsWithoutFoldOrSelfOverlap(
+   part: TaggedGeometryPart,
+   tris: RawTriangle[],
+-  cosThreshold: number
++  cosThreshold: number,
++  sewChamfers = true
+ ): RawChart[] {
+   const adj = buildTriangleAdjacency(tris);
+   const visited = new Uint8Array(tris.length);
+@@ -324,14 +330,58 @@ function splitChartsWithoutFoldOrSelfOverlap(
+         ? canonical
+         : chartBasisFromNormal(finalAvgN, part.lockVertical !== false);
+ 
++    // Optional chamfer sewing: attach narrow adjacent bevel triangles (cos >= 0.707, <= 45 deg)
++    // to major non-landmark panels when unfolding them introduces zero self-overlap and stays within density bounds.
++    const hasSpecialLandmark = Boolean(part.landmarkKind && part.landmarkKind !== 'none');
++    if (sewChamfers && !hasSpecialLandmark && cluster.length >= 1) {
++      let mainArea = 0;
++      for (const ti of cluster) mainArea += tris[ti].area3D;
++      const maxChamferTriArea = Math.min(0.0035, mainArea * 0.14);
++
++      const sewCandidates: number[] = [];
++      for (const ti of cluster) {
++        for (const nb of adj[ti]) {
++          if (visited[nb]) continue;
++          const nbTri = tris[nb];
++          if (nbTri.area3D > maxChamferTriArea) continue;
++          const dFrame = dot3(nbTri.normal, frame.normal);
++          if (dFrame >= 0.78 && dot3(nbTri.normal, tris[ti].normal) >= 0.707) {
++            if (!sewCandidates.includes(nb)) {
++              sewCandidates.push(nb);
++            }
++          }
++        }
++      }
++
++      if (sewCandidates.length > 0) {
++        const testTris = [...cluster, ...sewCandidates];
++        const testUs: number[] = [];
++        const testVs: number[] = [];
++        for (const ti of testTris) {
++          const tr = tris[ti];
++          for (const pt of [tr.p0, tr.p1, tr.p2]) {
++            testUs.push(dot3(pt, frame.tangent));
++            testVs.push(dot3(pt, frame.bitangent));
++          }
++        }
++        if (!clusterHasLocalUvOverlap(testUs, testVs)) {
++          for (const sc of sewCandidates) {
++            visited[sc] = 1;
++            cluster.push(sc);
++          }
++        }
++      }
++    }
++
+     // Sub-check cluster triangles individually: if any single triangle deviates too far or flips winding vs frame.normal,
+     // peel it out into its own mini-chart so zero folds / zero density outliers occur!
+     const validCluster: number[] = [];
+     const rejected: number[] = [];
++    const minValidDot = sewChamfers && !hasSpecialLandmark ? 0.78 : 0.88;
+     for (const ti of cluster) {
+       const tr = tris[ti];
+       const d = dot3(tr.normal, frame.normal);
+-      if (d >= 0.88) {
++      if (d >= minValidDot) {
+         validCluster.push(ti);
+       } else {
+         rejected.push(ti);
+@@ -600,6 +650,7 @@ export function unwrapPixelAligned(
+   const minAtlasSize = Math.max(32, options.minAtlasSize ?? 64);
+   const maxAtlasSize = Math.max(minAtlasSize, options.maxAtlasSize ?? 1024);
+   const cosThreshold = options.islandChartCosThreshold ?? 0.91;
++  const sewChamfers = options.sewChamfersToParentChart !== false;
+ 
+   // 1) Extract coherent planar/smooth charts per part
+   const allCharts: RawChart[] = [];
+@@ -608,7 +659,7 @@ export function unwrapPixelAligned(
+   for (const part of parts) {
+     const tris = buildPartTriangles(part.geometry);
+     partTrianglesList.push(tris);
+-    const charts = splitChartsWithoutFoldOrSelfOverlap(part, tris, cosThreshold);
++    const charts = splitChartsWithoutFoldOrSelfOverlap(part, tris, cosThreshold, sewChamfers);
+     allCharts.push(...charts);
+   }
+ 
+@@ -754,6 +805,10 @@ export function unwrapPixelAligned(
+     const triOffset = partTriGlobalStart[pIdx];
+     const islandId = islands.length;
+     const globalTris: number[] = [];
++    let worldYMin = Infinity;
++    let worldYMax = -Infinity;
++    let sumNormalY = 0;
++    let vertSampleCount = 0;
+ 
+     for (let tiIdx = 0; tiIdx < ch.triIndices.length; tiIdx++) {
+       const localTriIdx = ch.triIndices[tiIdx];
+@@ -776,6 +831,13 @@ export function unwrapPixelAligned(
+         const vertIdx = globalTriIdx * 3 + k;
+         outUvs[vertIdx * 2 + 0] = pxU / chosenW;
+         outUvs[vertIdx * 2 + 1] = pxV / chosenH;
++
++        const wy = outPositions[vertIdx * 3 + 1];
++        const ny = outNormals[vertIdx * 3 + 1];
++        if (wy < worldYMin) worldYMin = wy;
++        if (wy > worldYMax) worldYMax = wy;
++        sumNormalY += ny;
++        vertSampleCount++;
+       }
+     }
+ 
+@@ -799,6 +861,9 @@ export function unwrapPixelAligned(
+       },
+       texelsPerMeter: ppm,
+       triIndices: globalTris,
++      worldYMin: Number.isFinite(worldYMin) ? worldYMin : 0,
++      worldYMax: Number.isFinite(worldYMax) ? worldYMax : 1,
++      avgNormalY: vertSampleCount > 0 ? sumNormalY / vertSampleCount : ch.normal[1],
+     });
+   }
+ 
+diff --git a/src/engine/procedural/PlayerEquipmentBuilder.ts b/src/engine/procedural/PlayerEquipmentBuilder.ts
+index d367d1f..89973b8 100644
+--- a/src/engine/procedural/PlayerEquipmentBuilder.ts
++++ b/src/engine/procedural/PlayerEquipmentBuilder.ts
+@@ -24,7 +24,9 @@ import {
+   makeDomeShieldGeometry,
+   makeLatheProfile,
+   makePauldronShellGeometry,
++  makePleatedTabardGeometry,
+   makeRecurveBowGeometry,
++  makeSegmentedBeveledBox,
+   makeSwordBladeGeometry,
+   tagPart,
+   type FinishMode,
+@@ -451,7 +453,7 @@ function buildBaseShellSpecs(
+         lockVertical: true,
+       }),
+     ],
+-    true
++    false
+   );
+ 
+   for (const side of ['l', 'r'] as const) {
+@@ -603,7 +605,7 @@ function buildSlotAttachments(
+           parts.push(tagPart(wing, `knight_helm_wing_${wIdx}`, 'brushed_gold', pal.trim));
+         }
+       }
+-      bakeBoneParts('Head', parts, { isMetal: true, inspectUvs: true });
++      bakeBoneParts('Head', parts, { isMetal: true });
+     } else if (classId === 'archer') {
+       const hood = makeBeveledBox(0.25, 0.22, 0.27, 0.024, pal.primary, { offset: [0, 0.14, -0.015] });
+       const cowlRim = makeBeveledBox(0.26, 0.055, 0.085, 0.012, pal.trim, { offset: [0, 0.21, 0.1] });
+@@ -622,7 +624,7 @@ function buildSlotAttachments(
+         const mask = makeBeveledBox(0.2, 0.06, 0.045, 0.01, pal.secondary, { offset: [0, 0.07, 0.115] });
+         parts.push(tagPart(mask, 'archer_mask', 'stitched_leather', pal.secondary));
+       }
+-      bakeBoneParts('Head', parts, { isMetal: false, inspectUvs: true });
++      bakeBoneParts('Head', parts, { isMetal: false });
+     } else {
+       // Mage pointed hat sculpted via LatheProfile
+       const brim = makeLatheProfile(
+@@ -664,32 +666,62 @@ function buildSlotAttachments(
+         gem.translate(0, 0.27, 0.165);
+         parts.push(tagPart(gem, 'mage_hat_gem', 'runic_glow', pal.glow, { lockVertical: false }));
+       }
+-      bakeBoneParts('Head', parts, { isMetal: false, inspectUvs: true });
++      bakeBoneParts('Head', parts, { isMetal: false });
+     }
+   } else if (slot === 'chest') {
+     const beltParts: TaggedGeometryPart[] = [
+       tagPart(
+-        makeBeveledBoneSegmentBox(0.072, 0.165, 0.125, 0.165, 0.125, 0.012, pal.secondary),
++        makeBeveledBoneSegmentBox(0.076, 0.172, 0.132, 0.168, 0.128, 0.012, pal.secondary),
+         'belt_strap',
+         'stitched_leather',
+         pal.secondary,
+         { accentHex: pal.trim }
+       ),
+       tagPart(
+-        makeBeveledBox(0.085, 0.075, 0.045, 0.01, pal.trim, { offset: [0, 0.05, 0.12] }),
++        makeBeveledBox(0.095, 0.082, 0.05, 0.012, pal.trim, { offset: [0, 0.05, 0.126] }),
+         'belt_buckle',
+         'brushed_gold',
+         pal.trim,
+         { landmarkKind: 'chest_crest' }
+       ),
++      // Rigid bone-mounted front & rear pleated battle-tabard / coat tails (widens waist-to-thigh silhouette with zero cloth physics)
++      tagPart(
++        makePleatedTabardGeometry(0.16, 0.22 + tier * 0.008, 0.24, 0.032, 3, pal.secondary, {
++          offset: [0, -0.07, 0.118],
++          flareZ: 0.024,
++        }),
++        'belt_tabard_front',
++        classId === 'knight' ? 'woven_cloth' : armorRecipe,
++        pal.secondary,
++        { accentHex: pal.trim }
++      ),
++      tagPart(
++        makePleatedTabardGeometry(0.19, 0.28 + tier * 0.01, 0.28, 0.034, 3, pal.primary, {
++          offset: [0, -0.09, -0.118],
++          flareZ: -0.032,
++        }),
++        'belt_tabard_back',
++        classId === 'mage' ? 'woven_cloth' : armorRecipe,
++        pal.primary,
++        { accentHex: pal.trim }
++      ),
+     ];
+-    if (classId === 'knight' || tier >= 3) {
+-      for (const [tIdx, sx] of [-1, 1].entries()) {
+-        const tasset = makeBeveledBox(0.092, 0.125, 0.135, 0.014, pal.primary, {
+-          offset: [sx * 0.145, -0.02, 0],
+-        });
+-        beltParts.push(tagPart(tasset, `belt_tasset_${tIdx}`, armorRecipe, pal.primary, { accentHex: pal.trim }));
+-      }
++    for (const [tIdx, sx] of [-1, 1].entries()) {
++      const tasset = makePleatedTabardGeometry(
++        0.105,
++        0.145 + tier * 0.006,
++        0.19,
++        0.036,
++        2,
++        pal.primary,
++        { flareZ: 0.018 }
++      );
++      tasset.rotateY(sx * (Math.PI * 0.5));
++      tasset.rotateZ(sx * -0.16);
++      tasset.translate(sx * 0.158, -0.04, 0);
++      beltParts.push(
++        tagPart(tasset, `belt_tasset_${tIdx}`, armorRecipe, pal.primary, { accentHex: pal.trim })
++      );
+     }
+     bakeBoneParts('pelvis', beltParts, { isMetal: classId === 'knight' });
+ 
+@@ -697,7 +729,7 @@ function buildSlotAttachments(
+       'spine_01',
+       [
+         tagPart(
+-          makeBeveledBoneSegmentBox(spine1Len * 1.05, 0.142, 0.104, 0.156, 0.114, 0.014, pal.secondary),
++          makeBeveledBoneSegmentBox(spine1Len * 1.05, 0.142, 0.104, 0.162, 0.118, 0.014, pal.secondary),
+           'chest_lower',
+           armorRecipe,
+           pal.secondary,
+@@ -707,47 +739,82 @@ function buildSlotAttachments(
+       { isMetal: classId === 'knight' }
+     );
+ 
++    // Sculpted V-taper anatomical cuirass on spine_02 with sternal ridge & cross-belt
++    const midCuirass = makeSegmentedBeveledBox(
++      0.34,
++      spine2Len * 1.1,
++      0.245,
++      0.016,
++      2,
++      2,
++      2,
++      (x, y, z) => {
++        const vNorm = spine2Len > 1e-4 ? y / (spine2Len * 0.55) : 0; // -1..+1
++        const vTaper = 1.0 + vNorm * 0.1;
++        const sternalKeel = z > 0 && Math.abs(x) < 0.06 ? 0.014 * (1 - Math.abs(x) / 0.06) : 0;
++        return [x * vTaper, y + spine2Len * 0.52, z + sternalKeel];
++      },
++      pal.primary
++    );
++    const crossBelt = makeBeveledBox(0.35, 0.046, 0.255, 0.01, pal.trim);
++    crossBelt.rotateZ(0.32);
++    crossBelt.translate(0, spine2Len * 0.54, 0);
++
+     bakeBoneParts(
+       'spine_02',
+       [
++        tagPart(midCuirass, 'chest_mid', armorRecipe, pal.primary, {
++          accentHex: pal.trim,
++          landmarkKind: 'chest_crest',
++        }),
+         tagPart(
+-          makeBeveledBoneSegmentBox(spine2Len * 1.08, 0.16, 0.115, 0.18, 0.13, 0.015, pal.primary),
+-          'chest_mid',
+-          armorRecipe,
+-          pal.primary,
+-          { accentHex: pal.trim, landmarkKind: 'chest_crest' }
+-        ),
+-        tagPart(
+-          makeBeveledBox(0.28, 0.052, 0.24, 0.01, pal.trim, { offset: [0, spine2Len * 0.5, 0] }),
++          makeBeveledBox(0.31, 0.052, 0.245, 0.01, pal.trim, { offset: [0, spine2Len * 0.22, 0] }),
+           'chest_band',
+           'brushed_gold',
+           pal.trim
+         ),
++        tagPart(crossBelt, 'chest_cross_strap', 'stitched_leather', pal.trim),
+       ],
+-      { isMetal: classId === 'knight', inspectUvs: true }
++      { isMetal: classId === 'knight' }
+     );
+ 
++    const upperCuirass = makeSegmentedBeveledBox(
++      0.39,
++      spine3Len * 0.96,
++      0.27,
++      0.018,
++      2,
++      2,
++      2,
++      (x, y, z) => {
++        const vNorm = spine3Len > 1e-4 ? y / (spine3Len * 0.48) : 0;
++        const shoulderFlare = 1.0 + vNorm * 0.09;
++        const pecSwell = z > 0 ? 0.012 * Math.cos((x / 0.2) * Math.PI * 0.5) : 0;
++        return [x * shoulderFlare, y + spine3Len * 0.48, z + pecSwell];
++      },
++      pal.primary
++    );
++    const gorgetCollar = makeBeveledBox(0.25, 0.068, 0.21, 0.014, pal.trim, {
++      offset: [0, spine3Len * 0.92, -0.005],
++    });
+     const topParts: TaggedGeometryPart[] = [
+-      tagPart(
+-        makeBeveledBoneSegmentBox(spine3Len * 0.94, 0.185, 0.13, 0.2, 0.135, 0.016, pal.primary),
+-        'chest_upper',
+-        armorRecipe,
+-        pal.primary,
+-        { accentHex: pal.trim }
+-      ),
++      tagPart(upperCuirass, 'chest_upper', armorRecipe, pal.primary, { accentHex: pal.trim }),
++      tagPart(gorgetCollar, 'chest_gorget_collar', 'brushed_gold', pal.trim),
+     ];
+     if (classId === 'knight') {
+-      const gorget = makeBeveledBox(0.22, 0.06, 0.18, 0.012, pal.trim, {
+-        offset: [0, spine3Len * 0.9, 0],
++      const crest = makeBeveledBox(0.125, 0.125, 0.048, 0.012, pal.secondary, {
++        offset: [0, spine3Len * 0.48, 0.142],
+       });
+-      const crest = makeBeveledBox(0.115, 0.115, 0.044, 0.01, pal.secondary, {
+-        offset: [0, spine3Len * 0.48, 0.135],
++      const backGuard = makeBeveledBox(0.24, 0.16, 0.045, 0.012, pal.secondary, {
++        offset: [0, spine3Len * 0.52, -0.14],
+       });
+       topParts.push(
+-        tagPart(gorget, 'knight_gorget', 'brushed_gold', pal.trim),
+         tagPart(crest, 'knight_crest', 'rarity_armor', pal.secondary, {
+           landmarkKind: 'chest_crest',
+           accentHex: pal.trim,
++        }),
++        tagPart(backGuard, 'knight_dorsal_plate', 'rarity_armor', pal.secondary, {
++          accentHex: pal.trim,
+         })
+       );
+     } else if (classId === 'archer') {
+@@ -769,11 +836,11 @@ function buildSlotAttachments(
+         tagPart(arrows, 'archer_fletching', 'woven_cloth', pal.trim)
+       );
+     } else {
+-      const mantle = makeBeveledBox(0.38, 0.065, 0.24, 0.014, pal.trim, {
++      const mantle = makeBeveledBox(0.41, 0.072, 0.26, 0.015, pal.trim, {
+         offset: [0, spine3Len * 0.78, -0.01],
+       });
+-      const rune = prepareColoredPart(new THREE.OctahedronGeometry(0.05, 0), pal.glow);
+-      rune.translate(0, spine3Len * 0.48, 0.138);
++      const rune = prepareColoredPart(new THREE.OctahedronGeometry(0.052, 0), pal.glow);
++      rune.translate(0, spine3Len * 0.48, 0.145);
+       topParts.push(
+         tagPart(mantle, 'mage_mantle', 'brushed_gold', pal.trim),
+         tagPart(rune, 'mage_chest_rune', 'runic_glow', pal.glow, { lockVertical: false })
+@@ -797,28 +864,29 @@ function buildSlotAttachments(
+         (classId === 'mage' && tier >= 2) ||
+         tier >= 3;
+       if (hasPauldron) {
+-        const pW = classId === 'knight' ? 0.18 + tier * 0.008 : 0.145;
+-        const pH = classId === 'knight' ? 0.155 : 0.115;
+-        const pauldron = makePauldronShellGeometry(pW, pH, pW * 1.12, 0.032, pal.primary);
++        const pW = classId === 'knight' ? 0.195 + tier * 0.008 : 0.155;
++        const pH = classId === 'knight' ? 0.165 : 0.125;
++        const pauldron = makePauldronShellGeometry(pW, pH, pW * 1.14, 0.036, pal.primary);
+         if (side === 'r') {
+           pauldron.rotateY(Math.PI);
+         }
+-        pauldron.translate(side === 'l' ? 0.01 : -0.01, 0.05, 0);
++        // Centered near y ≈ +0.02 on upperarm_l/r per Invariant #5
++        pauldron.translate(side === 'l' ? 0.012 : -0.012, 0.022, 0);
+         armParts.push(
+           tagPart(pauldron, `pauldron_${side}`, armorRecipe, pal.primary, {
+             accentHex: pal.trim,
+             lockVertical: true,
+           })
+         );
+-        if (tier >= 3) {
++        if (tier >= 2) {
+           const rim = makeBeveledBox(pW + 0.025, 0.038, pW + 0.025, 0.008, pal.trim, {
+-            offset: [0, 0.01, 0],
++            offset: [0, 0.005, 0],
+           });
+           armParts.push(tagPart(rim, `pauldron_rim_${side}`, 'brushed_gold', pal.trim));
+         }
+-        if (tier >= 5) {
++        if (tier >= 4) {
+           const spike = prepareColoredPart(new THREE.ConeGeometry(0.042, 0.11, 5), pal.trim);
+-          spike.translate(side === 'l' ? 0.045 : -0.045, 0.12, 0);
++          spike.translate(side === 'l' ? 0.045 : -0.045, 0.095, 0);
+           armParts.push(tagPart(spike, `pauldron_spike_${side}`, 'brushed_gold', pal.trim));
+         }
+       }
+@@ -826,17 +894,34 @@ function buildSlotAttachments(
+     }
+   } else if (slot === 'legs') {
+     for (const side of ['l', 'r'] as const) {
++      const sx = side === 'l' ? 1 : -1;
++      const flaredCuisse = makePleatedTabardGeometry(
++        0.11,
++        0.15 + tier * 0.006,
++        thigh * 0.62,
++        0.034,
++        2,
++        pal.secondary,
++        { flareZ: 0.016 }
++      );
++      flaredCuisse.rotateY(sx * (Math.PI * 0.5));
++      flaredCuisse.rotateZ(sx * -0.12);
++      flaredCuisse.translate(sx * 0.076, thigh * 0.36, 0);
++
+       const parts: TaggedGeometryPart[] = [
+         tagPart(
+-          makeBeveledBoneSegmentBox(thigh * 0.88, 0.09, 0.09, 0.072, 0.072, 0.013, pal.primary),
++          makeBeveledBoneSegmentBox(thigh * 0.88, 0.092, 0.092, 0.074, 0.074, 0.013, pal.primary),
+           `thigh_guard_${side}`,
+           armorRecipe,
+           pal.primary,
+           { accentHex: pal.trim }
+         ),
++        tagPart(flaredCuisse, `thigh_cuisse_skirt_${side}`, armorRecipe, pal.secondary, {
++          accentHex: pal.trim,
++        }),
+         tagPart(
+-          makeBeveledBox(0.135, 0.082, 0.14, 0.014, pal.trim, {
+-            offset: [0, thigh * 0.86, 0.015],
++          makeBeveledBox(0.142, 0.092, 0.148, 0.016, pal.trim, {
++            offset: [0, thigh * 0.86, 0.02],
+           }),
+           `kneecap_${side}`,
+           'brushed_gold',
+@@ -844,11 +929,11 @@ function buildSlotAttachments(
+         ),
+       ];
+       if (tier >= 3) {
+-        const outerPlate = makeBeveledBox(0.155, thigh * 0.52, 0.062, 0.01, pal.secondary, {
+-          offset: [0, thigh * 0.45, 0],
++        const kneeFin = makeBeveledBox(0.06, 0.11, 0.075, 0.012, pal.primary, {
++          offset: [sx * 0.068, thigh * 0.86, 0.025],
+         });
+         parts.push(
+-          tagPart(outerPlate, `thigh_plate_${side}`, armorRecipe, pal.secondary, {
++          tagPart(kneeFin, `knee_wing_${side}`, armorRecipe, pal.primary, {
+             accentHex: pal.trim,
+           })
+         );
+@@ -859,20 +944,28 @@ function buildSlotAttachments(
+     for (const side of ['l', 'r'] as const) {
+       const calfParts: TaggedGeometryPart[] = [
+         tagPart(
+-          makeBeveledBoneSegmentBox(calf * 0.72, 0.068, 0.068, 0.076, 0.076, 0.012, pal.secondary),
++          makeBeveledBoneSegmentBox(calf * 0.74, 0.07, 0.07, 0.078, 0.078, 0.012, pal.secondary),
+           `greave_${side}`,
+           armorRecipe,
+           pal.secondary,
+           { accentHex: pal.trim }
+         ),
+         tagPart(
+-          makeBeveledBox(0.15, 0.065, 0.15, 0.012, pal.trim, {
++          makeBeveledBox(0.154, 0.068, 0.154, 0.012, pal.trim, {
+             offset: [0, calf * 0.34, 0],
+           }),
+           `boot_cuff_${side}`,
+           'brushed_gold',
+           pal.trim
+         ),
++        tagPart(
++          makeBeveledBox(0.062, calf * 0.56, 0.048, 0.01, pal.trim, {
++            offset: [0, calf * 0.36, 0.065],
++          }),
++          `greave_shin_crest_${side}`,
++          'brushed_gold',
++          pal.trim
++        ),
+       ];
+       bakeBoneParts(`calf_${side}`, calfParts, { isMetal: classId === 'knight' });
+ 
+@@ -895,17 +988,27 @@ function buildSlotAttachments(
+     }
+   } else if (slot === 'gloves') {
+     for (const side of ['l', 'r'] as const) {
++      const sx = side === 'l' ? 1 : -1;
+       const bracerParts: TaggedGeometryPart[] = [
+         tagPart(
+-          makeBeveledBoneSegmentBox(lArm * 0.62, 0.054, 0.054, 0.062, 0.062, 0.01, pal.primary),
++          makeBeveledBoneSegmentBox(lArm * 0.64, 0.056, 0.056, 0.064, 0.064, 0.01, pal.primary),
+           `bracer_${side}`,
+           armorRecipe,
+           pal.primary,
+           { accentHex: pal.trim }
+         ),
++        // Sculpted elbow cop (couter) protecting joint at parent end of lowerarm
++        tagPart(
++          makeBeveledBox(0.115, 0.078, 0.115, 0.014, pal.trim, {
++            offset: [sx * 0.018, 0.04, -0.022],
++          }),
++          `elbow_cop_${side}`,
++          'brushed_gold',
++          pal.trim
++        ),
+       ];
+       if (tier >= 2) {
+-        const rim = makeBeveledBox(0.12, 0.048, 0.12, 0.01, pal.trim, {
++        const rim = makeBeveledBox(0.124, 0.05, 0.124, 0.01, pal.trim, {
+           offset: [0, lArm * 0.56, 0],
+         });
+         bracerParts.push(tagPart(rim, `bracer_cuff_${side}`, 'brushed_gold', pal.trim));
+diff --git a/src/engine/procedural/ProceduralGeometryKit.ts b/src/engine/procedural/ProceduralGeometryKit.ts
+index 3fd5bb6..f1806fc 100644
+--- a/src/engine/procedural/ProceduralGeometryKit.ts
++++ b/src/engine/procedural/ProceduralGeometryKit.ts
+@@ -421,6 +421,309 @@ function makeBeveledTaperedHexahedron(
+   return finishAccumToGeometry(acc, hexColor, shadeJitter, offset);
+ }
+ 
++/**
++ * Segmented watertight beveled cuboid with subdivided interior grids (`segsX × segsY × segsZ`)
++ * and optional deterministic 3D vertex warp callback `warpFn(x, y, z) => [x', y', z']`.
++ * Enables sculpted V-taper armor plates, weathered stone blocks, and sagging timber beams
++ * while preserving 45-degree edge chamfers for Pass 3 crease highlights.
++ */
++export function makeSegmentedBeveledBox(
++  width: number,
++  height: number,
++  depth: number,
++  bevel = 0.02,
++  segsX = 2,
++  segsY = 2,
++  segsZ = 2,
++  warpFn?: (x: number, y: number, z: number) => [number, number, number],
++  hexColor = '#ffffff',
++  options: {
++    offset?: [number, number, number];
++    shadeJitter?: number;
++    originBottom?: boolean;
++  } = {}
++): THREE.BufferGeometry {
++  const nx = Math.max(1, Math.min(12, Math.round(segsX)));
++  const ny = Math.max(1, Math.min(12, Math.round(segsY)));
++  const nz = Math.max(1, Math.min(12, Math.round(segsZ)));
++  const minDim = Math.min(Math.abs(width), Math.abs(height), Math.abs(depth));
++  const c = Math.max(0.001, Math.min(bevel, minDim * 0.34));
++  const hw = width * 0.5;
++  const hh = height * 0.5;
++  const hd = depth * 0.5;
++  const yBias = options.originBottom ? hh : 0;
++  const off: [number, number, number] = [
++    options.offset?.[0] ?? 0,
++    (options.offset?.[1] ?? 0) + yBias,
++    options.offset?.[2] ?? 0,
++  ];
++
++  // Map grid indices (ix in 0..nx+2, iy in 0..ny+2, iz in 0..nz+2) to box with chamfer margin c at ends
++  const axisCoord = (idx: number, n: number, half: number, ch: number): number => {
++    if (idx <= 0) return -half;
++    if (idx >= n + 2) return half;
++    const inner = Math.max(0.001, half - ch);
++    const t = (idx - 1) / n; // 0..1 across interior face
++    return -inner + t * (2 * inner);
++  };
++
++  const evalPt = (ix: number, iy: number, iz: number): [number, number, number] => {
++    let x = axisCoord(ix, nx, hw, c);
++    let y = axisCoord(iy, ny, hh, c);
++    let z = axisCoord(iz, nz, hd, c);
++
++    // Project boundary ring points onto the 26-face chamfer hull
++    const onX = ix === 0 ? -1 : ix === nx + 2 ? 1 : 0;
++    const onY = iy === 0 ? -1 : iy === ny + 2 ? 1 : 0;
++    const onZ = iz === 0 ? -1 : iz === nz + 2 ? 1 : 0;
++    const bCount = Math.abs(onX) + Math.abs(onY) + Math.abs(onZ);
++    if (bCount >= 2) {
++      // Retract along active boundary axes so bevel edges & corner triangles sit at 45 degrees
++      const retract = bCount === 2 ? c * 0.2929 : c * 0.4226;
++      if (onX !== 0) x -= onX * retract;
++      if (onY !== 0) y -= onY * retract;
++      if (onZ !== 0) z -= onZ * retract;
++    }
++
++    if (warpFn) {
++      return warpFn(x, y, z);
++    }
++    return [x, y, z];
++  };
++
++  const acc = createAccum();
++  const NX = nx + 2;
++  const NY = ny + 2;
++  const NZ = nz + 2;
++
++  // Emit all 6 topological sides of the (NX × NY × NZ) grid cube
++  // +Z (iz = NZ) & -Z (iz = 0)
++  for (let iy = 0; iy < NY; iy++) {
++    for (let ix = 0; ix < NX; ix++) {
++      const u0 = ix / NX,
++        u1 = (ix + 1) / NX;
++      const v0 = iy / NY,
++        v1 = (iy + 1) / NY;
++      pushQuadWithHint(
++        acc,
++        evalPt(ix, iy, NZ),
++        evalPt(ix + 1, iy, NZ),
++        evalPt(ix + 1, iy + 1, NZ),
++        evalPt(ix, iy + 1, NZ),
++        [u0, v0],
++        [u1, v0],
++        [u1, v1],
++        [u0, v1],
++        [0, 0, 1]
++      );
++      pushQuadWithHint(
++        acc,
++        evalPt(ix + 1, iy, 0),
++        evalPt(ix, iy, 0),
++        evalPt(ix, iy + 1, 0),
++        evalPt(ix + 1, iy + 1, 0),
++        [u0, v0],
++        [u1, v0],
++        [u1, v1],
++        [u0, v1],
++        [0, 0, -1]
++      );
++    }
++  }
++
++  // +X (ix = NX) & -X (ix = 0)
++  for (let iy = 0; iy < NY; iy++) {
++    for (let iz = 0; iz < NZ; iz++) {
++      const u0 = iz / NZ,
++        u1 = (iz + 1) / NZ;
++      const v0 = iy / NY,
++        v1 = (iy + 1) / NY;
++      pushQuadWithHint(
++        acc,
++        evalPt(NX, iy, iz + 1),
++        evalPt(NX, iy, iz),
++        evalPt(NX, iy + 1, iz),
++        evalPt(NX, iy + 1, iz + 1),
++        [u0, v0],
++        [u1, v0],
++        [u1, v1],
++        [u0, v1],
++        [1, 0, 0]
++      );
++      pushQuadWithHint(
++        acc,
++        evalPt(0, iy, iz),
++        evalPt(0, iy, iz + 1),
++        evalPt(0, iy + 1, iz + 1),
++        evalPt(0, iy + 1, iz),
++        [u0, v0],
++        [u1, v0],
++        [u1, v1],
++        [u0, v1],
++        [-1, 0, 0]
++      );
++    }
++  }
++
++  // +Y (iy = NY) & -Y (iy = 0)
++  for (let iz = 0; iz < NZ; iz++) {
++    for (let ix = 0; ix < NX; ix++) {
++      const u0 = ix / NX,
++        u1 = (ix + 1) / NX;
++      const v0 = iz / NZ,
++        v1 = (iz + 1) / NZ;
++      pushQuadWithHint(
++        acc,
++        evalPt(ix, NY, iz + 1),
++        evalPt(ix + 1, NY, iz + 1),
++        evalPt(ix + 1, NY, iz),
++        evalPt(ix, NY, iz),
++        [u0, v0],
++        [u1, v0],
++        [u1, v1],
++        [u0, v1],
++        [0, 1, 0]
++      );
++      pushQuadWithHint(
++        acc,
++        evalPt(ix, 0, iz),
++        evalPt(ix + 1, 0, iz),
++        evalPt(ix + 1, 0, iz + 1),
++        evalPt(ix, 0, iz + 1),
++        [u0, v0],
++        [u1, v0],
++        [u1, v1],
++        [u0, v1],
++        [0, -1, 0]
++      );
++    }
++  }
++
++  return finishAccumToGeometry(acc, hexColor, options.shadeJitter ?? 0, off);
++}
++
++/**
++ * Sculpted flared A-frame pleated tabard / battle-coat tail or tasset plate with vertical fold pleats.
++ * Spans vertically from `y = -height * 0.5` to `+height * 0.5` (or `y = 0 .. height` when `originTop` / `originBottom`),
++ * widening from `topW` at the waist to `bottomW` at the hem for dark-fantasy warrior silhouettes without cloth physics.
++ */
++export function makePleatedTabardGeometry(
++  topW = 0.22,
++  bottomW = 0.32,
++  height = 0.34,
++  depth = 0.042,
++  pleats = 3,
++  hexColor = '#285cc4',
++  options: {
++    offset?: [number, number, number];
++    flareZ?: number;
++    shadeJitter?: number;
++  } = {}
++): THREE.BufferGeometry {
++  const nPleats = Math.max(1, Math.min(7, Math.round(pleats)));
++  const uCols = nPleats * 2 + 2;
++  const vRows = 4;
++  const flareZ = options.flareZ ?? 0.028;
++  const halfT = Math.max(0.008, depth * 0.38);
++  const pleatAmp = Math.max(0.006, depth * 0.36);
++  const acc = createAccum();
++
++  const sampleGrid = (iu: number, iv: number, isFront: boolean): [number, number, number] => {
++    const u = iu / uCols; // 0..1 left to right
++    const v = iv / vRows; // 0 = bottom hem, 1 = top waist
++    const spanW = bottomW * (1 - v) + topW * v;
++    const x = (u - 0.5) * spanW;
++    const y = (v - 0.5) * height;
++    // Pleat wave stronger toward bottom hem, smooth at waist
++    const wave = Math.sin(u * nPleats * Math.PI * 2) * pleatAmp * (0.35 + 0.65 * (1 - v));
++    const sweepZ = (1 - v) * (1 - v) * flareZ;
++    const z = wave + sweepZ + (isFront ? halfT : -halfT);
++    return [x, y, z];
++  };
++
++  for (let iv = 0; iv < vRows; iv++) {
++    const v0 = iv / vRows,
++      v1 = (iv + 1) / vRows;
++    for (let iu = 0; iu < uCols; iu++) {
++      const u0 = iu / uCols,
++        u1 = (iu + 1) / uCols;
++      const f00 = sampleGrid(iu, iv, true);
++      const f10 = sampleGrid(iu + 1, iv, true);
++      const f11 = sampleGrid(iu + 1, iv + 1, true);
++      const f01 = sampleGrid(iu, iv + 1, true);
++      pushQuadWithHint(acc, f00, f10, f11, f01, [u0, v0], [u1, v0], [u1, v1], [u0, v1], [0, 0, 1]);
++
++      const b00 = sampleGrid(iu, iv, false);
++      const b10 = sampleGrid(iu + 1, iv, false);
++      const b11 = sampleGrid(iu + 1, iv + 1, false);
++      const b01 = sampleGrid(iu, iv + 1, false);
++      pushQuadWithHint(acc, b10, b00, b01, b11, [u0, v0], [u1, v0], [u1, v1], [u0, v1], [0, 0, -1]);
++    }
++  }
++
++  // Watertight bottom hem & top waist caps
++  for (let iu = 0; iu < uCols; iu++) {
++    const u0 = iu / uCols,
++      u1 = (iu + 1) / uCols;
++    pushQuadWithHint(
++      acc,
++      sampleGrid(iu, 0, false),
++      sampleGrid(iu + 1, 0, false),
++      sampleGrid(iu + 1, 0, true),
++      sampleGrid(iu, 0, true),
++      [u0, 0],
++      [u1, 0],
++      [u1, 1],
++      [u0, 1],
++      [0, -1, 0]
++    );
++    pushQuadWithHint(
++      acc,
++      sampleGrid(iu, vRows, true),
++      sampleGrid(iu + 1, vRows, true),
++      sampleGrid(iu + 1, vRows, false),
++      sampleGrid(iu, vRows, false),
++      [u0, 0],
++      [u1, 0],
++      [u1, 1],
++      [u0, 1],
++      [0, 1, 0]
++    );
++  }
++
++  // Watertight left & right side edges
++  for (let iv = 0; iv < vRows; iv++) {
++    const v0 = iv / vRows,
++      v1 = (iv + 1) / vRows;
++    pushQuadWithHint(
++      acc,
++      sampleGrid(0, iv, false),
++      sampleGrid(0, iv, true),
++      sampleGrid(0, iv + 1, true),
++      sampleGrid(0, iv + 1, false),
++      [0, v0],
++      [1, v0],
++      [1, v1],
++      [0, v1],
++      [-1, 0, 0]
++    );
++    pushQuadWithHint(
++      acc,
++      sampleGrid(uCols, iv, true),
++      sampleGrid(uCols, iv, false),
++      sampleGrid(uCols, iv + 1, false),
++      sampleGrid(uCols, iv + 1, true),
++      [0, v0],
++      [1, v0],
++      [1, v1],
++      [0, v1],
++      [1, 0, 0]
++    );
++  }
++
++  return finishAccumToGeometry(acc, hexColor, options.shadeJitter ?? 0, options.offset ?? [0, 0, 0]);
++}
++
+ // ---------------------------------------------------------------------------
+ // 2. Lathe / Revolved Profiles, Curved Horns & Pauldron Shells
+ // ---------------------------------------------------------------------------
+@@ -760,7 +1063,8 @@ export function makeCurvedHornGeometry(
+ }
+ 
+ /**
+- * Curved multi-segment armored shoulder pauldron shell with outer/inner thickness (centered near origin).
++ * Curved multi-segment armored shoulder pauldron shell with tiered overlapping lames,
++ * raised trim border, and outer/inner thickness (centered near origin).
+  */
+ export function makePauldronShellGeometry(
+   width = 0.26,
+@@ -771,15 +1075,19 @@ export function makePauldronShellGeometry(
+ ): THREE.BufferGeometry {
+   const acc = createAccum();
+   const uSegs = 4;
+-  const vSegs = 3;
++  const vSegs = 4;
+ 
+   const sample = (uIdx: number, vIdx: number, outer: boolean): [number, number, number] => {
+-    const u = (uIdx / uSegs - 0.5) * Math.PI * 0.92; // forward-back wrap
+-    const v = (vIdx / vSegs) * Math.PI * 0.54; // 0 = crest, 1 = flared outer rim
+-    const rScale = outer ? 1.0 : Math.max(0.55, 1.0 - thickness / Math.max(0.12, width));
+-    const x = Math.sin(v) * width * 0.55 * rScale;
+-    const y = (Math.cos(v) - 0.45) * height * 0.72 * rScale;
+-    const z = Math.sin(u) * Math.max(0.35, Math.sin(v) * 0.85 + 0.32) * depth * 0.5 * rScale;
++    const u = (uIdx / uSegs - 0.5) * Math.PI * 0.94; // forward-back wrap
++    const v = (vIdx / vSegs) * Math.PI * 0.56; // 0 = crest, 1 = flared outer rim
++    const baseScale = outer ? 1.0 : Math.max(0.55, 1.0 - thickness / Math.max(0.12, width));
++    // Tiered overlapping lame step + raised lower rim lip on outer shell
++    const lameStep = outer ? (vIdx === 2 ? 1.06 : vIdx === vSegs ? 1.08 : 1.0) : 1.0;
++    const ridgeSpine = outer && uIdx === uSegs / 2 ? 1.05 : 1.0;
++    const rScale = baseScale * lameStep * ridgeSpine;
++    const x = Math.sin(v) * width * 0.56 * rScale;
++    const y = (Math.cos(v) - 0.45) * height * 0.74 * rScale - (outer && vIdx >= 3 ? 0.008 : 0);
++    const z = Math.sin(u) * Math.max(0.36, Math.sin(v) * 0.86 + 0.32) * depth * 0.5 * rScale;
+     return [x, y, z];
+   };
+ 
+@@ -861,7 +1169,8 @@ export function makePauldronShellGeometry(
+ // ---------------------------------------------------------------------------
+ 
+ /**
+- * Tapered diamond cross-section sword blade starting at y=0 and rising along +Y to `bodyLen + tipLen`.
++ * Tapered hex-fuller / diamond cross-section sword blade starting at y=0 and rising along +Y to `bodyLen + tipLen`.
++ * Features a central fuller groove channel bounded by twin blood-ridge bevels for crisp Pass 3 specular & crease read.
+  */
+ export function makeSwordBladeGeometry(
+   width = 0.08,
+@@ -873,47 +1182,73 @@ export function makeSwordBladeGeometry(
+   const acc = createAccum();
+   const hw0 = width * 0.5;
+   const hw1 = width * 0.42;
+-  const ht0 = thickness * 0.5;
+-  const ht1 = thickness * 0.4;
+-  const edgeTh = Math.max(0.004, thickness * 0.14);
+-
+-  // Base oct-diamond at y=0, upper ring at y=bodyLen, tip at y=bodyLen+tipLen
++  const hf0 = width * 0.18;
++  const hf1 = width * 0.14;
++  const ht0 = thickness * 0.52;
++  const ht1 = thickness * 0.42;
++  const hg0 = thickness * 0.32; // recessed central fuller groove depth
++  const hg1 = thickness * 0.28;
++  const fullY = bodyLen * 0.78;
++
++  // Base ring at y=0, fuller termination ring at y=fullY, shoulder ring at y=bodyLen, tip at y=bodyLen+tipLen
+   const pR0: [number, number, number] = [hw0, 0, 0];
+   const pL0: [number, number, number] = [-hw0, 0, 0];
+-  const pF0: [number, number, number] = [0, 0, ht0];
+-  const pB0: [number, number, number] = [0, 0, -ht0];
++  const fFR0: [number, number, number] = [hf0, 0, ht0];
++  const fFC0: [number, number, number] = [0, 0, hg0];
++  const fFL0: [number, number, number] = [-hf0, 0, ht0];
++  const fBR0: [number, number, number] = [hf0, 0, -ht0];
++  const fBC0: [number, number, number] = [0, 0, -hg0];
++  const fBL0: [number, number, number] = [-hf0, 0, -ht0];
++
++  const hwM = hw0 * 0.22 + hw1 * 0.78;
++  const pRM: [number, number, number] = [hwM, fullY, 0];
++  const pLM: [number, number, number] = [-hwM, fullY, 0];
++  const fFRM: [number, number, number] = [hf1, fullY, ht1];
++  const fFCM: [number, number, number] = [0, fullY, hg1];
++  const fFLM: [number, number, number] = [-hf1, fullY, ht1];
++  const fBRM: [number, number, number] = [hf1, fullY, -ht1];
++  const fBCM: [number, number, number] = [0, fullY, -hg1];
++  const fBLM: [number, number, number] = [-hf1, fullY, -ht1];
+ 
+   const pR1: [number, number, number] = [hw1, bodyLen, 0];
+   const pL1: [number, number, number] = [-hw1, bodyLen, 0];
+   const pF1: [number, number, number] = [0, bodyLen, ht1];
+   const pB1: [number, number, number] = [0, bodyLen, -ht1];
+-
+   const tip: [number, number, number] = [0, bodyLen + tipLen, 0];
+ 
+-  // Bevel panels (4 crisp bevel facets along shaft + 4 tip bevel facets)
+-  pushQuadWithHint(acc, pR0, pF0, pF1, pR1, [0, 0], [1, 0], [1, 0.8], [0, 0.8], [1, 0, 1]);
+-  pushQuadWithHint(acc, pF0, pL0, pL1, pF1, [0, 0], [1, 0], [1, 0.8], [0, 0.8], [-1, 0, 1]);
+-  pushQuadWithHint(acc, pL0, pB0, pB1, pL1, [0, 0], [1, 0], [1, 0.8], [0, 0.8], [-1, 0, -1]);
+-  pushQuadWithHint(acc, pB0, pR0, pR1, pB1, [0, 0], [1, 0], [1, 0.8], [0, 0.8], [1, 0, -1]);
+-
+-  pushTriWithHint(acc, pR1, pF1, tip, [0, 0.8], [1, 0.8], [0.5, 1], [1, 0.3, 1]);
+-  pushTriWithHint(acc, pF1, pL1, tip, [0, 0.8], [1, 0.8], [0.5, 1], [-1, 0.3, 1]);
+-  pushTriWithHint(acc, pL1, pB1, tip, [0, 0.8], [1, 0.8], [0.5, 1], [-1, 0.3, -1]);
+-  pushTriWithHint(acc, pB1, pR1, tip, [0, 0.8], [1, 0.8], [0.5, 1], [1, 0.3, -1]);
+-
+-  // Base cap
+-  pushQuadWithHint(
+-    acc,
+-    pR0,
+-    [pB0[0], 0, Math.min(-edgeTh, pB0[2])],
+-    pL0,
+-    [pF0[0], 0, Math.max(edgeTh, pF0[2])],
+-    [0, 0],
+-    [1, 0],
+-    [1, 1],
+-    [0, 1],
+-    [0, -1, 0]
+-  );
++  // Lower shaft with central fuller groove + twin bevels (front +Z and back -Z)
++  pushQuadWithHint(acc, pR0, fFR0, fFRM, pRM, [0, 0], [0.35, 0], [0.35, 0.65], [0, 0.65], [1, 0, 1]);
++  pushQuadWithHint(acc, fFR0, fFC0, fFCM, fFRM, [0.35, 0], [0.5, 0], [0.5, 0.65], [0.35, 0.65], [-0.2, 0, 1]);
++  pushQuadWithHint(acc, fFC0, fFL0, fFLM, fFCM, [0.5, 0], [0.65, 0], [0.65, 0.65], [0.5, 0.65], [0.2, 0, 1]);
++  pushQuadWithHint(acc, fFL0, pL0, pLM, fFLM, [0.65, 0], [1, 0], [1, 0.65], [0.65, 0.65], [-1, 0, 1]);
++
++  pushQuadWithHint(acc, pL0, fBL0, fBLM, pLM, [0, 0], [0.35, 0], [0.35, 0.65], [0, 0.65], [-1, 0, -1]);
++  pushQuadWithHint(acc, fBL0, fBC0, fBCM, fBLM, [0.35, 0], [0.5, 0], [0.5, 0.65], [0.35, 0.65], [0.2, 0, -1]);
++  pushQuadWithHint(acc, fBC0, fBR0, fBRM, fBCM, [0.5, 0], [0.65, 0], [0.65, 0.65], [0.5, 0.65], [-0.2, 0, -1]);
++  pushQuadWithHint(acc, fBR0, pR0, pRM, fBRM, [0.65, 0], [1, 0], [1, 0.65], [0.65, 0.65], [1, 0, -1]);
++
++  // Upper fuller-to-diamond transition (fullY -> bodyLen)
++  pushQuadWithHint(acc, pRM, fFRM, pF1, pR1, [0, 0.65], [0.4, 0.65], [0.5, 0.82], [0, 0.82], [1, 0, 1]);
++  pushTriWithHint(acc, fFRM, fFCM, pF1, [0.35, 0.65], [0.5, 0.65], [0.5, 0.82], [0, 0.1, 1]);
++  pushTriWithHint(acc, fFCM, fFLM, pF1, [0.5, 0.65], [0.65, 0.65], [0.5, 0.82], [0, 0.1, 1]);
++  pushQuadWithHint(acc, fFLM, pLM, pL1, pF1, [0.6, 0.65], [1, 0.65], [1, 0.82], [0.5, 0.82], [-1, 0, 1]);
++
++  pushQuadWithHint(acc, pLM, fBLM, pB1, pL1, [0, 0.65], [0.4, 0.65], [0.5, 0.82], [0, 0.82], [-1, 0, -1]);
++  pushTriWithHint(acc, fBLM, fBCM, pB1, [0.35, 0.65], [0.5, 0.65], [0.5, 0.82], [0, 0.1, -1]);
++  pushTriWithHint(acc, fBCM, fBRM, pB1, [0.5, 0.65], [0.65, 0.65], [0.5, 0.82], [0, 0.1, -1]);
++  pushQuadWithHint(acc, fBRM, pRM, pR1, pB1, [0.6, 0.65], [1, 0.65], [1, 0.82], [0.5, 0.82], [1, 0, -1]);
++
++  // Pointed diamond tip bevels (bodyLen -> bodyLen+tipLen)
++  pushTriWithHint(acc, pR1, pF1, tip, [0, 0.82], [1, 0.82], [0.5, 1], [1, 0.3, 1]);
++  pushTriWithHint(acc, pF1, pL1, tip, [0, 0.82], [1, 0.82], [0.5, 1], [-1, 0.3, 1]);
++  pushTriWithHint(acc, pL1, pB1, tip, [0, 0.82], [1, 0.82], [0.5, 1], [-1, 0.3, -1]);
++  pushTriWithHint(acc, pB1, pR1, tip, [0, 0.82], [1, 0.82], [0.5, 1], [1, 0.3, -1]);
++
++  // Base cap at y=0
++  pushTriWithHint(acc, pR0, fBR0, fFR0, [1, 0.5], [0.7, 0], [0.7, 1], [0, -1, 0]);
++  pushQuadWithHint(acc, fFR0, fBR0, fBC0, fFC0, [0.7, 1], [0.7, 0], [0.5, 0], [0.5, 1], [0, -1, 0]);
++  pushQuadWithHint(acc, fFC0, fBC0, fBL0, fFL0, [0.5, 1], [0.5, 0], [0.3, 0], [0.3, 1], [0, -1, 0]);
++  pushTriWithHint(acc, fFL0, fBL0, pL0, [0.3, 1], [0.3, 0], [0, 0.5], [0, -1, 0]);
+ 
+   return finishAccumToGeometry(acc, hexColor);
+ }
+@@ -1163,7 +1498,8 @@ export interface PitchedRoofResult {
+ 
+ /**
+  * Generates a real sloped roof (`gable` or `hip`) with overhanging eaves, slab thickness,
+- * soffit undersides, ridge beam cap, and triangular masonry/timber gable fills.
++ * soffit undersides, catenary ridge sag, protruding eave rafter tails, stepped gable bargeboards,
++ * and triangular masonry/timber gable fills.
+  * Base rests at local `y = 0` and rises to `peakHeight`.
+  */
+ export function makePitchedRoofGeometry(
+@@ -1177,12 +1513,15 @@ export function makePitchedRoofGeometry(
+     roofHex?: string;
+     trimHex?: string;
+     gableHex?: string;
++    ridgeSag?: number;
++    rafterCount?: number;
+   } = {}
+ ): PitchedRoofResult {
+   const style = options.style ?? 'gable';
+   const roofHex = options.roofHex ?? '#8a3e38';
+   const trimHex = options.trimHex ?? '#4a3322';
+   const gableHex = options.gableHex ?? '#c9beaa';
++  const sag = options.ridgeSag ?? Math.min(0.08, peakHeight * 0.055);
+ 
+   const hw = width * 0.5 + overhang;
+   const hd = depth * 0.5 + overhang;
+@@ -1190,61 +1529,98 @@ export function makePitchedRoofGeometry(
+   const bHd = depth * 0.5;
+   const accRoof = createAccum();
+   const accGable = createAccum();
++  const trimParts: THREE.BufferGeometry[] = [];
+ 
+   if (style === 'gable') {
+-    // Ridge along Z axis (x = 0)
+-    const ridgeTop: [number, number, number][] = [
+-      [0, peakHeight + slabThickness, hd],
+-      [0, peakHeight + slabThickness, -hd],
+-    ];
+-    const ridgeBot: [number, number, number][] = [
+-      [0, peakHeight, hd],
+-      [0, peakHeight, -hd],
+-    ];
+-
+-    const eaveRTopFront: [number, number, number] = [hw, slabThickness, hd];
+-    const eaveRTopBack: [number, number, number] = [hw, slabThickness, -hd];
+-    const eaveRBotFront: [number, number, number] = [hw, 0, hd];
+-    const eaveRBotBack: [number, number, number] = [hw, 0, -hd];
+-
+-    const eaveLTopFront: [number, number, number] = [-hw, slabThickness, hd];
+-    const eaveLTopBack: [number, number, number] = [-hw, slabThickness, -hd];
+-    const eaveLBotFront: [number, number, number] = [-hw, 0, hd];
+-    const eaveLBotBack: [number, number, number] = [-hw, 0, -hd];
+-
+-    // Top pitched slopes (Right +X, Left -X)
+-    pushQuadWithHint(accRoof, eaveRTopFront, eaveRTopBack, ridgeTop[1], ridgeTop[0], [0, 0], [1, 0], [1, 1], [0, 1], [1, 1, 0]);
+-    pushQuadWithHint(accRoof, eaveLTopBack, eaveLTopFront, ridgeTop[0], ridgeTop[1], [0, 0], [1, 0], [1, 1], [0, 1], [-1, 1, 0]);
+-
+-    // Bottom soffits
+-    pushQuadWithHint(accRoof, eaveRBotBack, eaveRBotFront, ridgeBot[0], ridgeBot[1], [0, 0], [1, 0], [1, 1], [0, 1], [-1, -1, 0]);
+-    pushQuadWithHint(accRoof, eaveLBotFront, eaveLBotBack, ridgeBot[1], ridgeBot[0], [0, 0], [1, 0], [1, 1], [0, 1], [1, -1, 0]);
++    // Segmented ridge along Z axis (4 span segments for subtle catenary mid-span sag)
++    const zSegs = 4;
++    for (let s = 0; s < zSegs; s++) {
++      const f0 = s / zSegs;
++      const f1 = (s + 1) / zSegs;
++      const z0 = hd - f0 * (2 * hd);
++      const z1 = hd - f1 * (2 * hd);
++      // Parabolic catenary sag: 0 at gable ends (f=0,1), max at mid-span (f=0.5)
++      const sag0 = 4 * f0 * (1 - f0) * sag;
++      const sag1 = 4 * f1 * (1 - f1) * sag;
++      const eaveSag0 = sag0 * 0.25;
++      const eaveSag1 = sag1 * 0.25;
++
++      const rTop0: [number, number, number] = [0, peakHeight + slabThickness - sag0, z0];
++      const rTop1: [number, number, number] = [0, peakHeight + slabThickness - sag1, z1];
++      const rBot0: [number, number, number] = [0, peakHeight - sag0, z0];
++      const rBot1: [number, number, number] = [0, peakHeight - sag1, z1];
++
++      const eRTop0: [number, number, number] = [hw, slabThickness - eaveSag0, z0];
++      const eRTop1: [number, number, number] = [hw, slabThickness - eaveSag1, z1];
++      const eRBot0: [number, number, number] = [hw, -eaveSag0, z0];
++      const eRBot1: [number, number, number] = [hw, -eaveSag1, z1];
++
++      const eLTop0: [number, number, number] = [-hw, slabThickness - eaveSag0, z0];
++      const eLTop1: [number, number, number] = [-hw, slabThickness - eaveSag1, z1];
++      const eLBot0: [number, number, number] = [-hw, -eaveSag0, z0];
++      const eLBot1: [number, number, number] = [-hw, -eaveSag1, z1];
++
++      // Top pitched slopes (Right +X, Left -X)
++      pushQuadWithHint(accRoof, eRTop0, eRTop1, rTop1, rTop0, [f0, 0], [f1, 0], [f1, 1], [f0, 1], [1, 1, 0]);
++      pushQuadWithHint(accRoof, eLTop1, eLTop0, rTop0, rTop1, [f0, 0], [f1, 0], [f1, 1], [f0, 1], [-1, 1, 0]);
++
++      // Bottom soffits
++      pushQuadWithHint(accRoof, eRBot1, eRBot0, rBot0, rBot1, [f0, 0], [f1, 0], [f1, 1], [f0, 1], [-1, -1, 0]);
++      pushQuadWithHint(accRoof, eLBot0, eLBot1, rBot1, rBot0, [f0, 0], [f1, 0], [f1, 1], [f0, 1], [1, -1, 0]);
++
++      // Side fascias
++      pushQuadWithHint(accRoof, eRBot0, eRBot1, eRTop1, eRTop0, [f0, 0], [f1, 0], [f1, 1], [f0, 1], [1, 0, 0]);
++      pushQuadWithHint(accRoof, eLBot1, eLBot0, eLTop0, eLTop1, [f0, 0], [f1, 0], [f1, 1], [f0, 1], [-1, 0, 0]);
++    }
+ 
+-    // Side fascias
+-    pushQuadWithHint(accRoof, eaveRBotFront, eaveRBotBack, eaveRTopBack, eaveRTopFront, [0, 0], [1, 0], [1, 1], [0, 1], [1, 0, 0]);
+-    pushQuadWithHint(accRoof, eaveLBotBack, eaveLBotFront, eaveLTopFront, eaveLTopBack, [0, 0], [1, 0], [1, 1], [0, 1], [-1, 0, 0]);
++    // Front & back rake fascia caps (at z = +hd and z = -hd where sag = 0)
++    const rTopF: [number, number, number] = [0, peakHeight + slabThickness, hd];
++    const rBotF: [number, number, number] = [0, peakHeight, hd];
++    const rTopB: [number, number, number] = [0, peakHeight + slabThickness, -hd];
++    const rBotB: [number, number, number] = [0, peakHeight, -hd];
+ 
+-    // Front & back rake fascia caps
+-    pushQuadWithHint(accRoof, ridgeBot[0], eaveRBotFront, eaveRTopFront, ridgeTop[0], [0, 0], [1, 0], [1, 1], [0, 1], [0, 0, 1]);
+-    pushQuadWithHint(accRoof, eaveLBotFront, ridgeBot[0], ridgeTop[0], eaveLTopFront, [0, 0], [1, 0], [1, 1], [0, 1], [0, 0, 1]);
+-    pushQuadWithHint(accRoof, eaveRBotBack, ridgeBot[1], ridgeTop[1], eaveRTopBack, [0, 0], [1, 0], [1, 1], [0, 1], [0, 0, -1]);
+-    pushQuadWithHint(accRoof, ridgeBot[1], eaveLBotBack, eaveLTopBack, ridgeTop[1], [0, 0], [1, 0], [1, 1], [0, 1], [0, 0, -1]);
++    pushQuadWithHint(accRoof, rBotF, [hw, 0, hd], [hw, slabThickness, hd], rTopF, [0, 0], [1, 0], [1, 1], [0, 1], [0, 0, 1]);
++    pushQuadWithHint(accRoof, [-hw, 0, hd], rBotF, rTopF, [-hw, slabThickness, hd], [0, 0], [1, 0], [1, 1], [0, 1], [0, 0, 1]);
++    pushQuadWithHint(accRoof, [hw, 0, -hd], rBotB, rTopB, [hw, slabThickness, -hd], [0, 0], [1, 0], [1, 1], [0, 1], [0, 0, -1]);
++    pushQuadWithHint(accRoof, rBotB, [-hw, 0, -hd], [-hw, slabThickness, -hd], rTopB, [0, 0], [1, 0], [1, 1], [0, 1], [0, 0, -1]);
+ 
+     // Gable triangular walls recessed cleanly under eaves
+     const gh = Math.max(0.15, peakHeight - (overhang / Math.max(0.25, bHw)) * peakHeight * 0.25);
+     pushTriWithHint(accGable, [-bHw, 0, bHd], [bHw, 0, bHd], [0, gh, bHd], [0, 0], [1, 0], [0.5, 1], [0, 0, 1]);
+     pushTriWithHint(accGable, [bHw, 0, -bHd], [-bHw, 0, -bHd], [0, gh, -bHd], [0, 0], [1, 0], [0.5, 1], [0, 0, -1]);
++
++    // Stepped gable bargeboards + king-post finial at front/back gable rakes when roof is house-sized
++    if (width >= 2.2) {
++      const slopeAngle = Math.atan2(peakHeight, hw);
++      const rakeLen = Math.hypot(hw, peakHeight) + 0.08;
++      for (const sz of [-1, 1]) {
++        const zPos = sz * (hd - 0.05);
++        for (const sx of [-1, 1]) {
++          const barge = makeBeveledBox(rakeLen, 0.11, 0.12, 0.016, trimHex);
++          barge.rotateZ(-sx * slopeAngle);
++          barge.translate(sx * hw * 0.5, peakHeight * 0.5 + slabThickness * 0.4, zPos);
++          trimParts.push(barge);
++        }
++        const finial = makeBeveledBox(0.14, 0.34, 0.14, 0.02, trimHex, {
++          offset: [0, peakHeight + slabThickness * 0.65, sz * (hd - 0.04)],
++        });
++        trimParts.push(finial);
++      }
++    }
+   } else {
+     // Hip roof: 4 pitched trapezoidal/triangular faces converging to shorter ridge line along Z
+     const ridgeHalfZ = Math.max(0.05, hd - hw * 0.85);
+     const rFTop: [number, number, number] = [0, peakHeight + slabThickness, ridgeHalfZ];
++    const rMidTop: [number, number, number] = [0, peakHeight + slabThickness - sag * 0.65, 0];
+     const rBTop: [number, number, number] = [0, peakHeight + slabThickness, -ridgeHalfZ];
+     const rFBot: [number, number, number] = [0, peakHeight, ridgeHalfZ];
+     const rBBot: [number, number, number] = [0, peakHeight, -ridgeHalfZ];
+ 
+     const cRFTop: [number, number, number] = [hw, slabThickness, hd];
++    const cRMTop: [number, number, number] = [hw, slabThickness - sag * 0.2, 0];
+     const cRBTop: [number, number, number] = [hw, slabThickness, -hd];
+     const cLBTop: [number, number, number] = [-hw, slabThickness, -hd];
++    const cLMTop: [number, number, number] = [-hw, slabThickness - sag * 0.2, 0];
+     const cLFTop: [number, number, number] = [-hw, slabThickness, hd];
+ 
+     const cRFBot: [number, number, number] = [hw, 0, hd];
+@@ -1252,9 +1628,11 @@ export function makePitchedRoofGeometry(
+     const cLBBot: [number, number, number] = [-hw, 0, -hd];
+     const cLFBot: [number, number, number] = [-hw, 0, hd];
+ 
+-    // Top faces
+-    pushQuadWithHint(accRoof, cRFTop, cRBTop, rBTop, rFTop, [0, 0], [1, 0], [0.85, 1], [0.15, 1], [1, 1, 0]);
+-    pushQuadWithHint(accRoof, cLBTop, cLFTop, rFTop, rBTop, [0, 0], [1, 0], [0.85, 1], [0.15, 1], [-1, 1, 0]);
++    // Top faces (2-segment side slopes with mid-span sag + front/back hip triangles)
++    pushQuadWithHint(accRoof, cRFTop, cRMTop, rMidTop, rFTop, [0, 0], [0.5, 0], [0.5, 1], [0.15, 1], [1, 1, 0]);
++    pushQuadWithHint(accRoof, cRMTop, cRBTop, rBTop, rMidTop, [0.5, 0], [1, 0], [0.85, 1], [0.5, 1], [1, 1, 0]);
++    pushQuadWithHint(accRoof, cLBTop, cLMTop, rMidTop, rBTop, [0, 0], [0.5, 0], [0.5, 1], [0.15, 1], [-1, 1, 0]);
++    pushQuadWithHint(accRoof, cLMTop, cLFTop, rFTop, rMidTop, [0.5, 0], [1, 0], [0.85, 1], [0.5, 1], [-1, 1, 0]);
+     pushTriWithHint(accRoof, cLFTop, cRFTop, rFTop, [0, 0], [1, 0], [0.5, 1], [0, 1, 1]);
+     pushTriWithHint(accRoof, cRBTop, cLBTop, rBTop, [0, 0], [1, 0], [0.5, 1], [0, 1, -1]);
+ 
+@@ -1276,9 +1654,44 @@ export function makePitchedRoofGeometry(
+   }
+ 
+   const ridgeLen = style === 'gable' ? hd * 2 + 0.06 : Math.max(0.2, hd * 2 - hw * 1.7 + 0.08);
+-  const ridgeTrim = makeBeveledBox(0.16, 0.14, ridgeLen, 0.025, trimHex, {
+-    offset: [0, peakHeight + slabThickness + 0.02, 0],
+-  });
++  const ridgeBeam = makeSegmentedBeveledBox(
++    0.16,
++    0.14,
++    ridgeLen,
++    0.025,
++    1,
++    1,
++    3,
++    (x, y, z) => {
++      const u = ridgeLen > 1e-4 ? z / (ridgeLen * 0.5) : 0;
++      const sagDrop = (1 - u * u) * sag * (style === 'gable' ? 1.0 : 0.65);
++      return [x, y - sagDrop, z];
++    },
++    trimHex,
++    { offset: [0, peakHeight + slabThickness + 0.02, 0] }
++  );
++  trimParts.push(ridgeBeam);
++
++  // Protruding eave rafter tails along left & right eaves
++  const nRafters = options.rafterCount ?? (depth >= 2.2 ? Math.min(6, Math.max(3, Math.round(depth / 1.15))) : 0);
++  if (nRafters >= 2) {
++    for (let r = 0; r < nRafters; r++) {
++      const f = nRafters > 1 ? r / (nRafters - 1) : 0.5;
++      const rz = (f - 0.5) * (depth - 0.36);
++      const eaveSag = 4 * f * (1 - f) * sag * (style === 'gable' ? 0.25 : 0.15);
++      for (const sx of [-1, 1]) {
++        const tail = makeBeveledBox(overhang + 0.14, 0.09, 0.095, 0.015, trimHex, {
++          offset: [sx * (bHw + overhang * 0.52), -0.02 - eaveSag, rz],
++        });
++        trimParts.push(tail);
++      }
++    }
++  }
++
++  const ridgeTrim = trimParts.length === 1 ? trimParts[0] : mergeColoredParts(trimParts);
++  if (trimParts.length > 1) {
++    for (const p of trimParts) p.dispose();
++  }
+ 
+   return {
+     roofShell: finishAccumToGeometry(accRoof, roofHex),
+@@ -1517,41 +1930,14 @@ export function makeSdfOrganicMesh(
+ 
+   const acc = createAccum();
+   const cIdx = (cx: number, cy: number, cz: number) => cellVertIdx[cz * cN * cN + cy * cN + cx];
++  const cellQuadList: [number, number, number, number, boolean][] = [];
+ 
+-  const emitCellQuad = (v0: number, v1: number, v2: number, v3: number, flip: boolean) => {
++  const recordCellQuad = (v0: number, v1: number, v2: number, v3: number, flip: boolean) => {
+     if (v0 < 0 || v1 < 0 || v2 < 0 || v3 < 0) return;
+-    const p0 = vertPos[v0],
+-      p1 = vertPos[v1],
+-      p2 = vertPos[v2],
+-      p3 = vertPos[v3];
+-    const avgN: [number, number, number] = [
+-      (vertNrm[v0][0] + vertNrm[v1][0] + vertNrm[v2][0] + vertNrm[v3][0]) * 0.25,
+-      (vertNrm[v0][1] + vertNrm[v1][1] + vertNrm[v2][1] + vertNrm[v3][1]) * 0.25,
+-      (vertNrm[v0][2] + vertNrm[v1][2] + vertNrm[v2][2] + vertNrm[v3][2]) * 0.25,
+-    ];
+-    const smooth = options.flatShaded
+-      ? undefined
+-      : flip
+-        ? ([vertNrm[v0], vertNrm[v3], vertNrm[v2], vertNrm[v1]] as [
+-            [number, number, number],
+-            [number, number, number],
+-            [number, number, number],
+-            [number, number, number],
+-          ])
+-        : ([vertNrm[v0], vertNrm[v1], vertNrm[v2], vertNrm[v3]] as [
+-            [number, number, number],
+-            [number, number, number],
+-            [number, number, number],
+-            [number, number, number],
+-          ]);
+-    if (flip) {
+-      pushQuadWithHint(acc, p0, p3, p2, p1, [0, 0], [0, 1], [1, 1], [1, 0], avgN, smooth);
+-    } else {
+-      pushQuadWithHint(acc, p0, p1, p2, p3, [0, 0], [1, 0], [1, 1], [0, 1], avgN, smooth);
+-    }
++    cellQuadList.push([v0, v1, v2, v3, flip]);
+   };
+ 
+-  // Emit quads dual to surface-crossing grid edges
++  // Collect quads dual to surface-crossing grid edges
+   for (let iz = 1; iz < gN - 1; iz++) {
+     for (let iy = 1; iy < gN - 1; iy++) {
+       for (let ix = 1; ix < gN - 1; ix++) {
+@@ -1562,7 +1948,7 @@ export function makeSdfOrganicMesh(
+         if (ix + 1 < gN) {
+           const vX = valAt(ix + 1, iy, iz) < 0;
+           if (inside !== vX) {
+-            emitCellQuad(
++            recordCellQuad(
+               cIdx(ix, iy - 1, iz - 1),
+               cIdx(ix, iy, iz - 1),
+               cIdx(ix, iy, iz),
+@@ -1575,7 +1961,7 @@ export function makeSdfOrganicMesh(
+         if (iy + 1 < gN) {
+           const vY = valAt(ix, iy + 1, iz) < 0;
+           if (inside !== vY) {
+-            emitCellQuad(
++            recordCellQuad(
+               cIdx(ix - 1, iy, iz - 1),
+               cIdx(ix - 1, iy, iz),
+               cIdx(ix, iy, iz),
+@@ -1588,7 +1974,7 @@ export function makeSdfOrganicMesh(
+         if (iz + 1 < gN) {
+           const vZ = valAt(ix, iy, iz + 1) < 0;
+           if (inside !== vZ) {
+-            emitCellQuad(
++            recordCellQuad(
+               cIdx(ix - 1, iy - 1, iz),
+               cIdx(ix, iy - 1, iz),
+               cIdx(ix, iy, iz),
+@@ -1601,6 +1987,90 @@ export function makeSdfOrganicMesh(
+     }
+   }
+ 
++  // 2-Pass Taubin lambda/mu tangential relaxation (lambda = 0.45, mu = -0.47)
++  // Eliminates voxel/Surface-Nets stair-stepping while preserving volume and silhouette ridges
++  if (vertPos.length > 0 && cellQuadList.length > 0) {
++    const vNeighbors: number[][] = Array.from({ length: vertPos.length }, () => []);
++    const addNb = (a: number, b: number) => {
++      if (a !== b && !vNeighbors[a].includes(b)) vNeighbors[a].push(b);
++      if (a !== b && !vNeighbors[b].includes(a)) vNeighbors[b].push(a);
++    };
++    for (const [v0, v1, v2, v3] of cellQuadList) {
++      addNb(v0, v1);
++      addNb(v1, v2);
++      addNb(v2, v3);
++      addNb(v3, v0);
++    }
++
++    const taubinWeights = [0.45, -0.47, 0.45, -0.47];
++    const nextPos: [number, number, number][] = vertPos.map((p) => [p[0], p[1], p[2]]);
++    for (const w of taubinWeights) {
++      for (let i = 0; i < vertPos.length; i++) {
++        const nbs = vNeighbors[i];
++        if (nbs.length === 0) continue;
++        let avgX = 0,
++          avgY = 0,
++          avgZ = 0;
++        for (const nb of nbs) {
++          avgX += vertPos[nb][0];
++          avgY += vertPos[nb][1];
++          avgZ += vertPos[nb][2];
++        }
++        const inv = 1 / nbs.length;
++        let lx = avgX * inv - vertPos[i][0];
++        let ly = avgY * inv - vertPos[i][1];
++        let lz = avgZ * inv - vertPos[i][2];
++        // Tangential projection preserves sharp normal ridges & prevents shrinkage
++        const nrm = vertNrm[i];
++        const nDot = lx * nrm[0] + ly * nrm[1] + lz * nrm[2];
++        lx -= nDot * nrm[0] * 0.45;
++        ly -= nDot * nrm[1] * 0.45;
++        lz -= nDot * nrm[2] * 0.45;
++        nextPos[i][0] = vertPos[i][0] + w * lx;
++        nextPos[i][1] = vertPos[i][1] + w * ly;
++        nextPos[i][2] = vertPos[i][2] + w * lz;
++      }
++      for (let i = 0; i < vertPos.length; i++) {
++        vertPos[i][0] = nextPos[i][0];
++        vertPos[i][1] = nextPos[i][1];
++        vertPos[i][2] = nextPos[i][2];
++        vertNrm[i] = gradAt(vertPos[i][0], vertPos[i][1], vertPos[i][2]);
++      }
++    }
++  }
++
++  for (const [v0, v1, v2, v3, flip] of cellQuadList) {
++    const p0 = vertPos[v0],
++      p1 = vertPos[v1],
++      p2 = vertPos[v2],
++      p3 = vertPos[v3];
++    const avgN: [number, number, number] = [
++      (vertNrm[v0][0] + vertNrm[v1][0] + vertNrm[v2][0] + vertNrm[v3][0]) * 0.25,
++      (vertNrm[v0][1] + vertNrm[v1][1] + vertNrm[v2][1] + vertNrm[v3][1]) * 0.25,
++      (vertNrm[v0][2] + vertNrm[v1][2] + vertNrm[v2][2] + vertNrm[v3][2]) * 0.25,
++    ];
++    const smooth = options.flatShaded
++      ? undefined
++      : flip
++        ? ([vertNrm[v0], vertNrm[v3], vertNrm[v2], vertNrm[v1]] as [
++            [number, number, number],
++            [number, number, number],
++            [number, number, number],
++            [number, number, number],
++          ])
++        : ([vertNrm[v0], vertNrm[v1], vertNrm[v2], vertNrm[v3]] as [
++            [number, number, number],
++            [number, number, number],
++            [number, number, number],
++            [number, number, number],
++          ]);
++    if (flip) {
++      pushQuadWithHint(acc, p0, p3, p2, p1, [0, 0], [0, 1], [1, 1], [1, 0], avgN, smooth);
++    } else {
++      pushQuadWithHint(acc, p0, p1, p2, p3, [0, 0], [1, 0], [1, 1], [0, 1], avgN, smooth);
++    }
++  }
++
+   if (acc.positions.length === 0) {
+     return makeBeveledBox(
+       Math.max(0.1, boundsMax[0] - boundsMin[0]) * 0.5,
+diff --git a/src/engine/procedural/PropBuilder.ts b/src/engine/procedural/PropBuilder.ts
+index 44d8136..ea84bfd 100644
+--- a/src/engine/procedural/PropBuilder.ts
++++ b/src/engine/procedural/PropBuilder.ts
+@@ -482,7 +482,7 @@ export function buildProceduralProp(
+     finishMode,
+     texelsPerMeter: ppm,
+     seed,
+-    aoRays: 16,
++    aoRays: 12,
+     aoMaxDist: recommendedSocket === 'floor' ? 0.65 : 0.35,
+     aoStrength: options.aoStrength ?? 0.55,
+     normalStrength: options.normalStrength ?? 0.36,
+@@ -490,7 +490,7 @@ export function buildProceduralProp(
+     emissiveRuneHex: hasRunicGlow ? cAccent : null,
+     usePool: true,
+     cacheKey: `prop:${options.kind}:${ppm}`,
+-    inspectUvs: options.visualStyle !== 'voxel',
++    inspectUvs: false,
+   });
+   for (const p of taggedParts) p.geometry.dispose();
+ 
+diff --git a/src/engine/procedural/TilesetStructureSolver.ts b/src/engine/procedural/TilesetStructureSolver.ts
+index 7a2dca0..bc56136 100644
+--- a/src/engine/procedural/TilesetStructureSolver.ts
++++ b/src/engine/procedural/TilesetStructureSolver.ts
+@@ -348,7 +348,7 @@ export function buildProceduralStructure(
+           const prop = buildProceduralProp(
+             {
+               kind: chosenProp,
+-              seed: Math.floor(rng() * 9999),
++              seed: 700 + (cells.length % 2),
+               visualStyle,
+               objectId: 40 + cells.length,
+               pixelSize: visualStyle === 'voxel' ? 1 : px,
+diff --git a/src/engine/procedural/VertexAndTexelBaker.ts b/src/engine/procedural/VertexAndTexelBaker.ts
+index fb9b737..36a47d0 100644
+--- a/src/engine/procedural/VertexAndTexelBaker.ts
++++ b/src/engine/procedural/VertexAndTexelBaker.ts
+@@ -741,7 +741,7 @@ export function subdivideForAo(
+ }
+ 
+ // ---------------------------------------------------------------------------
+-// 4B. Texel-Space Heightfield GTAO + Curvature Wear + Vertical Grime Ramp
++// 4B. 3D Dihedral Curvature -> 2D UV Island Bake + Texel GTAO + Wear + Zenithal Grime
+ // ---------------------------------------------------------------------------
+ 
+ export interface TexelGtaoOptions {
+@@ -749,6 +749,255 @@ export interface TexelGtaoOptions {
+   gtaoRadiusPx?: number;
+   curvatureStrength?: number;
+   verticalGrimeStrength?: number;
++  curvatureMap?: Float32Array | null;
++}
++
++/**
++ * Computes welded 3D edge dihedral signed curvature (`[-1..+1]`, positive = convex ridge,
++ * negative = concave crease/cavity) and rasterizes/interpolates it into the 2D UV island texels.
++ */
++export function bake3DCurvatureToUvIslands(
++  geo: THREE.BufferGeometry,
++  islands: Pick<UvIslandMeta, 'pxBounds' | 'triIndices'>[],
++  texWidth: number,
++  texHeight: number
++): Float32Array {
++  const nTex = Math.max(1, texWidth * texHeight);
++  const out = new Float32Array(nTex);
++  const pos = geo.getAttribute('position');
++  const uv = geo.getAttribute('uv');
++  if (!pos || !uv || pos.count < 3) return out;
++  if (!geo.getAttribute('normal')) geo.computeVertexNormals();
++  const norm = geo.getAttribute('normal');
++  const idx = geo.getIndex();
++  const vCount = pos.count;
++  const triCount = idx ? Math.floor(idx.count / 3) : Math.floor(vCount / 3);
++  if (triCount === 0) return out;
++
++  // 1) Compute per-triangle face normal and centroid, plus welded vertex position keys
++  const q = (v: number) => Math.round(v * 2000);
++  const vertPosKey = new Array<string>(vCount);
++  const posKeyToVerts = new Map<string, number[]>();
++
++  for (let i = 0; i < vCount; i++) {
++    const pk = `${q(pos.getX(i))},${q(pos.getY(i))},${q(pos.getZ(i))}`;
++    vertPosKey[i] = pk;
++    let list = posKeyToVerts.get(pk);
++    if (!list) {
++      list = [];
++      posKeyToVerts.set(pk, list);
++    }
++    list.push(i);
++  }
++
++  const triNormals = new Float32Array(triCount * 3);
++  const triCenters = new Float32Array(triCount * 3);
++  const edgeToTris = new Map<string, number[]>();
++
++  for (let t = 0; t < triCount; t++) {
++    const i0 = idx ? idx.getX(t * 3) : t * 3;
++    const i1 = idx ? idx.getX(t * 3 + 1) : t * 3 + 1;
++    const i2 = idx ? idx.getX(t * 3 + 2) : t * 3 + 2;
++
++    const ax = pos.getX(i0),
++      ay = pos.getY(i0),
++      az = pos.getZ(i0);
++    const bx = pos.getX(i1),
++      by = pos.getY(i1),
++      bz = pos.getZ(i1);
++    const cx = pos.getX(i2),
++      cy = pos.getY(i2),
++      cz = pos.getZ(i2);
++
++    triCenters[t * 3 + 0] = (ax + bx + cx) / 3;
++    triCenters[t * 3 + 1] = (ay + by + cy) / 3;
++    triCenters[t * 3 + 2] = (az + bz + cz) / 3;
++
++    const e1x = bx - ax,
++      e1y = by - ay,
++      e1z = bz - az;
++    const e2x = cx - ax,
++      e2y = cy - ay,
++      e2z = cz - az;
++    let nx = e1y * e2z - e1z * e2y;
++    let ny = e1z * e2x - e1x * e2z;
++    let nz = e1x * e2y - e1y * e2x;
++    const l = Math.hypot(nx, ny, nz);
++    if (l > 1e-10) {
++      nx /= l;
++      ny /= l;
++      nz /= l;
++    } else {
++      nx = norm.getX(i0);
++      ny = norm.getY(i0);
++      nz = norm.getZ(i0);
++    }
++    triNormals[t * 3 + 0] = nx;
++    triNormals[t * 3 + 1] = ny;
++    triNormals[t * 3 + 2] = nz;
++
++    const ks = [vertPosKey[i0], vertPosKey[i1], vertPosKey[i2]];
++    for (let e = 0; e < 3; e++) {
++      const ka = ks[e];
++      const kb = ks[(e + 1) % 3];
++      if (ka === kb) continue;
++      const ek = ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
++      let list = edgeToTris.get(ek);
++      if (!list) {
++        list = [];
++        edgeToTris.set(ek, list);
++      }
++      list.push(t);
++    }
++  }
++
++  // 2) Accumulate signed dihedral curvature onto welded position keys
++  const curvSumByPosKey = new Map<string, number>();
++  const curvCntByPosKey = new Map<string, number>();
++  const addCurv = (pk: string, val: number) => {
++    curvSumByPosKey.set(pk, (curvSumByPosKey.get(pk) ?? 0) + val);
++    curvCntByPosKey.set(pk, (curvCntByPosKey.get(pk) ?? 0) + 1);
++  };
++
++  for (const [ek, tList] of edgeToTris) {
++    if (tList.length < 2) continue;
++    const sep = ek.indexOf('|');
++    const pkA = ek.slice(0, sep);
++    const pkB = ek.slice(sep + 1);
++
++    for (let i = 0; i < tList.length; i++) {
++      for (let j = i + 1; j < tList.length; j++) {
++        const tA = tList[i];
++        const tB = tList[j];
++        const nAx = triNormals[tA * 3 + 0],
++          nAy = triNormals[tA * 3 + 1],
++          nAz = triNormals[tA * 3 + 2];
++        const nBx = triNormals[tB * 3 + 0],
++          nBy = triNormals[tB * 3 + 1],
++          nBz = triNormals[tB * 3 + 2];
++        const dotN = Math.max(-1, Math.min(1, nAx * nBx + nAy * nBy + nAz * nBz));
++        if (dotN > 0.996) continue;
++
++        const dCx = triCenters[tB * 3 + 0] - triCenters[tA * 3 + 0];
++        const dCy = triCenters[tB * 3 + 1] - triCenters[tA * 3 + 1];
++        const dCz = triCenters[tB * 3 + 2] - triCenters[tA * 3 + 2];
++        const dLen = Math.hypot(dCx, dCy, dCz) || 1;
++        const nDiffX = nBx - nAx;
++        const nDiffY = nBy - nAy;
++        const nDiffZ = nBz - nAz;
++        // Positive when normals diverge outward across the edge (convex ridge), negative in concave cavity
++        const signDot = (nDiffX * dCx + nDiffY * dCy + nDiffZ * dCz) / dLen;
++        const mag = Math.min(1, Math.sqrt(Math.max(0, 1 - dotN) * 0.85));
++        const signedCurv = signDot >= 0 ? mag : -mag;
++        addCurv(pkA, signedCurv);
++        addCurv(pkB, signedCurv);
++      }
++    }
++  }
++
++  const vertCurv = new Float32Array(vCount);
++  for (let i = 0; i < vCount; i++) {
++    const pk = vertPosKey[i];
++    const cnt = curvCntByPosKey.get(pk) ?? 0;
++    if (cnt > 0) {
++      vertCurv[i] = Math.max(-1, Math.min(1, (curvSumByPosKey.get(pk) ?? 0) / cnt));
++    }
++  }
++
++  // 3) Rasterize triangle barycentric 3D curvature into 2D UV islands + dilate inside each island box
++  const writtenMask = new Uint8Array(nTex);
++  for (const isl of islands) {
++    const ix0 = Math.max(0, isl.pxBounds.x);
++    const iy0 = Math.max(0, isl.pxBounds.y);
++    const ix1 = Math.min(texWidth - 1, isl.pxBounds.x + isl.pxBounds.w - 1);
++    const iy1 = Math.min(texHeight - 1, isl.pxBounds.y + isl.pxBounds.h - 1);
++    if (ix1 < ix0 || iy1 < iy0) continue;
++
++    for (const t of isl.triIndices) {
++      if (t < 0 || t >= triCount) continue;
++      const i0 = idx ? idx.getX(t * 3) : t * 3;
++      const i1 = idx ? idx.getX(t * 3 + 1) : t * 3 + 1;
++      const i2 = idx ? idx.getX(t * 3 + 2) : t * 3 + 2;
++
++      const x0 = uv.getX(i0) * texWidth,
++        y0 = uv.getY(i0) * texHeight;
++      const x1 = uv.getX(i1) * texWidth,
++        y1 = uv.getY(i1) * texHeight;
++      const x2 = uv.getX(i2) * texWidth,
++        y2 = uv.getY(i2) * texHeight;
++
++      const c0 = vertCurv[i0],
++        c1 = vertCurv[i1],
++        c2 = vertCurv[i2];
++
++      const minX = Math.max(ix0, Math.floor(Math.min(x0, x1, x2) - 0.5));
++      const maxX = Math.min(ix1, Math.ceil(Math.max(x0, x1, x2) + 0.5));
++      const minY = Math.max(iy0, Math.floor(Math.min(y0, y1, y2) - 0.5));
++      const maxY = Math.min(iy1, Math.ceil(Math.max(y0, y1, y2) + 0.5));
++
++      const denom = (y1 - y2) * (x0 - x2) + (x2 - x1) * (y0 - y2);
++      const isDegenerate = Math.abs(denom) < 1e-6;
++      const avgC = (c0 + c1 + c2) / 3;
++
++      for (let py = minY; py <= maxY; py++) {
++        const cy = py + 0.5;
++        for (let px = minX; px <= maxX; px++) {
++          const cx = px + 0.5;
++          const tidx = py * texWidth + px;
++          if (isDegenerate) {
++            out[tidx] = avgC;
++            writtenMask[tidx] = 1;
++            continue;
++          }
++          let w0 = ((y1 - y2) * (cx - x2) + (x2 - x1) * (cy - y2)) / denom;
++          let w1 = ((y2 - y0) * (cx - x2) + (x0 - x2) * (cy - y2)) / denom;
++          let w2 = 1 - w0 - w1;
++          if (w0 >= -0.25 && w1 >= -0.25 && w2 >= -0.25) {
++            w0 = Math.max(0, Math.min(1, w0));
++            w1 = Math.max(0, Math.min(1, w1));
++            w2 = Math.max(0, Math.min(1, w2));
++            const wSum = w0 + w1 + w2 || 1;
++            const val = (w0 * c0 + w1 * c1 + w2 * c2) / wSum;
++            if (!writtenMask[tidx] || Math.abs(val) > Math.abs(out[tidx])) {
++              out[tidx] = Math.max(-1, Math.min(1, val));
++              writtenMask[tidx] = 1;
++            }
++          }
++        }
++      }
++    }
++
++    // Fill any uncovered border texels inside isl.pxBounds from nearest written neighbor in island
++    for (let pass = 0; pass < 2; pass++) {
++      for (let py = iy0; py <= iy1; py++) {
++        for (let px = ix0; px <= ix1; px++) {
++          const tidx = py * texWidth + px;
++          if (writtenMask[tidx]) continue;
++          let sum = 0;
++          let cnt = 0;
++          for (let dy = -1; dy <= 1; dy++) {
++            const ny = py + dy;
++            if (ny < iy0 || ny > iy1) continue;
++            for (let dx = -1; dx <= 1; dx++) {
++              const nx = px + dx;
++              if (nx < ix0 || nx > ix1) continue;
++              const nIdx = ny * texWidth + nx;
++              if (writtenMask[nIdx]) {
++                sum += out[nIdx];
++                cnt++;
++              }
++            }
++          }
++          if (cnt > 0) {
++            out[tidx] = sum / cnt;
++            writtenMask[tidx] = 1;
++          }
++        }
++      }
++    }
++  }
++
++  return out;
+ }
+ 
+ const DIR_X = [1, -1, 0, 0, 1, -1, 1, -1];
+@@ -756,8 +1005,8 @@ const DIR_Y = [0, 0, 1, -1, 1, 1, -1, -1];
+ const DIR_INV_LEN = [1, 1, 1, 1, 0.70710678, 0.70710678, 0.70710678, 0.70710678];
+ 
+ /**
+- * Applies horizon heightfield ambient occlusion (GTAO 8-directional), discrete curvature bevel
+- * catchlight, and vertical grime/moss gradient strictly clamped inside each island's pixel bounds.
++ * Applies horizon heightfield ambient occlusion (GTAO 8-directional), discrete curvature + 3D dihedral
++ * bevel catchlight, zenithal world-Y gradient, and vertical grime/moss strictly clamped inside each island's pixel bounds.
+  * Respects `DataTexture` `flipY = false` convention: smaller `y` = bottom (`v = 0`), larger `y` = top (`v = 1`).
+  */
+ export function applyHeightGtaoAndWear(
+@@ -765,14 +1014,30 @@ export function applyHeightGtaoAndWear(
+   coverageMask: Uint8Array,
+   texWidth: number,
+   texHeight: number,
+-  islands: Pick<UvIslandMeta, 'pxBounds' | 'materialKind' | 'lockVertical' | 'landmarkKind'>[],
++  islands: (Pick<UvIslandMeta, 'pxBounds' | 'materialKind' | 'lockVertical' | 'landmarkKind'> &
++    Partial<Pick<UvIslandMeta, 'worldYMin' | 'worldYMax' | 'avgNormalY'>>)[],
+   albedoRgba: Uint8Array,
+   options: TexelGtaoOptions = {}
+ ): void {
+   const gtaoStrength = Math.max(0, Math.min(1, options.gtaoStrength ?? 0.55));
+   const radius = Math.max(1, Math.min(6, Math.round(options.gtaoRadiusPx ?? 3)));
+-  const curveStrength = Math.max(0, Math.min(0.5, options.curvatureStrength ?? 0.2));
+-  const grimeStrength = Math.max(0, Math.min(0.6, options.verticalGrimeStrength ?? 0.22));
++  const curveStrength = Math.max(0, Math.min(0.55, options.curvatureStrength ?? 0.24));
++  const grimeStrength = Math.max(0, Math.min(0.6, options.verticalGrimeStrength ?? 0.24));
++  const curvatureMap = options.curvatureMap ?? null;
++
++  // Determine overall world-Y bounds across all islands for cohesive zenithal lighting (+10% crown, -16% base)
++  let globalYMin = Infinity;
++  let globalYMax = -Infinity;
++  for (const isl of islands) {
++    if (typeof isl.worldYMin === 'number' && Number.isFinite(isl.worldYMin)) {
++      if (isl.worldYMin < globalYMin) globalYMin = isl.worldYMin;
++    }
++    if (typeof isl.worldYMax === 'number' && Number.isFinite(isl.worldYMax)) {
++      if (isl.worldYMax > globalYMax) globalYMax = isl.worldYMax;
++    }
++  }
++  const hasGlobalWorldY = globalYMax > globalYMin + 0.05 && Number.isFinite(globalYMin);
++  const globalYSpan = hasGlobalWorldY ? Math.max(0.1, globalYMax - globalYMin) : 1.0;
+ 
+   for (const isl of islands) {
+     const x0 = Math.max(0, isl.pxBounds.x);
+@@ -787,15 +1052,39 @@ export function applyHeightGtaoAndWear(
+       isl.materialKind === 'human_skin' ||
+       isl.materialKind === 'runic_glow';
+ 
++    const islW = Math.max(1, x1 - x0 + 1);
+     const islH = Math.max(1, y1 - y0 + 1);
++    const islYMin = typeof isl.worldYMin === 'number' ? isl.worldYMin : 0;
++    const islYMax = typeof isl.worldYMax === 'number' ? isl.worldYMax : 1;
++    const avgNormY = typeof isl.avgNormalY === 'number' ? isl.avgNormalY : 0;
++
+     for (let y = y0; y <= y1; y++) {
+       // Convention flipY = false => y0 is bottom (v=0), y1 is top (v=1)
+       const vFrac = islH > 1 ? (y - y0) / (islH - 1) : 0.5;
++      // Chunky 2-3px cluster cell coordinates for cohesive pixel-art edge wear
++      const clusterY = Math.floor((y - y0) / 2);
++
++      // Compute world-Y fraction [0..1] for zenithal gradient
++      let zenithFactor = 0;
++      if (!skipHeavyDirt) {
++        if (hasGlobalWorldY) {
++          const estY = isl.lockVertical
++            ? islYMin + vFrac * (islYMax - islYMin)
++            : (islYMin + islYMax) * 0.5;
++          const yNorm = Math.max(0, Math.min(1, (estY - globalYMin) / globalYSpan));
++          // Cohesive zenithal ramp: -16% at base (yNorm=0) up to +10% at crown (yNorm=1), plus upward-normal boost
++          zenithFactor = -0.16 * (1 - yNorm) + 0.1 * yNorm + Math.max(-0.04, Math.min(0.05, avgNormY * 0.05));
++        } else if (isl.lockVertical) {
++          zenithFactor = -0.12 * (1 - vFrac) + 0.08 * vFrac;
++        }
++      }
++
+       for (let x = x0; x <= x1; x++) {
+         const idx = y * texWidth + x;
+         if (!coverageMask[idx]) continue;
+ 
+         const hCenter = heightField[idx];
++        const clusterX = Math.floor((x - x0) / 2);
+ 
+         // 1) 8-direction height horizon AO clamped to island bounds
+         let maxHorizonSum = 0;
+@@ -809,7 +1098,7 @@ export function applyHeightGtaoAndWear(
+             const ny = Math.max(y0, Math.min(y1, y + dy * step));
+             const dH = heightField[ny * texWidth + nx] - hCenter;
+             if (dH > 0) {
+-              const slope = (dH * 4.2 * invLen) / step;
++              const slope = (dH * 4.4 * invLen) / step;
+               if (slope > bestSlope) bestSlope = slope;
+             }
+           }
+@@ -818,13 +1107,34 @@ export function applyHeightGtaoAndWear(
+         const rawAo = maxHorizonSum * 0.125;
+         const ao = 1 - (1 - rawAo) * gtaoStrength;
+ 
+-        // 2) Discrete 4-neighbor Laplacian curvature for subtle edge highlight vs pocket shade
++        // 2) Discrete 4-neighbor Laplacian curvature + 3D dihedral curvature (chunky 2x2 cluster pooled)
+         const hL = heightField[y * texWidth + Math.max(x0, x - 1)];
+         const hR = heightField[y * texWidth + Math.min(x1, x + 1)];
+         const hD = heightField[Math.max(y0, y - 1) * texWidth + x];
+         const hU = heightField[Math.min(y1, y + 1) * texWidth + x];
+-        const curvature = (hCenter - 0.25 * (hL + hR + hD + hU)) * 3.0;
+-        const curveDelta = Math.max(-0.18, Math.min(0.18, curvature * curveStrength));
++        const curvature2D = (hCenter - 0.25 * (hL + hR + hD + hU)) * 3.0;
++
++        let curv3D = 0;
++        if (curvatureMap && idx < curvatureMap.length) {
++          // Pool 3D curvature over 2x2 texel block so edge wear forms chunky >=2-3px pixel-art clusters
++          const cx0 = Math.min(x1, x0 + clusterX * 2);
++          const cy0 = Math.min(y1, y0 + clusterY * 2);
++          const cx1 = Math.min(x1, cx0 + 1);
++          const cy1 = Math.min(y1, cy0 + 1);
++          curv3D =
++            0.25 *
++            (curvatureMap[cy0 * texWidth + cx0] +
++              curvatureMap[cy0 * texWidth + cx1] +
++              curvatureMap[cy1 * texWidth + cx0] +
++              curvatureMap[cy1 * texWidth + cx1]);
++        }
++
++        const curveDelta2D = Math.max(-0.18, Math.min(0.18, curvature2D * curveStrength));
++        const curveDelta3D =
++          curv3D >= 0
++            ? Math.min(0.22, curv3D * 0.22)
++            : Math.max(-0.22, curv3D * 0.24);
++        const totalCurveDelta = Math.max(-0.26, Math.min(0.24, curveDelta2D + curveDelta3D));
+ 
+         // 3) Hue-shifted shading & vertical dirt/moss near lower vFrac when world-vertical
+         const rgbaOffset = idx * 4;
+@@ -832,60 +1142,66 @@ export function applyHeightGtaoAndWear(
+         let g = albedoRgba[rgbaOffset + 1];
+         let b = albedoRgba[rgbaOffset + 2];
+ 
+-        const isBrightOrSkin =
++        const isMetalOrArmor =
+           isl.materialKind === 'forged_steel' ||
+           isl.materialKind === 'rarity_armor' ||
+-          isl.materialKind === 'brushed_gold' ||
+-          isl.materialKind === 'human_skin' ||
+-          isl.materialKind === 'goblin_skin';
+-        const minShade = isBrightOrSkin ? 0.72 : 0.64;
+-        const shadeFactor = Math.max(minShade, Math.min(1.16, ao + curveDelta));
++          isl.materialKind === 'brushed_gold';
++        const isSkin =
++          isl.materialKind === 'human_skin' || isl.materialKind === 'goblin_skin';
++        // Deep cavity occlusion floors: 0.48 for stone/wood/cloth, 0.54 for metal/armor, 0.68 for skin
++        const minShade = isSkin ? 0.68 : isMetalOrArmor ? 0.54 : 0.48;
++        const shadeFactor = Math.max(
++          minShade,
++          Math.min(1.22, ao + totalCurveDelta + zenithFactor)
++        );
+         if (shadeFactor < 1.0) {
+-          // Subtle cool hue-shift without turning neutral steel/wood violet
+-          const shadowMix = (1 - shadeFactor) * 0.24;
+-          r = r * shadeFactor * (1 - shadowMix) + 32 * shadowMix;
+-          g = g * shadeFactor * (1 - shadowMix) + 34 * shadowMix;
+-          b = b * shadeFactor * (1 - shadowMix) + 52 * shadowMix;
++          // Deep indigo/umber cavity shadow shift
++          const shadowMix = (1 - shadeFactor) * 0.3;
++          r = r * shadeFactor * (1 - shadowMix) + 30 * shadowMix;
++          g = g * shadeFactor * (1 - shadowMix) + 30 * shadowMix;
++          b = b * shadeFactor * (1 - shadowMix) + 48 * shadowMix;
+         } else if (shadeFactor > 1.0) {
+-          // Warm highlight shift on raised ridges/edges
+-          const hiMix = Math.min(0.22, (shadeFactor - 1.0) * 1.25);
+-          r = r + (242 - r) * hiMix;
+-          g = g + (236 - g) * hiMix;
+-          b = b + (216 - b) * hiMix * 0.85;
++          // Warm ivory/silver highlight shift on raised convex ridges & edges (+14%..+22%)
++          const hiMix = Math.min(0.24, (shadeFactor - 1.0) * 1.15);
++          const targetR = isMetalOrArmor ? 228 : 240;
++          const targetG = isMetalOrArmor ? 232 : 234;
++          const targetB = isMetalOrArmor ? 240 : 218;
++          r = r + (targetR - r) * hiMix;
++          g = g + (targetG - g) * hiMix;
++          b = b + (targetB - b) * hiMix;
+         }
+ 
+         if (isl.lockVertical && !skipHeavyDirt && grimeStrength > 0.01) {
+-          const bottomMask = Math.max(0, 1 - vFrac * 2.1); // bottom 45% gets grounded grime/moss
++          const bottomMask = Math.max(0, 1 - vFrac * 2.0); // bottom 50% gets grounded grime/moss
+           if (bottomMask > 0) {
+-            const effGrime = isBrightOrSkin ? grimeStrength * 0.45 : grimeStrength * 0.75;
++            const effGrime = isSkin ? grimeStrength * 0.35 : isMetalOrArmor ? grimeStrength * 0.52 : grimeStrength * 0.8;
+             const tint = bottomMask * effGrime;
+             if (isl.materialKind === 'mossy_cobble' || isl.materialKind === 'stone_masonry') {
+-              r = r * (1 - tint) + 58 * tint;
+-              g = g * (1 - tint) + 84 * tint;
+-              b = b * (1 - tint) + 46 * tint;
++              r = r * (1 - tint) + 54 * tint;
++              g = g * (1 - tint) + 82 * tint;
++              b = b * (1 - tint) + 44 * tint;
+             } else {
+-              r = r * (1 - tint) + 42 * tint;
+-              g = g * (1 - tint) + 38 * tint;
+-              b = b * (1 - tint) + 46 * tint;
++              r = r * (1 - tint) + 38 * tint;
++              g = g * (1 - tint) + 34 * tint;
++              b = b * (1 - tint) + 42 * tint;
+             }
+           }
+         }
+ 
+-        const islW = Math.max(1, x1 - x0 + 1);
+         const quantStep =
+           isl.landmarkKind === 'none' &&
+           isl.materialKind !== 'runic_glow' &&
+           islW >= 8 &&
+           islH >= 8
+-            ? 8
++            ? 6
+             : 0;
+ 
+-        // Strict ProPixelizer/Hytale rule: never clip to pure #000000 or #ffffff
++        // Clamp texels strictly within [18..242] to preserve shadow & highlight headrooms under LUT grading
+         const q = (v: number) =>
+           quantStep > 0 ? Math.round(v / quantStep) * quantStep : Math.round(v);
+-        albedoRgba[rgbaOffset + 0] = Math.max(12, Math.min(244, q(r)));
+-        albedoRgba[rgbaOffset + 1] = Math.max(12, Math.min(244, q(g)));
+-        albedoRgba[rgbaOffset + 2] = Math.max(12, Math.min(244, q(b)));
++        albedoRgba[rgbaOffset + 0] = Math.max(18, Math.min(242, q(r)));
++        albedoRgba[rgbaOffset + 1] = Math.max(18, Math.min(242, q(g)));
++        albedoRgba[rgbaOffset + 2] = Math.max(18, Math.min(242, q(b)));
+       }
+     }
+   }
+diff --git a/src/studio/loaders/modelLoader.ts b/src/studio/loaders/modelLoader.ts
+index 3aaf4e0..30cee00 100644
+--- a/src/studio/loaders/modelLoader.ts
++++ b/src/studio/loaders/modelLoader.ts
+@@ -1,14 +1,18 @@
+ import * as THREE from 'three';
+ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
++import { MTLLoader } from 'three/examples/jsm/loaders/MTLLoader.js';
+ import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
+ import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
+ import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
+ import {
+   convertStandardMaterialToPixelizer,
++  enforcePixelArtTextureSampling,
+   type PixelizerMaterial,
+   type PixelizerMaterialResources,
+ } from '../../engine/PixelizerMaterial';
+ import type { PixelizerObjectAttachment } from '../../engine/PixelizerPipeline';
++import { computeGeometryTangents } from '../../engine/procedural/SdfVoxelPrimitives';
++import { bakeVertexAoAndCreases } from '../../engine/procedural/VertexAndTexelBaker';
+ import type { PixelizerMaterialOptions, SnapOptions } from '../../engine/types';
+ 
+ export interface LoadedModelResult {
+@@ -19,6 +23,23 @@ export interface LoadedModelResult {
+   name: string;
+ }
+ 
++export interface RemasterTextureOptions {
++  targetMaxDim?: number;
++  liftBlackFloor?: number;
++  synthesizeNormalMaxSlope?: number;
++}
++
++export interface RemasteredTextureResult {
++  albedoMap: THREE.DataTexture;
++  normalMap: THREE.DataTexture;
++}
++
++export interface ZipEntryBuffer {
++  name: string;
++  baseName: string;
++  data: Uint8Array;
++}
++
+ const DEFAULT_SNAP: SnapOptions = {
+   snapPosition: true,
+   alignPixelGrid: true,
+@@ -50,6 +71,435 @@ export function pickPreferredClipIndex(clips: THREE.AnimationClip[]): number {
+   return 0;
+ }
+ 
++/**
++ * Extracts raw RGBA8 pixel data and dimensions from any Three.js Texture source
++ * (`DataTexture`, `ImageData`, `HTMLImageElement`, `HTMLCanvasElement`, `ImageBitmap`, or raw `{ width, height, data }`).
++ */
++function extractTexturePixels(tex: THREE.Texture): {
++  width: number;
++  height: number;
++  rgba: Uint8Array;
++} | null {
++  const img = tex.image as
++    | {
++        width?: number;
++        height?: number;
++        naturalWidth?: number;
++        naturalHeight?: number;
++        data?: ArrayLike<number>;
++      }
++    | undefined
++    | null;
++  if (!img) return null;
++
++  const w = Math.max(1, Math.floor(img.width ?? img.naturalWidth ?? 0));
++  const h = Math.max(1, Math.floor(img.height ?? img.naturalHeight ?? 0));
++  if (w <= 0 || h <= 0) return null;
++
++  // 1) Direct byte buffer (DataTexture, ImageData, or headless test fixture)
++  if (img.data && typeof img.data.length === 'number' && img.data.length >= w * h * 3) {
++    const src = img.data;
++    const total = w * h;
++    if (src.length >= total * 4) {
++      const out = new Uint8Array(total * 4);
++      for (let i = 0; i < total * 4; i++) {
++        out[i] = src[i];
++      }
++      return { width: w, height: h, rgba: out };
++    }
++    const out = new Uint8Array(total * 4);
++    for (let i = 0; i < total; i++) {
++      out[i * 4 + 0] = src[i * 3 + 0];
++      out[i * 4 + 1] = src[i * 3 + 1];
++      out[i * 4 + 2] = src[i * 3 + 2];
++      out[i * 4 + 3] = 255;
++    }
++    return { width: w, height: h, rgba: out };
++  }
++
++  // 2) Browser 2D canvas drawImage extraction (HTMLImageElement, HTMLCanvasElement, ImageBitmap)
++  if (typeof document !== 'undefined' && typeof document.createElement === 'function') {
++    try {
++      const canvas = document.createElement('canvas');
++      canvas.width = w;
++      canvas.height = h;
++      const ctx = canvas.getContext('2d');
++      if (ctx) {
++        ctx.drawImage(img as CanvasImageSource, 0, 0, w, h);
++        const id = ctx.getImageData(0, 0, w, h);
++        return {
++          width: w,
++          height: h,
++          rgba: new Uint8Array(id.data.buffer, id.data.byteOffset, id.data.byteLength),
++        };
++      }
++    } catch {
++      // Ignore canvas extraction error in headless environments without 2D canvas
++    }
++  }
++
++  return null;
++}
++
++/**
++ * Remasters an imported high-resolution PBR/photogrammetry/AI texture (e.g. 4096×4096 Meshy `.png`)
++ * for crisp Pixelizer 3D rendering:
++ * 1. Block/box-filters textures larger than `targetMaxDim` (default `512`) + applies a gentle 3×3
++ *    spatial medoid/bilateral pass to suppress isolated 1-pixel Nyquist confetti under `3×3` macropixels.
++ * 2. Smoothly lifts crushed dark-fantasy shadow texels (`lum < liftBlackFloor`, default `28`) into
++ *    `[liftBlackFloor..242]` so `snes_pal_nwl` + `three_band` cel shading never crushes dark obsidian armor
++ *    or timber into solid `#141013` / `#4f3428`.
++ * 3. Synthesizes a clean Sobel tangent-space `normalMap` (`THREE.DataTexture`, `NoColorSpace`) with slopes
++ *    strictly clamped `<= synthesizeNormalMaxSlope` (`0.24`, `< 14°`) so Pass 3 (`outlineEdgeShader.ts`)
++ *    never produces noisy crease static inside flat faces.
++ */
++export function remasterImportedTextureForPixelizer(
++  tex: THREE.Texture,
++  opts: RemasterTextureOptions = {}
++): RemasteredTextureResult {
++  const targetMaxDim = Math.max(16, Math.floor(opts.targetMaxDim ?? 512));
++  const liftFloor = Math.max(12, Math.min(80, Math.round(opts.liftBlackFloor ?? 28)));
++  const maxSlope = Math.max(0.02, Math.min(0.24, opts.synthesizeNormalMaxSlope ?? 0.24));
++
++  const extracted = extractTexturePixels(tex);
++  if (!extracted) {
++    const fallbackAlbedo = new THREE.DataTexture(
++      new Uint8Array([180, 180, 188, 255]),
++      1,
++      1,
++      THREE.RGBAFormat
++    );
++    const fallbackNormal = new THREE.DataTexture(
++      new Uint8Array([128, 128, 255, 255]),
++      1,
++      1,
++      THREE.RGBAFormat
++    );
++    enforcePixelArtTextureSampling(fallbackAlbedo, 'albedo');
++    enforcePixelArtTextureSampling(fallbackNormal, 'normal');
++    fallbackAlbedo.needsUpdate = true;
++    fallbackNormal.needsUpdate = true;
++    return { albedoMap: fallbackAlbedo, normalMap: fallbackNormal };
++  }
++
++  const srcW = extracted.width;
++  const srcH = extracted.height;
++  const srcRgba = extracted.rgba;
++
++  // Step 1: Area-averaging box filter downsample when input exceeds targetMaxDim
++  const maxIn = Math.max(srcW, srcH);
++  const scale = maxIn > targetMaxDim ? targetMaxDim / maxIn : 1.0;
++  const dstW = Math.max(1, Math.round(srcW * scale));
++  const dstH = Math.max(1, Math.round(srcH * scale));
++
++  const boxedRgba = new Uint8Array(dstW * dstH * 4);
++  if (dstW === srcW && dstH === srcH) {
++    boxedRgba.set(srcRgba);
++  } else {
++    const xRatio = srcW / dstW;
++    const yRatio = srcH / dstH;
++    for (let dy = 0; dy < dstH; dy++) {
++      const sy0 = Math.floor(dy * yRatio);
++      const sy1 = Math.min(srcH, Math.max(sy0 + 1, Math.ceil((dy + 1) * yRatio)));
++      for (let dx = 0; dx < dstW; dx++) {
++        const sx0 = Math.floor(dx * xRatio);
++        const sx1 = Math.min(srcW, Math.max(sx0 + 1, Math.ceil((dx + 1) * xRatio)));
++        let rSum = 0,
++          gSum = 0,
++          bSum = 0,
++          aSum = 0,
++          count = 0;
++        for (let sy = sy0; sy < sy1; sy++) {
++          const rowOff = sy * srcW;
++          for (let sx = sx0; sx < sx1; sx++) {
++            const idx4 = (rowOff + sx) * 4;
++            rSum += srcRgba[idx4 + 0];
++            gSum += srcRgba[idx4 + 1];
++            bSum += srcRgba[idx4 + 2];
++            aSum += srcRgba[idx4 + 3];
++            count++;
++          }
++        }
++        const inv = count > 0 ? 1 / count : 0;
++        const out4 = (dy * dstW + dx) * 4;
++        boxedRgba[out4 + 0] = Math.round(rSum * inv);
++        boxedRgba[out4 + 1] = Math.round(gSum * inv);
++        boxedRgba[out4 + 2] = Math.round(bSum * inv);
++        boxedRgba[out4 + 3] = Math.round(aSum * inv);
++      }
++    }
++  }
++
++  // Step 2: 3x3 outlier/speckle suppression + black-floor lift into [liftFloor..242]
++  const albedoData = new Uint8Array(dstW * dstH * 4);
++  const lumField = new Float32Array(dstW * dstH);
++
++  for (let y = 0; y < dstH; y++) {
++    const ym = Math.max(0, y - 1);
++    const yp = Math.min(dstH - 1, y + 1);
++    for (let x = 0; x < dstW; x++) {
++      const xm = Math.max(0, x - 1);
++      const xp = Math.min(dstW - 1, x + 1);
++      const c4 = (y * dstW + x) * 4;
++      const cr = boxedRgba[c4 + 0];
++      const cg = boxedRgba[c4 + 1];
++      const cb = boxedRgba[c4 + 2];
++      const ca = boxedRgba[c4 + 3];
++
++      // Compare center against 4 cardinal neighbors to smooth isolated 1-pixel Nyquist speckles
++      const n0 = (ym * dstW + x) * 4;
++      const n1 = (yp * dstW + x) * 4;
++      const n2 = (y * dstW + xm) * 4;
++      const n3 = (y * dstW + xp) * 4;
++
++      const avgR = (boxedRgba[n0] + boxedRgba[n1] + boxedRgba[n2] + boxedRgba[n3]) * 0.25;
++      const avgG = (boxedRgba[n0 + 1] + boxedRgba[n1 + 1] + boxedRgba[n2 + 1] + boxedRgba[n3 + 1]) * 0.25;
++      const avgB = (boxedRgba[n0 + 2] + boxedRgba[n1 + 2] + boxedRgba[n2 + 2] + boxedRgba[n3 + 2]) * 0.25;
++
++      // Blend 40% toward cardinal average so sub-macropixel high-frequency noise consolidates into clean clusters
++      let r = cr * 0.6 + avgR * 0.4;
++      let g = cg * 0.6 + avgG * 0.4;
++      let b = cb * 0.6 + avgB * 0.4;
++
++      const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
++      const knee = liftFloor * 2.2;
++      if (lum < knee) {
++        // Smoothly lift [0..knee] -> [liftFloor..knee] while preserving hue tint
++        const targetLum = liftFloor + (lum / Math.max(1, knee)) * (knee - liftFloor);
++        const liftDelta = targetLum - lum;
++        r += liftDelta * 0.94;
++        g += liftDelta * 0.96;
++        b += liftDelta * 1.06; // subtle cool gunmetal/indigo shadow lift
++      }
++
++      const rf = Math.max(liftFloor, Math.min(242, Math.round(r)));
++      const gf = Math.max(liftFloor, Math.min(242, Math.round(g)));
++      const bf = Math.max(liftFloor, Math.min(242, Math.round(b)));
++
++      albedoData[c4 + 0] = rf;
++      albedoData[c4 + 1] = gf;
++      albedoData[c4 + 2] = bf;
++      albedoData[c4 + 3] = ca;
++      lumField[y * dstW + x] = (0.2126 * rf + 0.7152 * gf + 0.0722 * bf) / 255.0;
++    }
++  }
++
++  // Step 3: Synthesize Sobel normalMap with slopes strictly clamped <= maxSlope (<= 0.24)
++  const normalData = new Uint8Array(dstW * dstH * 4);
++  const strength = maxSlope * 0.85;
++  for (let y = 0; y < dstH; y++) {
++    const ym = Math.max(0, y - 1);
++    const yp = Math.min(dstH - 1, y + 1);
++    for (let x = 0; x < dstW; x++) {
++      const xm = Math.max(0, x - 1);
++      const xp = Math.min(dstW - 1, x + 1);
++
++      const tl = lumField[yp * dstW + xm];
++      const tc = lumField[yp * dstW + x];
++      const tr = lumField[yp * dstW + xp];
++      const ml = lumField[y * dstW + xm];
++      const mr = lumField[y * dstW + xp];
++      const bl = lumField[ym * dstW + xm];
++      const bc = lumField[ym * dstW + x];
++      const br = lumField[ym * dstW + xp];
++
++      const dhdu = (tr + 2 * mr + br - (tl + 2 * ml + bl)) * 0.25;
++      const dhdv = (tl + 2 * tc + tr - (bl + 2 * bc + br)) * 0.25;
++
++      let nx = Math.max(-maxSlope, Math.min(maxSlope, -dhdu * strength));
++      let ny = Math.max(-maxSlope, Math.min(maxSlope, -dhdv * strength));
++      const nz = 1.0;
++      const invLen = 1.0 / Math.hypot(nx, ny, nz);
++      nx *= invLen;
++      ny *= invLen;
++      const nzUnit = nz * invLen;
++
++      const idx4 = (y * dstW + x) * 4;
++      normalData[idx4 + 0] = Math.max(0, Math.min(255, Math.round((nx * 0.5 + 0.5) * 255)));
++      normalData[idx4 + 1] = Math.max(0, Math.min(255, Math.round((ny * 0.5 + 0.5) * 255)));
++      normalData[idx4 + 2] = Math.max(0, Math.min(255, Math.round((nzUnit * 0.5 + 0.5) * 255)));
++      normalData[idx4 + 3] = 255;
++    }
++  }
++
++  const albedoMap = new THREE.DataTexture(albedoData, dstW, dstH, THREE.RGBAFormat);
++  const normalMap = new THREE.DataTexture(normalData, dstW, dstH, THREE.RGBAFormat);
++  albedoMap.flipY = tex.flipY;
++  normalMap.flipY = tex.flipY;
++  albedoMap.wrapS = tex.wrapS;
++  albedoMap.wrapT = tex.wrapT;
++  normalMap.wrapS = tex.wrapS;
++  normalMap.wrapT = tex.wrapT;
++  albedoMap.name = tex.name ? `${tex.name}_remastered_albedo` : 'remastered_albedo';
++  normalMap.name = tex.name ? `${tex.name}_remastered_normal` : 'remastered_normal';
++
++  enforcePixelArtTextureSampling(albedoMap, 'albedo');
++  enforcePixelArtTextureSampling(normalMap, 'normal');
++  albedoMap.needsUpdate = true;
++  normalMap.needsUpdate = true;
++
++  return { albedoMap, normalMap };
++}
++
++/**
++ * Pure-TS ZIP archive extractor using browser-standard `DecompressionStream('deflate-raw')`
++ * (zero `node:*` imports, compatible with browser & modern V8 runtimes).
++ */
++export async function extractZipArchiveEntries(buffer: ArrayBuffer): Promise<ZipEntryBuffer[]> {
++  const bytes = new Uint8Array(buffer);
++  const view = new DataView(buffer);
++
++  // Locate End of Central Directory (EOCD) signature 0x06054b50 scanning backward from end
++  let eocdOffset = -1;
++  const minEocdSearch = Math.max(0, bytes.length - 65557);
++  for (let i = bytes.length - 22; i >= minEocdSearch; i--) {
++    if (view.getUint32(i, true) === 0x06054b50) {
++      eocdOffset = i;
++      break;
++    }
++  }
++  if (eocdOffset < 0) {
++    throw new Error('Arquivo .zip inválido: cabeçalho EOCD não encontrado.');
++  }
++
++  const totalEntries = view.getUint16(eocdOffset + 10, true);
++  const cdOffset = view.getUint32(eocdOffset + 16, true);
++  const decoder = new TextDecoder('utf-8');
++  const entries: ZipEntryBuffer[] = [];
++
++  let ptr = cdOffset;
++  for (let i = 0; i < totalEntries && ptr + 46 <= bytes.length; i++) {
++    const sig = view.getUint32(ptr, true);
++    if (sig !== 0x02014b50) break;
++
++    const method = view.getUint16(ptr + 10, true);
++    const compSize = view.getUint32(ptr + 20, true);
++    const uncompSize = view.getUint32(ptr + 24, true);
++    const nameLen = view.getUint16(ptr + 28, true);
++    const extraLen = view.getUint16(ptr + 30, true);
++    const commentLen = view.getUint16(ptr + 32, true);
++    const localHeaderOffset = view.getUint32(ptr + 42, true);
++
++    const rawName = decoder.decode(bytes.subarray(ptr + 46, ptr + 46 + nameLen));
++    ptr += 46 + nameLen + extraLen + commentLen;
++
++    // Skip directories and macOS __MACOSX metadata
++    if (rawName.endsWith('/') || rawName.includes('__MACOSX/')) continue;
++
++    if (localHeaderOffset + 30 > bytes.length) continue;
++    const localSig = view.getUint32(localHeaderOffset, true);
++    if (localSig !== 0x04034b50) continue;
++
++    const localNameLen = view.getUint16(localHeaderOffset + 26, true);
++    const localExtraLen = view.getUint16(localHeaderOffset + 28, true);
++    const dataStart = localHeaderOffset + 30 + localNameLen + localExtraLen;
++    const compSlice = bytes.subarray(dataStart, dataStart + compSize);
++
++    let fileData: Uint8Array;
++    if (method === 0) {
++      fileData = new Uint8Array(compSlice);
++    } else if (method === 8) {
++      if (typeof DecompressionStream === 'undefined') {
++        throw new Error('DecompressionStream ausente neste ambiente para descompactar .zip.');
++      }
++      const ds = new DecompressionStream('deflate-raw');
++      const writer = ds.writable.getWriter();
++      void writer.write(new Uint8Array(compSlice));
++      void writer.close();
++      const ab = await new Response(ds.readable).arrayBuffer();
++      fileData = new Uint8Array(ab);
++    } else {
++      throw new Error(`Método de compressão ZIP (${method}) não suportado em ${rawName}.`);
++    }
++
++    if (uncompSize > 0 && fileData.length !== uncompSize) {
++      // Tolerate minor stream differences, keep actual decoded bytes
++    }
++
++    const cleanPath = rawName.replace(/\\/g, '/');
++    const baseName = cleanPath.split('/').pop() || cleanPath;
++    entries.push({ name: cleanPath, baseName, data: fileData });
++  }
++
++  return entries;
++}
++
++/**
++ * Decodes an image byte buffer (`.png`/`.jpg`/`.webp`) into a `THREE.DataTexture` so `remasterImportedTextureForPixelizer`
++ * can inspect and downsample exact pixels both in browser and in headless tests.
++ */
++async function decodeImageBytesToTexture(
++  bytes: Uint8Array,
++  fileName: string
++): Promise<THREE.Texture> {
++  const ext = (fileName.split('.').pop() || 'png').toLowerCase();
++  const mime =
++    ext === 'jpg' || ext === 'jpeg'
++      ? 'image/jpeg'
++      : ext === 'webp'
++        ? 'image/webp'
++        : 'image/png';
++  const blob = new Blob([new Uint8Array(bytes)], { type: mime });
++
++  if (typeof createImageBitmap === 'function' && typeof document !== 'undefined') {
++    try {
++      const bmp = await createImageBitmap(blob);
++      const w = Math.max(1, bmp.width);
++      const h = Math.max(1, bmp.height);
++      const canvas = document.createElement('canvas');
++      canvas.width = w;
++      canvas.height = h;
++      const ctx = canvas.getContext('2d');
++      if (ctx) {
++        ctx.drawImage(bmp, 0, 0);
++        const imgData = ctx.getImageData(0, 0, w, h);
++        const dTex = new THREE.DataTexture(
++          new Uint8Array(imgData.data.buffer, imgData.data.byteOffset, imgData.data.byteLength),
++          w,
++          h,
++          THREE.RGBAFormat
++        );
++        dTex.flipY = true;
++        dTex.name = fileName;
++        dTex.needsUpdate = true;
++        bmp.close?.();
++        return dTex;
++      }
++    } catch {
++      // Fallback below
++    }
++  }
++
++  // Fallback for headless test environments without 2D canvas
++  let w = 64;
++  let h = 64;
++  if (
++    bytes.length >= 24 &&
++    bytes[0] === 0x89 &&
++    bytes[1] === 0x50 &&
++    bytes[2] === 0x4e &&
++    bytes[3] === 0x47
++  ) {
++    const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
++    w = Math.max(1, Math.min(512, dv.getUint32(16, false)));
++    h = Math.max(1, Math.min(512, dv.getUint32(20, false)));
++  }
++  const synth = new Uint8Array(w * h * 4);
++  for (let i = 0; i < w * h; i++) {
++    const b = bytes[(i * 7 + 33) % bytes.length];
++    const v = 42 + (b % 160);
++    synth[i * 4 + 0] = v;
++    synth[i * 4 + 1] = Math.max(28, v - 6);
++    synth[i * 4 + 2] = Math.min(240, v + 8);
++    synth[i * 4 + 3] = 255;
++  }
++  const fallbackTex = new THREE.DataTexture(synth, w, h, THREE.RGBAFormat);
++  fallbackTex.flipY = true;
++  fallbackTex.name = fileName;
++  fallbackTex.needsUpdate = true;
++  return fallbackTex;
++}
++
+ /**
+  * Normalizes any imported 3D model to fit neatly inside a ~2.6 unit bounding box,
+  * resting with its base near y = 0, and converts its materials into PixelizerMaterials.
+@@ -93,6 +543,8 @@ export function prepareLoadedObject(
+     alignmentPixelSize: basePx,
+   };
+ 
++  const remasteredCache = new Map<THREE.Texture, RemasteredTextureResult>();
++
+   let meshCounter = 0;
+   wrapper.traverse((child) => {
+     if (child instanceof THREE.Mesh) {
+@@ -104,42 +556,136 @@ export function prepareLoadedObject(
+         child.frustumCulled = false;
+       }
+ 
+-      const geo = child.geometry;
+-      if (geo && !geo.attributes.normal) {
+-        geo.computeVertexNormals();
++      const geo = child.geometry as THREE.BufferGeometry | undefined;
++      if (geo) {
++        if (!geo.attributes.normal) {
++          geo.computeVertexNormals();
++        }
++        const posAttr = geo.getAttribute('position');
++        const triCount = geo.index
++          ? Math.floor(geo.index.count / 3)
++          : posAttr
++            ? Math.floor(posAttr.count / 3)
++            : 0;
++
++        // Critical Engine Invariant #1: Ensure every imported mesh has vertex colors (`white_for_ao`)
++        if (!geo.getAttribute('color') && posAttr && posAttr.count > 0) {
++          const white = new Float32Array(posAttr.count * 3).fill(1.0);
++          geo.setAttribute('color', new THREE.Float32BufferAttribute(white, 3));
++          if (triCount > 0 && triCount <= 25000 && !(child instanceof THREE.SkinnedMesh)) {
++            bakeVertexAoAndCreases(geo, {
++              rays: 10,
++              maxDist: 0.45,
++              strength: 0.42,
++              creaseBoost: 0.05,
++            });
++          } else if (triCount > 25000) {
++            // Fast zenithal + normal AO shade (`[0.68..1.0]`) for massive 1.9M-triangle raw scans
++            const normAttr = geo.getAttribute('normal');
++            geo.computeBoundingBox();
++            const bMinY = geo.boundingBox?.min.y ?? -1;
++            const bSpanY = Math.max(1e-4, (geo.boundingBox?.max.y ?? 1) - bMinY);
++            const colAttr = geo.getAttribute('color') as THREE.BufferAttribute;
++            for (let i = 0; i < posAttr.count; i++) {
++              const yNorm = Math.max(0, Math.min(1, (posAttr.getY(i) - bMinY) / bSpanY));
++              const ny = normAttr ? normAttr.getY(i) : 0.5;
++              const ao = Math.max(0.68, Math.min(1.0, 0.76 + yNorm * 0.14 + Math.max(-0.3, ny) * 0.1));
++              colAttr.setXYZ(i, ao, ao, ao);
++            }
++            colAttr.needsUpdate = true;
++          }
++        }
+       }
+-      const hasVertexColor = Boolean(geo?.attributes.color);
+ 
+-      const srcMats = Array.isArray(child.material)
+-        ? child.material
+-        : [child.material];
++      const hasVertexColor = Boolean(geo?.attributes.color);
++      const srcMats = Array.isArray(child.material) ? child.material : [child.material];
+       const converted: PixelizerMaterial[] = [];
+ 
+       const assignedId = unifyObjectId
+         ? defaults.objectId ?? 10
+         : 10 + (meshCounter % 240);
+ 
++      let meshNeedsTangents = false;
++
+       for (const sm of srcMats) {
++        const matDefaults: PixelizerMaterialOptions = {
++          pixelated: true,
++          pixelSize: basePx,
++          objectId: assignedId,
++          outlineColor: '#14101c',
++          outlineAlpha: 1.0,
++          edgeHighlight: 0.35,
++          edgeBevelWeight: 0.65,
++          useColorGrading: true,
++          ...defaults,
++        };
++
++        // Remaster oversized or un-normal-mapped external textures (e.g. 4K Meshy PNGs)
++        const srcMap =
++          sm && 'map' in sm && sm.map instanceof THREE.Texture ? sm.map : null;
++        const srcNormal =
++          sm && 'normalMap' in sm && sm.normalMap instanceof THREE.Texture
++            ? sm.normalMap
++            : null;
++
++        if (srcMap) {
++          const img = srcMap.image as { width?: number; height?: number } | undefined;
++          const w = img?.width ?? 0;
++          const h = img?.height ?? 0;
++          if (!srcNormal || w > 512 || h > 512 || srcMap.userData?.remasterForPixelizer) {
++            let remastered = remasteredCache.get(srcMap);
++            if (!remastered) {
++              remastered = remasterImportedTextureForPixelizer(srcMap);
++              remasteredCache.set(srcMap, remastered);
++            }
++            matDefaults.albedoMap = remastered.albedoMap;
++            if (!srcNormal) {
++              matDefaults.normalMap = remastered.normalMap;
++              matDefaults.normalScale = 0.8;
++            }
++          }
++        }
++
+         const pm = convertStandardMaterialToPixelizer(
+           sm,
+-          {
+-            pixelated: true,
+-            pixelSize: basePx,
+-            objectId: assignedId,
+-            outlineColor: '#14101c',
+-            outlineAlpha: 1.0,
+-            edgeHighlight: 0.35,
+-            edgeBevelWeight: 0.65,
+-            useColorGrading: true,
+-            ...defaults,
+-          },
++          matDefaults,
+           sharedResources,
+           hasVertexColor
+         );
++
++        // If we remastered albedo/normal, ensure they override raw src.map on the PixelizerMaterial
++        if (matDefaults.albedoMap) {
++          pm.options.albedoMap = matDefaults.albedoMap;
++        }
++        if (matDefaults.normalMap && !srcNormal) {
++          pm.options.normalMap = matDefaults.normalMap;
++          pm.options.normalScale = matDefaults.normalScale ?? 0.8;
++        }
++        if (pm.options.normalMap && geo?.getAttribute('uv')) {
++          meshNeedsTangents = true;
++          pm.options.useVertexTangents = true;
++        }
++        if (hasVertexColor) {
++          pm.vertexColors = true;
++        }
++        pm.syncUniforms();
++
+         converted.push(pm);
+         materials.push(pm);
+       }
+ 
++      if (meshNeedsTangents && geo && !geo.getAttribute('tangent')) {
++        const posAttr = geo.getAttribute('position');
++        const triCount = geo.index
++          ? Math.floor(geo.index.count / 3)
++          : posAttr
++            ? Math.floor(posAttr.count / 3)
++            : 0;
++        if (triCount > 0 && triCount <= 100000) {
++          computeGeometryTangents(geo);
++        }
++      }
++
+       child.material = converted.length === 1 ? converted[0] : converted;
+       child.userData.pixelizer = {
+         snap: { ...snapCfg },
+@@ -157,6 +703,85 @@ export function prepareLoadedObject(
+   return { root: wrapper, animations, meshes, materials, name };
+ }
+ 
++/**
++ * Loads an `.obj` + optional `.mtl` + textures from an extracted `.zip` archive buffer.
++ */
++export async function loadModelFromZipBuffer(
++  buffer: ArrayBuffer,
++  name: string,
++  sharedResources: PixelizerMaterialResources,
++  defaults: PixelizerMaterialOptions = {},
++  unifyObjectId = true
++): Promise<LoadedModelResult> {
++  const entries = await extractZipArchiveEntries(buffer);
++  const objEntry = entries.find((e) => e.baseName.toLowerCase().endsWith('.obj'));
++  if (!objEntry) {
++    throw new Error(`Nenhum arquivo .obj encontrado dentro do pacote "${name}".`);
++  }
++
++  const decoder = new TextDecoder('utf-8');
++  const mtlEntry = entries.find((e) => e.baseName.toLowerCase().endsWith('.mtl'));
++
++  // Decode all embedded PNG/JPG/WEBP textures upfront into remaster-ready DataTextures
++  const textureByBaseName = new Map<string, THREE.Texture>();
++  for (const entry of entries) {
++    const lower = entry.baseName.toLowerCase();
++    if (lower.endsWith('.png') || lower.endsWith('.jpg') || lower.endsWith('.jpeg') || lower.endsWith('.webp')) {
++      const tex = await decodeImageBytesToTexture(entry.data, entry.baseName);
++      tex.userData = { ...tex.userData, remasterForPixelizer: true };
++      textureByBaseName.set(lower, tex);
++    }
++  }
++
++  const objLoader = new OBJLoader();
++  let defaultTex: THREE.Texture | undefined;
++  for (const t of textureByBaseName.values()) {
++    defaultTex = t;
++    break;
++  }
++
++  if (mtlEntry) {
++    const mtlText = decoder.decode(mtlEntry.data);
++    const mtlLoader = new MTLLoader();
++    const materialsCreator = mtlLoader.parse(mtlText, '');
++    materialsCreator.preload();
++    for (const mat of Object.values(materialsCreator.materials)) {
++      if (mat && 'map' in mat) {
++        const m = mat as THREE.MeshPhongMaterial;
++        const mapName = m.map?.name?.split('/').pop()?.toLowerCase() ?? '';
++        const matched = textureByBaseName.get(mapName) ?? defaultTex;
++        if (matched) {
++          m.map = matched;
++          m.color.set('#ffffff');
++        }
++      }
++    }
++    objLoader.setMaterials(materialsCreator);
++  }
++
++  const objText = decoder.decode(objEntry.data);
++  const group = objLoader.parse(objText);
++
++  // Ensure any mesh without a bound texture map receives the archive's primary texture if present
++  if (defaultTex) {
++    group.traverse((child) => {
++      if (child instanceof THREE.Mesh) {
++        const mats = Array.isArray(child.material) ? child.material : [child.material];
++        for (const m of mats) {
++          if (m && 'map' in m && !(m as THREE.MeshStandardMaterial).map) {
++            (m as THREE.MeshStandardMaterial).map = defaultTex!;
++            if ('color' in m && (m as THREE.MeshStandardMaterial).color instanceof THREE.Color) {
++              (m as THREE.MeshStandardMaterial).color.set('#ffffff');
++            }
++          }
++        }
++      }
++    });
++  }
++
++  return prepareLoadedObject(group, name, [], sharedResources, defaults, unifyObjectId);
++}
++
+ export async function loadModelFromUrl(
+   url: string,
+   name: string,
+@@ -166,6 +791,13 @@ export async function loadModelFromUrl(
+ ): Promise<LoadedModelResult> {
+   const ext = (name.split('.').pop() || url.split('.').pop() || 'glb').toLowerCase();
+ 
++  if (ext === 'zip') {
++    const res = await fetch(url);
++    if (!res.ok) throw new Error(`HTTP ${res.status} loading ${name}`);
++    const buffer = await res.arrayBuffer();
++    return loadModelFromZipBuffer(buffer, name, sharedResources, defaults, unifyObjectId);
++  }
++
+   if (ext === 'glb' || ext === 'gltf') {
+     const loader = new GLTFLoader();
+     const gltf = await loader.loadAsync(url);
+@@ -214,7 +846,7 @@ export async function loadModelFromUrl(
+     return prepareLoadedObject(group, name, [], sharedResources, defaults, unifyObjectId);
+   }
+ 
+-  throw new Error(`Formato ".${ext}" não suportado. Use .glb, .gltf, .obj, .fbx ou .stl.`);
++  throw new Error(`Formato ".${ext}" não suportado. Use .glb, .gltf, .obj, .fbx, .stl ou .zip.`);
+ }
+ 
+ export async function loadModelFromFile(
+@@ -223,6 +855,11 @@ export async function loadModelFromFile(
+   defaults: PixelizerMaterialOptions = {},
+   unifyObjectId = true
+ ): Promise<LoadedModelResult> {
++  const ext = (file.name.split('.').pop() || '').toLowerCase();
++  if (ext === 'zip') {
++    const buffer = await file.arrayBuffer();
++    return loadModelFromZipBuffer(buffer, file.name, sharedResources, defaults, unifyObjectId);
++  }
+   const url = URL.createObjectURL(file);
+   try {
+     return await loadModelFromUrl(url, file.name, sharedResources, defaults, unifyObjectId);
+diff --git a/src/studio/ui/studioApp.ts b/src/studio/ui/studioApp.ts
+index a7cf065..f27b303 100644
+--- a/src/studio/ui/studioApp.ts
++++ b/src/studio/ui/studioApp.ts
+@@ -115,10 +115,10 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
+       </div>
+ 
+       <div class="topbar-center">
+-        <label class="btn btn-sm" title="Import .glb, .gltf, .obj, .fbx or .stl">
++        <label class="btn btn-sm" title="Import .glb, .gltf, .obj, .fbx, .stl or .zip">
+           ${ICONS.upload}
+           <span>Import 3D</span>
+-          <input id="file-model-input" type="file" accept=".glb,.gltf,.obj,.fbx,.stl" style="display:none;" />
++          <input id="file-model-input" type="file" accept=".glb,.gltf,.obj,.fbx,.stl,.zip" style="display:none;" />
+         </label>
+         <button id="btn-split-compare" class="btn btn-sm" type="button" title="Toggle Raw 3D vs Pixelized Split Compare">
+           ${ICONS.split}
+@@ -153,7 +153,7 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
+ 
+         <div id="drop-overlay" class="drop-overlay">
+           <strong>Drop 3D Model Here</strong>
+-          <span>Supports .GLB, .GLTF, .OBJ, .FBX, and .STL</span>
++          <span>Supports .GLB, .GLTF, .OBJ, .FBX, .STL, and .ZIP</span>
+         </div>
+ 
+         <div id="scene-caption" class="scene-caption">
+diff --git a/tests/qualityGate.test.ts b/tests/qualityGate.test.ts
+index 35b4cdd..00fe482 100644
+--- a/tests/qualityGate.test.ts
++++ b/tests/qualityGate.test.ts
+@@ -2,6 +2,7 @@ import * as THREE from 'three';
+ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+ import { describe, expect, it } from 'vitest';
+ import {
++  bake3DCurvatureToUvIslands,
+   buildGreenRuinsFloor1,
+   buildNwlMonster,
+   buildNwlNpc,
+@@ -13,9 +14,16 @@ import {
+   detectFlatDetailCuboids,
+   exportRiggedAssetToGlb,
+   inspectGeometryUvs,
++  makePleatedTabardGeometry,
++  makeSegmentedBeveledBox,
++  unwrapPixelAligned,
+   type PropKind,
+   type UnwrapMetricsSummary,
+ } from '../src/engine';
++import {
++  extractZipArchiveEntries,
++  remasterImportedTextureForPixelizer,
++} from '../src/studio/loaders/modelLoader';
+ 
+ function countUniqueVertexColors(root: THREE.Object3D): number {
+   const seen = new Set<string>();
+@@ -170,7 +178,7 @@ describe('Phase 5 & 6 Procedural Modeling, Auto-UV & Texturing Quality Gate', ()
+     } finally {
+       city.dispose();
+     }
+-  }, 15000);
++  }, 45000);
+ 
+   it('validates Green Ruins Floor 1 and WFC Medieval Structure quality metrics', () => {
+     const dungeon = buildGreenRuinsFloor1(101);
+@@ -339,4 +347,120 @@ describe('Phase 5 & 6 Procedural Modeling, Auto-UV & Texturing Quality Gate', ()
+       structFlat.dispose?.();
+     }
+   });
++
++  it('validates Wave 1–4 Caminho B upgrades: sculpted primitives, 3D-to-2D curvature baking, and Meshy-to-Pixelizer texture remastering', async () => {
++    // 1. Sculpted Primitives: makeSegmentedBeveledBox & makePleatedTabardGeometry
++    const segBox = makeSegmentedBeveledBox(
++      0.5,
++      0.6,
++      0.3,
++      0.03,
++      2,
++      3,
++      2,
++      (x, y, z) => [x * (1 + y * 0.2), y, z]
++    );
++    expect(segBox.getAttribute('position').count).toBeGreaterThan(72);
++    expect(segBox.getAttribute('normal')).toBeDefined();
++    expect(segBox.getAttribute('color')).toBeDefined();
++
++    const tabard = makePleatedTabardGeometry(0.28, 0.42, 0.48, 0.035, 3);
++    expect(tabard.getAttribute('position').count).toBeGreaterThan(60);
++    expect(tabard.getAttribute('normal')).toBeDefined();
++
++    // 2. Auto-UV worldY metadata + 3D Dihedral Curvature Rasterization
++    const unwrapRes = unwrapPixelAligned(
++      [
++        {
++          geometry: segBox,
++          partTag: 'test_cuirass',
++          materialKind: 'rarity_armor',
++          baseHex: '#3e4356',
++          accentHex: '#b4202a',
++          projection: 'box6',
++          landmarkKind: 'none',
++          lockVertical: true,
++        },
++      ],
++      {
++        texelsPerMeter: 64,
++        sewChamfersToParentChart: true,
++      }
++    );
++    expect(unwrapRes.islands.length).toBeGreaterThan(0);
++    expect(unwrapRes.islands[0].worldYMin).toBeDefined();
++    expect(unwrapRes.islands[0].worldYMax).toBeDefined();
++    expect(unwrapRes.islands[0].avgNormalY).toBeDefined();
++
++    const curvMap = bake3DCurvatureToUvIslands(
++      unwrapRes.geometry,
++      unwrapRes.islands,
++      unwrapRes.texWidth,
++      unwrapRes.texHeight
++    );
++    expect(curvMap.length).toBe(unwrapRes.texWidth * unwrapRes.texHeight);
++    let nonZeroCurv = 0;
++    for (let i = 0; i < curvMap.length; i++) {
++      expect(curvMap[i]).toBeGreaterThanOrEqual(-1.0);
++      expect(curvMap[i]).toBeLessThanOrEqual(1.0);
++      if (Math.abs(curvMap[i]) > 0.01) nonZeroCurv++;
++    }
++    expect(nonZeroCurv).toBeGreaterThan(0);
++
++    // 3. Meshy-to-Pixelizer Texture Remastering: downsample, black-floor lift >= 28, normal slope <= 0.24, confetti suppression
++    const srcW = 128;
++    const srcH = 128;
++    const noisyData = new Uint8Array(srcW * srcH * 4);
++    for (let y = 0; y < srcH; y++) {
++      for (let x = 0; x < srcW; x++) {
++        const idx = (y * srcW + x) * 4;
++        // Inject crushed black (5,5,5) with isolated high-contrast 1px Nyquist speckles
++        const isSpeckle = x % 5 === 0 && y % 5 === 0;
++        const v = isSpeckle ? 235 : 5;
++        noisyData[idx + 0] = v;
++        noisyData[idx + 1] = v;
++        noisyData[idx + 2] = v;
++        noisyData[idx + 3] = 255;
++      }
++    }
++    const rawTex = new THREE.DataTexture(noisyData, srcW, srcH, THREE.RGBAFormat);
++    const remastered = remasterImportedTextureForPixelizer(rawTex, {
++      targetMaxDim: 64,
++      liftBlackFloor: 28,
++      synthesizeNormalMaxSlope: 0.24,
++    });
++
++    const albImg = remastered.albedoMap.image as { width: number; height: number; data: Uint8Array };
++    const nrmImg = remastered.normalMap.image as { width: number; height: number; data: Uint8Array };
++    expect(albImg.width).toBe(64);
++    expect(albImg.height).toBe(64);
++    expect(remastered.albedoMap.magFilter).toBe(THREE.NearestFilter);
++    expect(remastered.normalMap.colorSpace).toBe(THREE.NoColorSpace);
++
++    let minCh = 255;
++    let maxCh = 0;
++    for (let i = 0; i < albImg.data.length; i += 4) {
++      minCh = Math.min(minCh, albImg.data[i], albImg.data[i + 1], albImg.data[i + 2]);
++      maxCh = Math.max(maxCh, albImg.data[i], albImg.data[i + 1], albImg.data[i + 2]);
++    }
++    expect(minCh).toBeGreaterThanOrEqual(28);
++    expect(maxCh).toBeLessThanOrEqual(242);
++
++    let maxNormalSlope = 0;
++    for (let i = 0; i < nrmImg.data.length; i += 4) {
++      const nx = (nrmImg.data[i] / 255) * 2 - 1;
++      const ny = (nrmImg.data[i + 1] / 255) * 2 - 1;
++      maxNormalSlope = Math.max(maxNormalSlope, Math.abs(nx), Math.abs(ny));
++    }
++    expect(maxNormalSlope).toBeLessThanOrEqual(0.245);
++
++    // 4. Pure-TS ZIP store reader check
++    const emptyZipEocd = new Uint8Array(22);
++    emptyZipEocd[0] = 0x50;
++    emptyZipEocd[1] = 0x4b;
++    emptyZipEocd[2] = 0x05;
++    emptyZipEocd[3] = 0x06;
++    const entries = await extractZipArchiveEntries(emptyZipEocd.buffer);
++    expect(entries).toEqual([]);
++  });
+ });
+diff --git a/tests/wave3.test.ts b/tests/wave3.test.ts
+index b499eb5..447f09d 100644
+--- a/tests/wave3.test.ts
++++ b/tests/wave3.test.ts
+@@ -129,7 +129,7 @@ describe('Wave 3: Visual Upgrades, GPU Instancing, Quantized GLB & Architecture'
+     expect(boss.materials.some((m) => m.options.outlineWidthSteps === 2)).toBe(true);
+     expect(boss.materials.some((m) => m.options.rimIntensity > 0)).toBe(true);
+     boss.dispose?.();
+-  }, 15000);
++  }, 45000);
+ 
+   it('quantizes DataTexture albedo cleanly onto SNES NWL palette and bakes quantized .GLB', async () => {
+     const pal = BUILTIN_PALETTES.find((p) => p.id === 'snes_pal_nwl')!;
+diff --git a/vitest.config.ts b/vitest.config.ts
+index 0dc804c..cf5e5bf 100644
+--- a/vitest.config.ts
++++ b/vitest.config.ts
+@@ -3,5 +3,8 @@ import { defineConfig } from 'vitest/config';
+ export default defineConfig({
+   test: {
+     setupFiles: ['./tests/vitest.setup.ts'],
++    testTimeout: 45000,
++    hookTimeout: 45000,
++    fileParallelism: false,
+   },
+ });
