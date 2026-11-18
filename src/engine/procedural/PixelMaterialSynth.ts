@@ -650,6 +650,42 @@ function sampleMaterialRecipe(
       };
     }
 
+    case 'dragon_scales': {
+      // Overlapping diamond/hexagonal scale pattern with ridge highlights
+      const row = Math.floor(ly * 0.45);
+      const col = Math.floor((lx + (row % 2) * 1.1) * 0.45);
+      const fx = (lx + (row % 2) * 1.1) * 0.45 - col - 0.5;
+      const fy = ly * 0.45 - row - 0.5;
+      const dist = Math.hypot(fx, fy);
+      const scaleDome = Math.max(0, 1 - dist * 1.35);
+      const jitter = (hash2d(col, row, seed + 211) - 0.5) * 0.14;
+      return {
+        rgb: shadeHueShiftRgb(baseRgb, (scaleDome - 0.35) * 0.28 + jitter + gradV * 0.55),
+        height: 0.45 + scaleDome * 0.45 + jitter * 0.3,
+      };
+    }
+
+    case 'wing_membrane': {
+      // Translucent-feeling leathery membrane with subtle radial veins
+      const vein = Math.pow(Math.max(0, 1 - Math.abs(Math.sin(lx * 0.22 + smoothNoise2d(lx * 0.15, ly * 0.15, seed + 307) * 2.2)) * 4.5), 2);
+      const grain = (smoothNoise2d(lx * 0.35, ly * 0.35, seed + 311) - 0.5) * 0.14;
+      const memRgb = mixRgb(baseRgb, accentRgb, vein * 0.32);
+      return {
+        rgb: shadeHueShiftRgb(memRgb, grain - vein * 0.12 + gradV * 0.35),
+        height: 0.38 + vein * 0.22 + grain * 0.2,
+      };
+    }
+
+    case 'muscle_hide': {
+      // Striated muscular fibers with organic pore variation
+      const fiber = Math.sin(lx * 0.65 + smoothNoise2d(lx * 0.2, ly * 0.2, seed + 401) * 2.0) * 0.12;
+      const pore = (smoothNoise2d(lx * 0.4, ly * 0.4, seed + 409) - 0.5) * 0.16;
+      return {
+        rgb: shadeHueShiftRgb(baseRgb, fiber + pore + gradV * 0.5),
+        height: 0.58 + fiber * 0.4 + pore * 0.25,
+      };
+    }
+
     case 'magma_obsidian': {
       const crackVal = Math.abs(smoothNoise2d(lx * 0.26, ly * 0.26, seed + 111) - 0.5);
       const isCrack = crackVal < 0.065;
@@ -997,6 +1033,7 @@ export function synthesizeAtlasTextures(
             seed + isl.id * 37,
             rarity
           );
+          if (!sample) continue;
           heightField[idx] = sample.height;
           const o4 = idx * 4;
           albedoRgba[o4 + 0] = sample.rgb[0];
@@ -1530,8 +1567,7 @@ export function bakeTaggedPartsAsset(
     partTriEnds.push({ endTri: runningTris, partTag: p.partTag });
   }
 
-  // Skinned meshes must not alter topology/vertex counts during bake
-  const subdivideEdgeM = options.partTagToBoneIndex ? 0 : (options.subdivideMaxEdgeM ?? 0);
+  const subdivideEdgeM = options.subdivideMaxEdgeM ?? 0;
   const willSubdivide = subdivideEdgeM > 0;
 
   const unwrapped = unwrapPixelAligned(parts, {
@@ -1595,11 +1631,39 @@ export function bakeTaggedPartsAsset(
 
   if (willSubdivide) {
     const savedUserData = { ...outGeo.userData };
+    const origPos = outGeo.getAttribute('position') as THREE.BufferAttribute | undefined;
+    const origBones = perVertexBoneIndices;
     const subGeo = subdivideForAo(outGeo, subdivideEdgeM);
     outGeo.dispose();
     subGeo.userData = { ...subGeo.userData, ...savedUserData };
     computeGeometryTangents(subGeo);
     outGeo = subGeo;
+
+    // Interpolate / nearest-map per-vertex bone indices onto subdivided vertices
+    if (origBones && origPos && origPos.count > 0) {
+      const subPos = outGeo.getAttribute('position') as THREE.BufferAttribute;
+      const newBones = new Uint16Array(subPos.count);
+      for (let i = 0; i < subPos.count; i++) {
+        const sx = subPos.getX(i);
+        const sy = subPos.getY(i);
+        const sz = subPos.getZ(i);
+        let bestIdx = 0;
+        let bestDist = Infinity;
+        for (let j = 0; j < origPos.count; j++) {
+          const dx = sx - origPos.getX(j);
+          const dy = sy - origPos.getY(j);
+          const dz = sz - origPos.getZ(j);
+          const d2 = dx * dx + dy * dy + dz * dz;
+          if (d2 < bestDist) {
+            bestDist = d2;
+            bestIdx = origBones[j];
+            if (d2 < 1e-8) break;
+          }
+        }
+        newBones[i] = bestIdx;
+      }
+      perVertexBoneIndices = newBones;
+    }
   }
 
   bakeVertexAoAndCreases(outGeo, {

@@ -23,7 +23,10 @@ export type MaterialRecipeId =
   | 'magma_obsidian'
   | 'bone_ivory'
   | 'foliage_leaf'
-  | 'water_pool';
+  | 'water_pool'
+  | 'dragon_scales'
+  | 'wing_membrane'
+  | 'muscle_hide';
 
 export type LandmarkKind =
   | 'none'
@@ -2089,4 +2092,189 @@ export function makeSdfOrganicMesh(
   }
 
   return finishAccumToGeometry(acc, hexColor, options.shadeJitter ?? 0);
+}
+
+export interface SplineLoftOptions {
+  colorHex?: string | number;
+  capStart?: boolean;
+  capEnd?: boolean;
+  flatShaded?: boolean;
+  shadeJitter?: number;
+  twistRad?: number;
+}
+
+/**
+ * Sweeps elliptical/muscular cross-sections along a Catmull-Rom spline using
+ * parallel-transported frames to avoid Frenet-Serret flipping.
+ */
+export function makeSplineLoftGeometry(
+  points: ReadonlyArray<THREE.Vector3 | readonly [number, number, number]>,
+  radii: ReadonlyArray<number | readonly [number, number]>,
+  radialSegs = 8,
+  tubularSegs = 16,
+  options: SplineLoftOptions = {}
+): THREE.BufferGeometry {
+  const colorHex = typeof options.colorHex === 'number'
+    ? `#${options.colorHex.toString(16).padStart(6, '0')}`
+    : (options.colorHex ?? '#ffffff');
+  const capStart = options.capStart ?? true;
+  const capEnd = options.capEnd ?? true;
+  const flatShaded = options.flatShaded ?? false;
+  const shadeJitter = options.shadeJitter ?? 0;
+  const twistRad = options.twistRad ?? 0;
+
+  if (points.length < 2) {
+    return makeBeveledBox(0.1, 0.1, 0.1, 0.02, colorHex);
+  }
+
+  const vecPoints = points.map((p) =>
+    p instanceof THREE.Vector3 ? p.clone() : new THREE.Vector3(p[0], p[1], p[2])
+  );
+  const curve = new THREE.CatmullRomCurve3(vecPoints, false, 'centripetal', 0.5);
+
+  const normRadii: [number, number][] =
+    radii.length > 0
+      ? radii.map((r) => (typeof r === 'number' ? [r, r] : [r[0], r[1]]))
+      : [[0.1, 0.1]];
+
+  const sampleRadii = (t: number): [number, number] => {
+    if (normRadii.length === 1) return normRadii[0];
+    const scaled = Math.max(0, Math.min(1, t)) * (normRadii.length - 1);
+    const i0 = Math.floor(scaled);
+    const i1 = Math.min(normRadii.length - 1, i0 + 1);
+    const f = scaled - i0;
+    return [
+      normRadii[i0][0] + (normRadii[i1][0] - normRadii[i0][0]) * f,
+      normRadii[i0][1] + (normRadii[i1][1] - normRadii[i0][1]) * f,
+    ];
+  };
+
+  const tSegs = Math.max(2, Math.floor(tubularSegs));
+  const rSegs = Math.max(4, Math.floor(radialSegs));
+
+  const centers: THREE.Vector3[] = [];
+  const tangents: THREE.Vector3[] = [];
+  const normals: THREE.Vector3[] = [];
+  const binormals: THREE.Vector3[] = [];
+  const ringRadii: [number, number][] = [];
+
+  for (let i = 0; i <= tSegs; i++) {
+    const t = i / tSegs;
+    centers.push(curve.getPoint(t));
+    const tan = curve.getTangent(t).normalize();
+    if (tan.lengthSq() < 1e-8) tan.set(0, 1, 0);
+    tangents.push(tan);
+    ringRadii.push(sampleRadii(t));
+  }
+
+  // Initial normal perpendicular to first tangent
+  const up = Math.abs(tangents[0].y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
+  const n0 = new THREE.Vector3().crossVectors(up, tangents[0]).normalize();
+  const b0 = new THREE.Vector3().crossVectors(tangents[0], n0).normalize();
+  normals.push(n0);
+  binormals.push(b0);
+
+  // Parallel transport frames along the curve
+  const rotAxis = new THREE.Vector3();
+  const quat = new THREE.Quaternion();
+  for (let i = 1; i <= tSegs; i++) {
+    const prevN = normals[i - 1].clone();
+    rotAxis.crossVectors(tangents[i - 1], tangents[i]);
+    if (rotAxis.lengthSq() > 1e-10) {
+      rotAxis.normalize();
+      const dot = Math.max(-1, Math.min(1, tangents[i - 1].dot(tangents[i])));
+      quat.setFromAxisAngle(rotAxis, Math.acos(dot));
+      prevN.applyQuaternion(quat);
+    }
+    prevN.addScaledVector(tangents[i], -prevN.dot(tangents[i])).normalize();
+    const bin = new THREE.Vector3().crossVectors(tangents[i], prevN).normalize();
+    normals.push(prevN);
+    binormals.push(bin);
+  }
+
+  // Build ring vertices & smooth normals
+  const ringVerts: [number, number, number][][] = [];
+  const ringVertNormals: [number, number, number][][] = [];
+
+  for (let i = 0; i <= tSegs; i++) {
+    const t = i / tSegs;
+    const c = centers[i];
+    const n = normals[i];
+    const b = binormals[i];
+    const [rx, ry] = ringRadii[i];
+    const twist = twistRad * t;
+    const verts: [number, number, number][] = [];
+    const vNorms: [number, number, number][] = [];
+
+    for (let j = 0; j <= rSegs; j++) {
+      const theta = (j / rSegs) * Math.PI * 2 + twist;
+      const cosT = Math.cos(theta);
+      const sinT = Math.sin(theta);
+
+      const px = c.x + (n.x * cosT * rx + b.x * sinT * ry);
+      const py = c.y + (n.y * cosT * rx + b.y * sinT * ry);
+      const pz = c.z + (n.z * cosT * rx + b.z * sinT * ry);
+      verts.push([px, py, pz]);
+
+      // Elliptical normal: (cosT / rx, sinT / ry)
+      const nx = n.x * (cosT / Math.max(1e-4, rx)) + b.x * (sinT / Math.max(1e-4, ry));
+      const ny = n.y * (cosT / Math.max(1e-4, rx)) + b.y * (sinT / Math.max(1e-4, ry));
+      const nz = n.z * (cosT / Math.max(1e-4, rx)) + b.z * (sinT / Math.max(1e-4, ry));
+      const len = Math.hypot(nx, ny, nz) || 1;
+      vNorms.push([nx / len, ny / len, nz / len]);
+    }
+    ringVerts.push(verts);
+    ringVertNormals.push(vNorms);
+  }
+
+  const acc = createAccum();
+
+  for (let i = 0; i < tSegs; i++) {
+    const v0 = i / tSegs;
+    const v1 = (i + 1) / tSegs;
+    for (let j = 0; j < rSegs; j++) {
+      const u0 = j / rSegs;
+      const u1 = (j + 1) / rSegs;
+      const p00 = ringVerts[i][j];
+      const p10 = ringVerts[i][j + 1];
+      const p11 = ringVerts[i + 1][j + 1];
+      const p01 = ringVerts[i + 1][j];
+
+      const n00 = ringVertNormals[i][j];
+      const n10 = ringVertNormals[i][j + 1];
+      const n11 = ringVertNormals[i + 1][j + 1];
+      const n01 = ringVertNormals[i + 1][j];
+
+      const avgN: [number, number, number] = [
+        (n00[0] + n10[0] + n11[0] + n01[0]) * 0.25,
+        (n00[1] + n10[1] + n11[1] + n01[1]) * 0.25,
+        (n00[2] + n10[2] + n11[2] + n01[2]) * 0.25,
+      ];
+      const smooth = flatShaded ? undefined : ([n00, n10, n11, n01] as [
+        [number, number, number],
+        [number, number, number],
+        [number, number, number],
+        [number, number, number],
+      ]);
+      pushQuadWithHint(acc, p00, p10, p11, p01, [u0, v0], [u1, v0], [u1, v1], [u0, v1], avgN, smooth);
+    }
+  }
+
+  if (capStart) {
+    const c0: [number, number, number] = [centers[0].x, centers[0].y, centers[0].z];
+    const capN: [number, number, number] = [-tangents[0].x, -tangents[0].y, -tangents[0].z];
+    for (let j = 0; j < rSegs; j++) {
+      pushTriWithHint(acc, c0, ringVerts[0][j + 1], ringVerts[0][j], [0.5, 0], [0, 0], [1, 0], capN);
+    }
+  }
+
+  if (capEnd) {
+    const c1: [number, number, number] = [centers[tSegs].x, centers[tSegs].y, centers[tSegs].z];
+    const capN: [number, number, number] = [tangents[tSegs].x, tangents[tSegs].y, tangents[tSegs].z];
+    for (let j = 0; j < rSegs; j++) {
+      pushTriWithHint(acc, c1, ringVerts[tSegs][j], ringVerts[tSegs][j + 1], [0.5, 1], [0, 1], [1, 1], capN);
+    }
+  }
+
+  return finishAccumToGeometry(acc, colorHex, shadeJitter);
 }

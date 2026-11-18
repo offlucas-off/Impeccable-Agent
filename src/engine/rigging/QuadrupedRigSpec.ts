@@ -41,6 +41,17 @@ export const QUADRUPED_BONE_DEFS: QuadrupedBoneDef[] = [
   { name: 'back_paw_r', parent: 'back_shin_r', position: [0, -0.26, 0.05] },
 ];
 
+export const QUADRUPED_WING_BONE_DEFS: QuadrupedBoneDef[] = [
+  // Left Wing
+  { name: 'wing_root_l', parent: 'spine_03', position: [0.16, 0.08, -0.02] },
+  { name: 'wing_elbow_l', parent: 'wing_root_l', position: [0.38, 0.16, -0.06] },
+  { name: 'wing_tip_l', parent: 'wing_elbow_l', position: [0.46, 0.04, -0.14] },
+  // Right Wing
+  { name: 'wing_root_r', parent: 'spine_03', position: [-0.16, 0.08, -0.02] },
+  { name: 'wing_elbow_r', parent: 'wing_root_r', position: [-0.38, 0.16, -0.06] },
+  { name: 'wing_tip_r', parent: 'wing_elbow_r', position: [-0.46, 0.04, -0.14] },
+];
+
 export interface CanonicalQuadrupedRig {
   rootBone: THREE.Bone;
   bones: THREE.Bone[];
@@ -48,11 +59,21 @@ export interface CanonicalQuadrupedRig {
   skeleton: THREE.Skeleton;
 }
 
-export function createCanonicalQuadrupedRig(scale = 1.0): CanonicalQuadrupedRig {
+export interface QuadrupedRigOptions {
+  includeWings?: boolean;
+}
+
+export function createCanonicalQuadrupedRig(
+  scale = 1.0,
+  options: QuadrupedRigOptions = {}
+): CanonicalQuadrupedRig {
   const boneByName = new Map<string, THREE.Bone>();
   const bones: THREE.Bone[] = [];
+  const defs = options.includeWings
+    ? [...QUADRUPED_BONE_DEFS, ...QUADRUPED_WING_BONE_DEFS]
+    : QUADRUPED_BONE_DEFS;
 
-  for (const def of QUADRUPED_BONE_DEFS) {
+  for (const def of defs) {
     const b = new THREE.Bone();
     b.name = def.name;
     b.position.set(def.position[0] * scale, def.position[1] * scale, def.position[2] * scale);
@@ -60,7 +81,7 @@ export function createCanonicalQuadrupedRig(scale = 1.0): CanonicalQuadrupedRig 
     bones.push(b);
   }
 
-  for (const def of QUADRUPED_BONE_DEFS) {
+  for (const def of defs) {
     if (def.parent) {
       const parent = boneByName.get(def.parent);
       const child = boneByName.get(def.name);

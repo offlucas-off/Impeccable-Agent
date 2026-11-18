@@ -504,6 +504,60 @@ export const WEAPON_MOUNT_SPEC = {
   offhandPropOffsetZ: 0.065,
 } as const;
 
+export interface WeaponGripPivotSpec {
+  /** Forward pitch around local X in radians (+15° to +25°). */
+  pitchRad: number;
+  /** Outward yaw around local Y in radians (-12°). */
+  yawRad: number;
+  /** Maximum allowed rear overhang behind handGripCenterZ (meters). */
+  maxRearOverhang: number;
+}
+
+const DEG2RAD = Math.PI / 180;
+const GRIP_1H: WeaponGripPivotSpec = {
+  pitchRad: 18 * DEG2RAD,
+  yawRad: -12 * DEG2RAD,
+  maxRearOverhang: 0.14,
+};
+const GRIP_2H: WeaponGripPivotSpec = {
+  pitchRad: 22 * DEG2RAD,
+  yawRad: -12 * DEG2RAD,
+  maxRearOverhang: 0.18,
+};
+const GRIP_POLEARM: WeaponGripPivotSpec = {
+  pitchRad: 24 * DEG2RAD,
+  yawRad: -12 * DEG2RAD,
+  maxRearOverhang: 0.22,
+};
+const GRIP_RANGED: WeaponGripPivotSpec = {
+  pitchRad: 0,
+  yawRad: 0,
+  maxRearOverhang: 0.2,
+};
+
+export const WEAPON_GRIP_PIVOTS: Partial<Record<WeaponMainStyleId, WeaponGripPivotSpec>> = {
+  longsword: GRIP_1H,
+  katana: GRIP_1H,
+  dagger: GRIP_1H,
+  twin_blade: GRIP_1H,
+  flail: GRIP_1H,
+  scepter_orb: GRIP_1H,
+  wand: GRIP_1H,
+  greatsword: GRIP_2H,
+  great_hammer: GRIP_2H,
+  battleaxe: GRIP_2H,
+  arcane_staff: GRIP_2H,
+  spear: GRIP_POLEARM,
+  halberd: GRIP_POLEARM,
+  scythe: GRIP_POLEARM,
+  recurve_bow: GRIP_RANGED,
+  crossbow: GRIP_RANGED,
+};
+
+export function getWeaponGripPivot(style: WeaponMainStyleId): WeaponGripPivotSpec {
+  return WEAPON_GRIP_PIVOTS[style] ?? GRIP_1H;
+}
+
 export function getRecommendedClipForWeapon(weaponMain: WeaponMainStyleId): string {
   switch (weaponMain) {
     case 'recurve_bow':

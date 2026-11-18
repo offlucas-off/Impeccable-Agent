@@ -5,6 +5,8 @@ import {
 } from '../PixelizerMaterial';
 import type { PixelizerObjectAttachment } from '../PixelizerPipeline';
 import { mergeColoredParts, prepareColoredPart } from './SdfVoxelPrimitives';
+import type { VfxRecipe } from '../vfx/VfxRecipe';
+import { createSimpleRecipe } from '../vfx/VfxTimelinePlayer';
 
 export type NwlSpellVfxId =
   | 'projetil.flecha'
@@ -114,6 +116,7 @@ export function buildNwlSpellVfx(
     NWL_SPELL_VFX_CATALOG.find((m) => m.id === id) ?? NWL_SPELL_VFX_CATALOG[0];
   const parts: THREE.BufferGeometry[] = [];
   let animKind: 'fly' | 'expand' | 'drop' | 'spin' | 'static' = 'expand';
+  let groundGeom: THREE.BufferGeometry | null = null;
 
   if (id === 'projetil.flecha' || id === 'flecha_perfurante') {
     animKind = 'fly';
@@ -190,7 +193,8 @@ export function buildNwlSpellVfx(
     rock.translate(0, 0.6, 0);
     const crater = new THREE.CylinderGeometry(1.35, 1.45, 0.12, 8);
     crater.translate(0, 0.06, 0);
-    parts.push(prepareColoredPart(rock, '#fa6a0a'), prepareColoredPart(crater, '#73172d'));
+    parts.push(prepareColoredPart(rock, '#fa6a0a'));
+    groundGeom = prepareColoredPart(crater, '#73172d');
   } else if (id === 'investida' || id === 'salto_sombrio') {
     animKind = 'fly';
     for (let i = 0; i < 3; i++) {
@@ -246,6 +250,14 @@ export function buildNwlSpellVfx(
   root.name = `SpellVfx_${id}`;
   root.add(mesh);
 
+  let groundMesh: THREE.Mesh | null = null;
+  if (groundGeom) {
+    groundMesh = new THREE.Mesh(groundGeom, mat);
+    groundMesh.name = `VFX_${id}_ground`;
+    groundMesh.castShadow = false;
+    root.add(groundMesh);
+  }
+
   const updatePhase = (p01: number) => {
     const p = Math.max(0, Math.min(1, p01));
     if (animKind === 'expand') {
@@ -255,20 +267,28 @@ export function buildNwlSpellVfx(
       mesh.rotation.y = p * Math.PI * 2;
     } else if (animKind === 'drop') {
       mesh.position.y = (1 - p) * 2.8;
+      if (groundMesh) {
+        const craterScale = p < 0.7 ? 0.35 : 0.35 + ((p - 0.7) / 0.3) * 0.65;
+        groundMesh.scale.set(craterScale, 1, craterScale);
+      }
     } else if (animKind === 'fly') {
       mesh.rotation.z = p * Math.PI * 2;
+    } else if (animKind === 'static') {
+      const pulse = 0.88 + Math.sin(p * Math.PI * 4) * 0.12;
+      mesh.scale.set(pulse, 1, pulse);
     }
   };
 
   return {
     id,
     meta,
-    triangleCount: getTriCount(merged),
+    triangleCount: getTriCount(merged) + (groundGeom ? getTriCount(groundGeom) : 0),
     root,
     materials: [mat],
     updatePhase,
     dispose: () => {
       merged.dispose();
+      groundGeom?.dispose();
       mat.dispose();
     },
   };
@@ -330,4 +350,85 @@ export function buildSpellVfxShowcase(
       for (const v of vfxItems) v.dispose();
     },
   };
+}
+
+function buildDefaultRecipe(meta: SpellMetaEntry): VfxRecipe {
+  const isProjectile = meta.category === 'projectile' || meta.id === 'seta_fogo' || meta.id === 'adaga_venenosa' || meta.id === 'flecha_perfurante';
+  const isTelegraph = meta.category === 'telegraph';
+  if (isTelegraph) {
+    return createSimpleRecipe(meta.id, [
+      { name: 'telegraph', durationSec: meta.durationSec, lightColor: meta.elementColor, lightIntensity: 0.8, lightDistance: 3.5 },
+    ]);
+  }
+  if (isProjectile) {
+    return createSimpleRecipe(meta.id, [
+      { name: 'cast', durationSec: 0.08, lightColor: meta.elementColor, lightIntensity: 1.2, lightDistance: 4.0, events: [{ atProgress: 0, audioCue: `cast_${meta.id}` }] },
+      { name: 'flight', durationSec: Math.max(0.2, meta.durationSec - 0.18) },
+      {
+        name: 'impact',
+        durationSec: 0.1,
+        lightColor: meta.elementColor,
+        lightIntensity: 1.8,
+        lightDistance: 5.0,
+        events: [
+          {
+            atProgress: 0,
+            shake: 0.14,
+            particles: { count: 14, colorHex: meta.elementColor, speedMin: 2.0, speedMax: 5.2, lifeSec: 0.35, sizeMin: 0.06, sizeMax: 0.13 },
+            audioCue: `hit_${meta.id}`,
+          },
+        ],
+      },
+    ]);
+  }
+  if (meta.id === 'meteoro') {
+    return createSimpleRecipe(meta.id, [
+      { name: 'telegraph', durationSec: 0.35, lightColor: '#b4202a', lightIntensity: 1.0, lightDistance: 5.0 },
+      { name: 'flight', durationSec: 0.45, lightColor: meta.elementColor, lightIntensity: 1.8, lightDistance: 6.0 },
+      {
+        name: 'impact',
+        durationSec: 0.15,
+        lightColor: meta.elementColor,
+        lightIntensity: 2.8,
+        lightDistance: 7.5,
+        events: [
+          {
+            atProgress: 0,
+            shake: 0.34,
+            hitStopSec: 0.045,
+            particles: { count: 28, colorHex: '#fa6a0a', speedMin: 2.5, speedMax: 7.0, lifeSec: 0.55, sizeMin: 0.08, sizeMax: 0.18 },
+            audioCue: 'impact_meteoro',
+          },
+        ],
+      },
+      { name: 'linger', durationSec: 0.25 },
+    ]);
+  }
+  return createSimpleRecipe(meta.id, [
+    { name: 'cast', durationSec: 0.1, lightColor: meta.elementColor, lightIntensity: 1.4, lightDistance: 4.5 },
+    {
+      name: 'impact',
+      durationSec: Math.max(0.2, meta.durationSec - 0.25),
+      lightColor: meta.elementColor,
+      lightIntensity: 1.9,
+      lightDistance: 5.5,
+      events: [
+        {
+          atProgress: 0.1,
+          shake: 0.16,
+          particles: { count: 16, colorHex: meta.elementColor, speedMin: 1.8, speedMax: 4.8, lifeSec: 0.4, sizeMin: 0.06, sizeMax: 0.14 },
+          audioCue: `cast_${meta.id}`,
+        },
+      ],
+    },
+    { name: 'linger', durationSec: 0.15 },
+  ]);
+}
+
+export const NWL_SPELL_RECIPES: Record<NwlSpellVfxId, VfxRecipe> = Object.fromEntries(
+  NWL_SPELL_VFX_CATALOG.map((meta) => [meta.id, buildDefaultRecipe(meta)])
+) as Record<NwlSpellVfxId, VfxRecipe>;
+
+export function getSpellVfxRecipe(id: NwlSpellVfxId): VfxRecipe {
+  return NWL_SPELL_RECIPES[id];
 }

@@ -27,6 +27,11 @@ import {
 import type { FinishMode } from '../engine/procedural/ProceduralGeometryKit';
 import { mergeColoredParts, prepareColoredPart } from '../engine/procedural/SdfVoxelPrimitives';
 import {
+  InstancedVfxParticlePool,
+  PixelTrailRenderer,
+  VfxLightPool,
+} from '../engine/vfx';
+import {
   buildNwlSpellVfx,
   type GeneratedSpellVfxResult,
   type NwlSpellVfxId,
@@ -354,6 +359,18 @@ export function createNwlPlaySandbox(
     shakeOffset.set(0, 0, 0);
   };
 
+  const vfxLightPool = new VfxLightPool(root as unknown as THREE.Scene, 6);
+  const vfxParticlePool = new InstancedVfxParticlePool(256, res());
+  root.add(vfxParticlePool.mesh);
+  const vfxTrailRenderer = new PixelTrailRenderer({
+    maxPoints: 28,
+    width: 0.22,
+    lifetimeSec: 0.28,
+    colorHex: '#fa6a0a',
+    sharedResources: res(),
+  });
+  root.add(vfxTrailRenderer.mesh);
+
   const attachSpellPointLight = (id: NwlSpellVfxId, targetRoot: THREE.Object3D): void => {
     let colorHex: string | null = null;
     let intensity = 2.0;
@@ -380,9 +397,8 @@ export function createNwlPlaySandbox(
       distance = 4.6;
     }
     if (!colorHex) return;
-    const pl = new THREE.PointLight(colorHex, intensity, distance, 1.5);
-    pl.position.set(0, 0.75, 0);
-    targetRoot.add(pl);
+    const pos = targetRoot.position.clone().setY(targetRoot.position.y + 0.75);
+    vfxLightPool.spawnFlash(pos, colorHex, intensity, distance, 0.45);
   };
 
   const spawnVfxAt = (id: NwlSpellVfxId, pos: THREE.Vector3, yaw = 0, durationOverride?: number) => {
@@ -1101,6 +1117,7 @@ export function createNwlPlaySandbox(
       p.lifeSec += clampedDt;
       p.vfx.root.position.addScaledVector(p.dir, p.speed * clampedDt);
       p.vfx.updatePhase(p.lifeSec / p.maxLifeSec);
+      vfxTrailRenderer.addPoint(p.vfx.root.position);
 
       let hit = p.lifeSec >= p.maxLifeSec;
       if (p.fromEnemy) {
@@ -1129,6 +1146,15 @@ export function createNwlPlaySandbox(
         }
       }
       if (hit) {
+        vfxParticlePool.spawnBurst(p.vfx.root.position, {
+          count: 10,
+          colorHex: p.vfx.meta.elementColor,
+          speedMin: 1.8,
+          speedMax: 4.5,
+          lifeSec: 0.3,
+          sizeMin: 0.06,
+          sizeMax: 0.12,
+        });
         p.vfx.root.removeFromParent();
         p.vfx.dispose();
         projectiles.splice(i, 1);
@@ -1146,6 +1172,10 @@ export function createNwlPlaySandbox(
         transientVfxs.splice(i, 1);
       }
     }
+
+    vfxLightPool.update(clampedDt);
+    vfxParticlePool.update(clampedDt);
+    vfxTrailRenderer.update(clampedDt);
   };
 
   return {

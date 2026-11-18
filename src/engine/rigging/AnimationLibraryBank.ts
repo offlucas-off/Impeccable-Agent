@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import {
   UAL_ANIMATION_CATALOG,
+  UAL_SKELETON_SPEC,
   type UalPlayableClipMeta,
 } from './UalRigSpec';
 
@@ -182,6 +183,93 @@ export function makeClipInPlace(clip: THREE.AnimationClip): THREE.AnimationClip 
       }
     }
   }
+  return cloned;
+}
+
+export interface ConditionClipForEquipmentOptions {
+  /** Override locomotion detection; if omitted, inferred from clip name. */
+  isLocomotion?: boolean;
+  /** Outward abduction on upperarm_r in degrees (default 11°, range 8°–15°). */
+  elbowFlareDeg?: number;
+  /** Minimum clearance from structural capsules in meters (default 0.03m). */
+  clearanceMeters?: number;
+  /** Effective weapon reach from hand_r in meters (default 0.85m). */
+  weaponLengthMeters?: number;
+}
+
+const CLEARANCE_CAPSULE_BONES = new Set(['spine_02', 'spine_03', 'Head', 'thigh_l', 'thigh_r']);
+
+/**
+ * Conditions an animation clip for equipped weapons:
+ * 1. Applies soft outward abduction on `upperarm_r` (+8°–15°) for locomotion clips.
+ * 2. Clamps `hand_r` quaternion against `UAL_SKELETON_SPEC.structuralCapsules`
+ *    (`spine_02`, `spine_03`, `Head`, `thigh_l`, `thigh_r`) to maintain >= 0.03m clearance.
+ */
+export function conditionClipForEquipment(
+  clip: THREE.AnimationClip,
+  opts: ConditionClipForEquipmentOptions = {}
+): THREE.AnimationClip {
+  const cloned = clip.clone();
+  const isLocomotion =
+    opts.isLocomotion ?? /walk|run|sprint|jog|strafe|locomotion|idle/i.test(clip.name);
+  const flareDeg = THREE.MathUtils.clamp(opts.elbowFlareDeg ?? 11, 8, 15);
+  const clearance = opts.clearanceMeters ?? 0.03;
+  const weaponLen = opts.weaponLengthMeters ?? 0.85;
+
+  const bonePosMap = new Map<string, THREE.Vector3>();
+  for (const b of UAL_SKELETON_SPEC.bones) {
+    bonePosMap.set(
+      b.name,
+      new THREE.Vector3(b.male.worldPos[0], b.male.worldPos[1], b.male.worldPos[2])
+    );
+  }
+  const handPos = bonePosMap.get('hand_r') ?? new THREE.Vector3(-0.35, 0.95, 0.05);
+  const capsules = UAL_SKELETON_SPEC.structuralCapsules
+    .filter((c) => CLEARANCE_CAPSULE_BONES.has(c.bone))
+    .map((c) => ({
+      center: bonePosMap.get(c.bone) ?? new THREE.Vector3(),
+      minDist: c.radius + clearance,
+    }));
+
+  const flareQuat = new THREE.Quaternion().setFromAxisAngle(
+    new THREE.Vector3(0, 0, 1),
+    THREE.MathUtils.degToRad(flareDeg)
+  );
+  const outwardDir = new THREE.Vector3(-1, 0, 0.35).normalize();
+  const q = new THREE.Quaternion();
+  const tipDir = new THREE.Vector3();
+  const tipPos = new THREE.Vector3();
+  const awayQuat = new THREE.Quaternion();
+
+  for (const track of cloned.tracks) {
+    if (isLocomotion && track.name === 'upperarm_r.quaternion') {
+      const vals = track.values;
+      for (let i = 0; i + 3 < vals.length; i += 4) {
+        q.set(vals[i], vals[i + 1], vals[i + 2], vals[i + 3]).multiply(flareQuat).normalize();
+        vals[i] = q.x;
+        vals[i + 1] = q.y;
+        vals[i + 2] = q.z;
+        vals[i + 3] = q.w;
+      }
+    } else if (track.name === 'hand_r.quaternion' && capsules.length > 0) {
+      const vals = track.values;
+      for (let i = 0; i + 3 < vals.length; i += 4) {
+        q.set(vals[i], vals[i + 1], vals[i + 2], vals[i + 3]);
+        tipDir.set(0, 0, 1).applyQuaternion(q);
+        tipPos.copy(handPos).addScaledVector(tipDir, weaponLen);
+        const needsClamp = capsules.some((cap) => tipPos.distanceTo(cap.center) < cap.minDist);
+        if (needsClamp) {
+          awayQuat.setFromUnitVectors(tipDir, outwardDir);
+          q.premultiply(awayQuat.slerp(new THREE.Quaternion(), 0.55)).normalize();
+          vals[i] = q.x;
+          vals[i + 1] = q.y;
+          vals[i + 2] = q.z;
+          vals[i + 3] = q.w;
+        }
+      }
+    }
+  }
+
   return cloned;
 }
 

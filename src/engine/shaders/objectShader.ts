@@ -157,6 +157,11 @@ uniform float uCameraFar;
 uniform float uIsOrthographic;
 uniform float uEncodeBloomAlpha;
 
+uniform float uDissolveThreshold;
+uniform vec2 uUvScrollSpeed;
+uniform float uFresnelPower;
+uniform float uVfxTime;
+
 vec3 samplePaletteDualLut(vec3 srgbColor, vec2 ditherCoord) {
   vec3 c = clamp(srgbColor, 0.0, 1.0);
   float N = uPaletteLutSize;
@@ -201,14 +206,23 @@ void main() {
     }
   }
 
+  vec2 scrolledUv = vUv + uUvScrollSpeed * uVfxTime;
+
   // Compute macropixel or UV-locked coordinate for ordered dithering
   vec2 ditherCoord = (uDitherSpace > 0.5)
-    ? floor(vUv * ((uHasAlbedoMap > 0.5) ? max(uAlbedoSize, vec2(32.0)) : vec2(128.0)))
+    ? floor(scrolledUv * ((uHasAlbedoMap > 0.5) ? max(uAlbedoSize, vec2(32.0)) : vec2(128.0)))
     : ((uPixelated > 0.5)
         ? floor((fragPx - floor(uPixelGridOriginPx + 0.5)) / P)
         : fragPx);
 
-  vec4 albedoSample = (uHasAlbedoMap > 0.5) ? texture(uAlbedoMap, vUv) : vec4(1.0);
+  if (uDissolveThreshold > 0.001) {
+    float dissolveDither = sampleDitherMatrix(uDitherTex, ditherCoord, uDitherSize);
+    if (dissolveDither < uDissolveThreshold) {
+      discard;
+    }
+  }
+
+  vec4 albedoSample = (uHasAlbedoMap > 0.5) ? texture(uAlbedoMap, scrolledUv) : vec4(1.0);
   float finalAlpha = albedoSample.a * uAlpha * vVertexColor.a;
 
   if (finalAlpha < uAlphaClipThreshold) {
@@ -368,10 +382,16 @@ void main() {
     rimSrgb = linearToSrgb(uRimColorLinear * uRimIntensity * rimStep);
   }
 
-  // Add HDR emission + stepped rim light
-  vec3 emissionSample = (uHasEmissionMap > 0.5) ? texture(uEmissionMap, vUv).rgb : vec3(1.0);
+  // Add HDR emission + stepped rim light + optional VFX fresnel
+  vec3 emissionSample = (uHasEmissionMap > 0.5) ? texture(uEmissionMap, scrolledUv).rgb : vec3(1.0);
   vec3 emissiveTint = mix(vec3(1.0), vVertexColor.rgb, uEmissiveVertexColorWeight);
-  vec3 emitLinear = emissionSample * uEmissionColorLinear * emissiveTint * uEmissionIntensity;
+  float vfxFresnelBoost = 0.0;
+  if (uFresnelPower > 0.001) {
+    float vfxNdv = clamp(dot(N, V), 0.0, 1.0);
+    float vfxFresnel = pow(1.0 - vfxNdv, max(0.5, uFresnelPower));
+    vfxFresnelBoost = step(0.35, vfxFresnel) * 0.65;
+  }
+  vec3 emitLinear = emissionSample * uEmissionColorLinear * emissiveTint * (uEmissionIntensity + vfxFresnelBoost);
   vec3 emissionSrgb = linearToSrgb(emitLinear);
   vec3 combinedSrgb = celSrgb + rimSrgb + emissionSrgb;
 

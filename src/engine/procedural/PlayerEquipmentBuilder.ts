@@ -11,6 +11,7 @@ import {
 import {
   createCanonicalUalRig,
   type CanonicalUalRig,
+  type UalSocketName,
 } from '../rigging/UalRigSpec';
 import type { PixelizerMaterialOptions } from '../types';
 import {
@@ -18,7 +19,9 @@ import {
   MATERIAL_THEMES,
   SHELL_CLEARANCE,
   WEAPON_MOUNT_SPEC,
+  getWeaponGripPivot,
   type EquipmentStyleLoadout,
+  type WeaponMainStyleId,
 } from './EquipmentCatalog';
 import {
   bakeTaggedPartsAsset,
@@ -581,6 +584,36 @@ function buildSlotAttachments(
   const thigh = getBoneSpanY(rig, 'thigh_l', 0.40);
   const calf = getBoneSpanY(rig, 'calf_l', 0.43);
 
+function applyWeaponGripPivotAndClamp(
+  parts: TaggedGeometryPart[],
+  style: WeaponMainStyleId
+): void {
+  const pivot = getWeaponGripPivot(style);
+  const gY = WEAPON_MOUNT_SPEC.handGripCenterY;
+  const gZ = WEAPON_MOUNT_SPEC.handGripCenterZ;
+  const minZ = gZ - pivot.maxRearOverhang;
+  for (const part of parts) {
+    const geo = part.geometry;
+    if (pivot.pitchRad !== 0 || pivot.yawRad !== 0) {
+      geo.translate(0, -gY, -gZ);
+      if (pivot.pitchRad !== 0) geo.rotateX(pivot.pitchRad);
+      if (pivot.yawRad !== 0) geo.rotateY(pivot.yawRad);
+      geo.translate(0, gY, gZ);
+    }
+    const pos = geo.getAttribute('position');
+    if (pos) {
+      let clamped = false;
+      for (let i = 0; i < pos.count; i++) {
+        if (pos.getZ(i) < minZ) {
+          pos.setZ(i, minZ);
+          clamped = true;
+        }
+      }
+      if (clamped) pos.needsUpdate = true;
+    }
+  }
+}
+
   const bakeBoneParts = (
     boneName: string,
     parts: TaggedGeometryPart[],
@@ -588,6 +621,9 @@ function buildSlotAttachments(
     opts: { isMetal?: boolean; inspectUvs?: boolean } = {}
   ) => {
     if (parts.length === 0) return;
+    if ((slot as string) === 'weapon_main' && boneName === 'hand_r') {
+      applyWeaponGripPivotAndClamp(parts, styleKey as WeaponMainStyleId);
+    }
     const baked = bakeTaggedPartsAsset(parts, {
       finishMode: cfg.finishMode,
       texelsPerMeter: 64,
@@ -1920,10 +1956,11 @@ function buildSlotAttachments(
           shieldGeos.push(spikeGeo);
         }
         for (const g of shieldGeos) {
+          g.rotateZ(Math.PI);
           g.rotateY(-Math.PI * 0.5);
           g.translate(
             WEAPON_MOUNT_SPEC.shieldBraceOffsetX,
-            lArm * 0.52 + WEAPON_MOUNT_SPEC.shieldBraceOffsetY,
+            lArm * 0.50 + WEAPON_MOUNT_SPEC.shieldBraceOffsetY,
             WEAPON_MOUNT_SPEC.shieldBraceOffsetZ
           );
         }
@@ -2176,7 +2213,6 @@ export function buildNwlPlayerCharacter(
 
     for (let i = 0; i < specs.length; i++) {
       const spec = specs[i];
-      const bone = rig.boneByName.get(spec.boneName) ?? rig.rootBone;
       const mat = new PixelizerMaterial(
         bakedToMaterialOptions(spec.baked, {
           pixelated: true,
@@ -2208,7 +2244,21 @@ export function buildNwlPlayerCharacter(
         },
         gridReference: rig.armature,
       } satisfies PixelizerObjectAttachment;
-      bone.add(mesh);
+      const socketName: UalSocketName | null =
+        ((slot as string) === 'offhand' || (slot as string) === 'weapon_off') && spec.boneName === 'lowerarm_l'
+          ? 'shield_l'
+          : spec.boneName === 'hand_r'
+            ? 'hand_r'
+            : spec.boneName === 'hand_l'
+              ? 'hand_l'
+              : spec.boneName === 'Head'
+                ? 'head'
+                : null;
+      const mountParent =
+        (socketName ? rig.sockets[socketName] : undefined) ??
+        rig.boneByName.get(spec.boneName) ??
+        rig.rootBone;
+      mountParent.add(mesh);
       mounted.push({ mesh, mat });
 
       if (spec.baked.uvReport) {

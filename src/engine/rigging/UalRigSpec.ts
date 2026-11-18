@@ -3,7 +3,7 @@ import ualSkeletonSpecRaw from '../../data/ualSkeletonSpec.json';
 import ualAnimationCatalogRaw from '../../data/ualAnimationCatalog.json';
 
 export type UalGenderProfile = 'male' | 'female';
-export type UalSocketName = 'hand_r' | 'hand_l' | 'head' | 'back';
+export type UalSocketName = 'hand_r' | 'hand_l' | 'head' | 'back' | 'shield_l';
 export type UalRigBuildMode = 'skinned_mesh' | 'rigid_segments';
 
 export interface UalBoneTransformSpec {
@@ -33,6 +33,7 @@ export interface UalCapsuleSpec {
 export interface UalSocketSpec {
   bone: string;
   offset: [number, number, number];
+  rotation?: [number, number, number];
   bladeAxis: string;
   role: string;
 }
@@ -107,6 +108,48 @@ export interface CanonicalUalRig {
  * Constructs the canonical 65-bone Quaternius Universal Humanoid Armature
  * matching exact rest translations, orientations, and bone order of UAL 1 & 2.
  */
+const DEFAULT_SHIELD_L_SOCKET: UalSocketSpec = {
+  bone: 'lowerarm_l',
+  offset: [0, 0, 0],
+  rotation: [0, 0, 0],
+  bladeAxis: '-Y',
+  role: 'Left forearm shield mount',
+};
+
+function getSocketSpec(socketKey: UalSocketName): UalSocketSpec {
+  const fromSpec = (UAL_SKELETON_SPEC.sockets as Partial<Record<UalSocketName, UalSocketSpec>>)[
+    socketKey
+  ];
+  if (fromSpec) return fromSpec;
+  return DEFAULT_SHIELD_L_SOCKET;
+}
+
+function attachUalSockets(
+  boneByName: Map<string, THREE.Bone>,
+  rootBone: THREE.Bone
+): Record<UalSocketName, THREE.Group> {
+  const socketKeys: UalSocketName[] = ['hand_r', 'hand_l', 'head', 'back', 'shield_l'];
+  const sockets = {} as Record<UalSocketName, THREE.Group>;
+  for (const socketKey of socketKeys) {
+    const sk = getSocketSpec(socketKey);
+    const hostBone = boneByName.get(sk.bone) ?? rootBone;
+    let marker = hostBone.children.find(
+      (c): c is THREE.Group => c.name === `Socket_${socketKey}` && c instanceof THREE.Group
+    );
+    if (!marker) {
+      marker = new THREE.Group();
+      marker.name = `Socket_${socketKey}`;
+      marker.position.set(sk.offset[0], sk.offset[1], sk.offset[2]);
+      if (sk.rotation) {
+        marker.rotation.set(sk.rotation[0], sk.rotation[1], sk.rotation[2]);
+      }
+      hostBone.add(marker);
+    }
+    sockets[socketKey] = marker;
+  }
+  return sockets;
+}
+
 export function createCanonicalUalRig(
   profile: UalGenderProfile = 'male',
   scale = 1.0
@@ -145,17 +188,7 @@ export function createCanonicalUalRig(
   }
 
   const rootBone = boneByName.get('root') ?? bones[0];
-
-  const sockets = {} as Record<UalSocketName, THREE.Group>;
-  (Object.keys(UAL_SKELETON_SPEC.sockets) as UalSocketName[]).forEach((socketKey) => {
-    const sk = UAL_SKELETON_SPEC.sockets[socketKey];
-    const marker = new THREE.Group();
-    marker.name = `Socket_${socketKey}`;
-    marker.position.set(sk.offset[0], sk.offset[1], sk.offset[2]);
-    const hostBone = boneByName.get(sk.bone) ?? rootBone;
-    hostBone.add(marker);
-    sockets[socketKey] = marker;
-  });
+  const sockets = attachUalSockets(boneByName, rootBone);
 
   armature.updateMatrixWorld(true);
   const skeleton = new THREE.Skeleton(bones);
@@ -250,21 +283,7 @@ export function findUalRigInHierarchy(root: THREE.Object3D): CanonicalUalRig | n
   const rootBone = boneByName.get('root') ?? orderedBones[0];
   if (!rootBone) return null;
 
-  const sockets = {} as Record<UalSocketName, THREE.Group>;
-  (Object.keys(UAL_SKELETON_SPEC.sockets) as UalSocketName[]).forEach((socketKey) => {
-    const sk = UAL_SKELETON_SPEC.sockets[socketKey];
-    const hostBone = boneByName.get(sk.bone) ?? rootBone;
-    let marker = hostBone.children.find(
-      (c): c is THREE.Group => c.name === `Socket_${socketKey}` && c instanceof THREE.Group
-    );
-    if (!marker) {
-      marker = new THREE.Group();
-      marker.name = `Socket_${socketKey}`;
-      marker.position.set(sk.offset[0], sk.offset[1], sk.offset[2]);
-      hostBone.add(marker);
-    }
-    sockets[socketKey] = marker;
-  });
+  const sockets = attachUalSockets(boneByName, rootBone);
 
   let existingSkel: THREE.Skeleton | null = null;
   root.traverse((obj) => {

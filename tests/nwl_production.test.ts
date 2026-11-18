@@ -72,7 +72,7 @@ describe('NWL Production Pipeline (Presets, Modular Gear, City, Bestiary, Dungeo
       const fullBox = new THREE.Box3().setFromObject(hero.root);
       const fullSize = new THREE.Vector3();
       fullBox.getSize(fullSize);
-      expect(fullSize.y).toBeLessThan(2.30); // Wizard hat / upright staff clearance
+      expect(fullSize.y).toBeLessThan(2.35); // Wizard hat / upright staff with grip pitch clearance
       expect(hero.rig.bones.length).toBe(65);
 
       // Zero cloth physics capes

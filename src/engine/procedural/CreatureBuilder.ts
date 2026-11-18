@@ -9,6 +9,11 @@ import { bakeTaggedPartsAsset, type BakedAssetResult } from './PixelMaterialSynt
 import {
   makeBeveledBox,
   makeLatheProfile,
+  makeSdfOrganicMesh,
+  makeSplineLoftGeometry,
+  sdCapsule,
+  sdEllipsoid,
+  sminPoly,
   tagPart,
   type FinishMode,
   type TaggedGeometryPart,
@@ -194,7 +199,7 @@ export function buildQuadrupedCreature(
   const finishMode: FinishMode = options.finishMode ?? 'textured_ao';
   const materialSeed = options.materialSeed ?? 501;
 
-  const rig = createCanonicalQuadrupedRig(spec.scale);
+  const rig = createCanonicalQuadrupedRig(spec.scale, { includeWings: Boolean(spec.hasWings) });
   const root = new THREE.Group();
   root.name = `NWL_Quad_${id}`;
   root.add(rig.rootBone);
@@ -325,30 +330,128 @@ export function buildQuadrupedCreature(
     ),
   ];
   if (spec.hasWings) {
-    for (const [wIdx, sx] of [-1, 1].entries()) {
-      const wingArm = makeBeveledBox(0.72 * s, 0.08 * s, 0.12 * s, 0.015 * s, spec.primaryHex);
-      wingArm.rotateZ(sx * 0.42);
-      wingArm.translate(sx * 0.45 * s, bh * 0.42, -0.05 * s);
-      const wingMembrane = makeBeveledBox(0.86 * s, 0.035 * s, 0.46 * s, 0.01 * s, spec.secondaryHex);
-      wingMembrane.rotateZ(sx * 0.32);
-      wingMembrane.translate(sx * 0.58 * s, bh * 0.34, -0.22 * s);
-      spine3Parts.push(
-        tagPart(wingArm, `wyvern_wing_arm_${wIdx}`, 'stitched_leather', spec.primaryHex),
-        tagPart(wingMembrane, `wyvern_wing_mem_${wIdx}`, 'woven_cloth', spec.secondaryHex)
-      );
+    if (id === 'elder_wyvern') {
+      // Articulated wing bones (wing_root -> wing_elbow -> wing_tip) with scalloped patagium
+      for (const [wIdx, side] of (['l', 'r'] as const).entries()) {
+        const sx = side === 'l' ? 1 : -1;
+        const armGeo = makeSplineLoftGeometry(
+          [
+            [0, 0, 0],
+            [sx * 0.14 * s, 0.08 * s, -0.02 * s],
+            [sx * 0.36 * s, 0.15 * s, -0.05 * s],
+          ],
+          [0.065 * s, 0.052 * s, 0.042 * s],
+          8,
+          10,
+          { colorHex: spec.primaryHex }
+        );
+        attachBaked(`wing_root_${side}`, [
+          tagPart(armGeo, `wyvern_wing_arm_${wIdx}`, 'dragon_scales', spec.primaryHex),
+        ]);
+
+        const sparGeo = makeSplineLoftGeometry(
+          [
+            [0, 0, 0],
+            [sx * 0.22 * s, 0.03 * s, -0.06 * s],
+            [sx * 0.46 * s, 0.04 * s, -0.14 * s],
+          ],
+          [0.042 * s, 0.028 * s, 0.012 * s],
+          7,
+          10,
+          { colorHex: spec.primaryHex }
+        );
+
+        // Scalloped patagium membrane (3-ribbed wing web)
+        const memGeo = new THREE.BufferGeometry();
+        const memVerts: number[] = [];
+        const memUvs: number[] = [];
+        const ribs: [number, number, number][] = [
+          [0, 0, 0],
+          [sx * 0.16 * s, 0.02 * s, -0.05 * s],
+          [sx * 0.32 * s, 0.03 * s, -0.09 * s],
+          [sx * 0.46 * s, 0.04 * s, -0.14 * s],
+        ];
+        const trail: [number, number, number][] = [
+          [-sx * 0.06 * s, -0.18 * s, -0.34 * s],
+          [sx * 0.08 * s, -0.14 * s, -0.30 * s],
+          [sx * 0.24 * s, -0.09 * s, -0.26 * s],
+          [sx * 0.42 * s, -0.02 * s, -0.20 * s],
+        ];
+        for (let r = 0; r < ribs.length - 1; r++) {
+          const a = ribs[r];
+          const b = ribs[r + 1];
+          const c = trail[r + 1];
+          const d = trail[r];
+          // Double-sided membrane quads
+          memVerts.push(...a, ...b, ...c, ...a, ...c, ...d);
+          memVerts.push(...a, ...c, ...b, ...a, ...d, ...c);
+          const u0 = r / (ribs.length - 1);
+          const u1 = (r + 1) / (ribs.length - 1);
+          memUvs.push(u0, 0, u1, 0, u1, 1, u0, 0, u1, 1, u0, 1);
+          memUvs.push(u0, 0, u1, 1, u1, 0, u0, 0, u0, 1, u1, 1);
+        }
+        memGeo.setAttribute('position', new THREE.Float32BufferAttribute(memVerts, 3));
+        memGeo.setAttribute('uv', new THREE.Float32BufferAttribute(memUvs, 2));
+        memGeo.computeVertexNormals();
+        prepareColoredPart(memGeo, spec.secondaryHex, 0.04);
+
+        attachBaked(`wing_elbow_${side}`, [
+          tagPart(sparGeo, `wyvern_wing_spar_${wIdx}`, 'dragon_scales', spec.primaryHex),
+          tagPart(memGeo, `wyvern_wing_mem_${wIdx}`, 'wing_membrane', spec.secondaryHex),
+        ]);
+      }
+    } else {
+      for (const [wIdx, sx] of [-1, 1].entries()) {
+        const wingArm = makeBeveledBox(0.72 * s, 0.08 * s, 0.12 * s, 0.015 * s, spec.primaryHex);
+        wingArm.rotateZ(sx * 0.42);
+        wingArm.translate(sx * 0.45 * s, bh * 0.42, -0.05 * s);
+        const wingMembrane = makeBeveledBox(0.86 * s, 0.035 * s, 0.46 * s, 0.01 * s, spec.secondaryHex);
+        wingMembrane.rotateZ(sx * 0.32);
+        wingMembrane.translate(sx * 0.58 * s, bh * 0.34, -0.22 * s);
+        spine3Parts.push(
+          tagPart(wingArm, `wyvern_wing_arm_${wIdx}`, 'stitched_leather', spec.primaryHex),
+          tagPart(wingMembrane, `wyvern_wing_mem_${wIdx}`, 'woven_cloth', spec.secondaryHex)
+        );
+      }
     }
   }
   attachBaked('spine_03', spine3Parts);
 
   // Neck & Head & Jaw & Ears
-  const neckParts: TaggedGeometryPart[] = [
-    tagPart(
-      makeBeveledBox(bw * 0.72, 0.26 * s, 0.24 * s, 0.025 * s, spec.primaryHex),
-      'quad_neck',
-      'stitched_leather',
-      spec.primaryHex
-    ),
-  ];
+  const neckParts: TaggedGeometryPart[] =
+    id === 'elder_wyvern'
+      ? [
+          tagPart(
+            makeSplineLoftGeometry(
+              [
+                [0, -0.06 * s, -0.04 * s],
+                [0, 0.04 * s, 0.02 * s],
+                [0, 0.14 * s, 0.08 * s],
+                [0, 0.22 * s, 0.12 * s],
+              ],
+              [
+                [bw * 0.44, 0.14 * s],
+                [bw * 0.36, 0.12 * s],
+                [bw * 0.3, 0.1 * s],
+                [bw * 0.26, 0.09 * s],
+              ],
+              10,
+              12,
+              { colorHex: spec.primaryHex }
+            ),
+            'quad_neck',
+            'dragon_scales',
+            spec.primaryHex
+          ),
+        ]
+      : [
+          tagPart(
+            makeBeveledBox(bw * 0.72, 0.26 * s, 0.24 * s, 0.025 * s, spec.primaryHex),
+            'quad_neck',
+            'stitched_leather',
+            spec.primaryHex
+          ),
+        ];
   if (spec.hasMane) {
     neckParts.push(
       tagPart(
@@ -409,6 +512,25 @@ export function buildQuadrupedCreature(
     }
   }
   attachBaked('head', headParts);
+  if (id === 'elder_wyvern') {
+    const wyvernSkullGeo = makeSdfOrganicMesh(
+      (x, y, z) => {
+        const cranium = sdEllipsoid(x, y, z, 0, 0.02 * s, -0.02 * s, 0.13 * s, 0.11 * s, 0.15 * s);
+        const snout = sdCapsule(x, y, z, 0, -0.01 * s, 0.06 * s, 0, -0.03 * s, 0.26 * s, 0.065 * s);
+        const browL = sdEllipsoid(x, y, z, 0.08 * s, 0.06 * s, 0.04 * s, 0.045 * s, 0.035 * s, 0.07 * s);
+        const browR = sdEllipsoid(x, y, z, -0.08 * s, 0.06 * s, 0.04 * s, 0.045 * s, 0.035 * s, 0.07 * s);
+        return sminPoly(sminPoly(cranium, snout, 0.05 * s), Math.min(browL, browR), 0.03 * s);
+      },
+      [-0.22 * s, -0.18 * s, -0.22 * s],
+      [0.22 * s, 0.2 * s, 0.36 * s],
+      22,
+      spec.primaryHex,
+      { flatShaded: false }
+    );
+    attachBaked('head', [
+      tagPart(wyvernSkullGeo, 'wyvern_skull_sdf', 'dragon_scales', spec.primaryHex),
+    ], false, '_skull');
+  }
 
   attachBaked('jaw', [
     tagPart(
@@ -433,21 +555,43 @@ export function buildQuadrupedCreature(
   }
 
   // Tail
-  attachBaked('tail_01', [
-    tagPart(
-      makeLatheProfile(
-        [
-          [0.052 * s, 0],
-          [0.036 * s, -0.22 * s],
-        ],
-        6,
+  if (id === 'elder_wyvern') {
+    attachBaked('tail_01', [
+      tagPart(
+        makeSplineLoftGeometry(
+          [
+            [0, 0, 0],
+            [0, -0.02 * s, -0.18 * s],
+            [0, -0.06 * s, -0.38 * s],
+            [0, -0.03 * s, -0.58 * s],
+          ],
+          [0.075 * s, 0.055 * s, 0.035 * s, 0.014 * s],
+          8,
+          14,
+          { colorHex: spec.primaryHex }
+        ),
+        'quad_tail1',
+        'dragon_scales',
         spec.primaryHex
       ),
-      'quad_tail1',
-      'stitched_leather',
-      spec.primaryHex
-    ),
-  ]);
+    ]);
+  } else {
+    attachBaked('tail_01', [
+      tagPart(
+        makeLatheProfile(
+          [
+            [0.052 * s, 0],
+            [0.036 * s, -0.22 * s],
+          ],
+          6,
+          spec.primaryHex
+        ),
+        'quad_tail1',
+        'stitched_leather',
+        spec.primaryHex
+      ),
+    ]);
+  }
   attachBaked('tail_02', [
     tagPart(
       makeLatheProfile(

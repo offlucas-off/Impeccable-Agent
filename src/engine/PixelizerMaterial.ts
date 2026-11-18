@@ -173,6 +173,11 @@ export class PixelizerMaterial extends THREE.ShaderMaterial {
         uCameraFar: { value: 100.0 },
         uIsOrthographic: { value: 1.0 },
         uEncodeBloomAlpha: { value: 0.0 },
+
+        uDissolveThreshold: { value: 0.0 },
+        uUvScrollSpeed: { value: new THREE.Vector2(0, 0) },
+        uFresnelPower: { value: 0.0 },
+        uVfxTime: { value: 0.0 },
       },
     ]);
 
@@ -206,6 +211,29 @@ export class PixelizerMaterial extends THREE.ShaderMaterial {
   public setWorkflow(workflow: ShadingWorkflow): void {
     this.options.workflow = workflow;
     this.syncUniforms();
+  }
+
+  public setVfxParams(params: {
+    dissolveThreshold?: number;
+    uvScrollSpeed?: [number, number];
+    fresnelPower?: number;
+    time?: number;
+  }): void {
+    if (params.dissolveThreshold !== undefined) {
+      this.uniforms.uDissolveThreshold.value = params.dissolveThreshold;
+    }
+    if (params.uvScrollSpeed !== undefined) {
+      (this.uniforms.uUvScrollSpeed.value as THREE.Vector2).set(
+        params.uvScrollSpeed[0],
+        params.uvScrollSpeed[1]
+      );
+    }
+    if (params.fresnelPower !== undefined) {
+      this.uniforms.uFresnelPower.value = params.fresnelPower;
+    }
+    if (params.time !== undefined) {
+      this.uniforms.uVfxTime.value = params.time;
+    }
   }
 
   public applySharedResources(resources: PixelizerMaterialResources): void {
