@@ -470,35 +470,32 @@ function sampleMaterialRecipe(
 
     case 'wood_planks':
     case 'timber_frame': {
+      // Painterly Bark / stylized wood: elongated vertical brushstrokes blending bark & moss tones without noisy grain
       const plankW = w >= 14 ? 6 : 4;
       const plankIdx = Math.floor(lx / plankW);
       const seam = lx % plankW === 0 && w >= 8;
-      const narrowFiber =
-        w < 6 || h < 6 ? ((Math.floor(lx / 2) + Math.floor(ly / 2) + seed) % 3 - 1) * 0.04 : 0;
-      const clusterY = Math.floor(ly / 3);
-      const grain =
-        Math.sin((clusterY + plankIdx * 2) * 0.75 + hash2d(plankIdx, 0, seed) * 4) * 0.045 +
-        narrowFiber;
-      const plankVar = (hash2d(plankIdx, 19, seed) - 0.5) * 0.085;
-
-      const knotY = Math.floor(h * (0.35 + 0.35 * hash2d(plankIdx, 7, seed)));
-      const isKnot =
-        w >= 14 &&
-        h >= 14 &&
-        hash2d(plankIdx, 31, seed) > 0.68 &&
-        Math.abs(lx % plankW - Math.floor(plankW * 0.5)) <= 1 &&
-        Math.abs(ly - knotY) <= 1;
+      const strokeA = smoothNoise2d(lx * 0.16, ly * 0.045, seed + 11) - 0.5;
+      const strokeB = smoothNoise2d(lx * 0.32 + 3.1, ly * 0.07, seed + 29) - 0.5;
+      const barkFlow = strokeA * 0.22 + strokeB * 0.14;
+      const plankVar = (hash2d(plankIdx, 19, seed) - 0.5) * 0.06;
+      const mossMask = smoothNoise2d(lx * 0.12, ly * 0.08, seed + 53);
+      const warmShadow: [number, number, number] = [44, 28, 20];
+      const bottomOcc = v < 0.3 ? (0.3 - v) / 0.3 : 0;
 
       if (seam) {
-        return { rgb: shadeHueShiftRgb(baseRgb, -0.11), height: 0.45 };
+        return { rgb: shadeHueShiftRgb(baseRgb, -0.12), height: 0.45 };
       }
-      if (isKnot) {
-        return { rgb: shadeHueShiftRgb(baseRgb, -0.09), height: 0.58 };
+
+      let rgb = shadeHueShiftRgb(baseRgb, plankVar + barkFlow + gradV * 0.32);
+      if (mossMask > 0.58) {
+        rgb = mixRgb(rgb, accentRgb, (mossMask - 0.58) * 0.9);
       }
-      const endWeather = (ly <= 1 || ly >= h - 2) && h >= 12 ? -0.04 : 0;
+      if (bottomOcc > 0) {
+        rgb = mixRgb(rgb, warmShadow, bottomOcc * 0.28);
+      }
       return {
-        rgb: shadeHueShiftRgb(baseRgb, plankVar + grain + endWeather + gradV * 0.28),
-        height: 0.68 + grain * 0.22,
+        rgb,
+        height: 0.66 + barkFlow * 0.35,
       };
     }
 
@@ -554,20 +551,22 @@ function sampleMaterialRecipe(
     case 'forged_steel':
     case 'brushed_gold':
     case 'rarity_armor': {
-      // Painterly stylized armor: smooth zenithal gradient + soft sheen band, subtle trim only on large primary plates
-      const sheenBand = Math.exp(-Math.pow((v - 0.68) * 2.6, 2)) * 0.14;
-      const diag = w < 5 || h < 5 ? ((lx * 0.9 + ly * 1.3) / Math.max(2, w + h) - 0.5) * 0.08 : 0;
-      const macroBrush =
-        (smoothNoise2d(Math.floor(lx / 4) * 0.35, Math.floor(ly / 4) * 0.4, seed) - 0.5) * 0.045 +
-        diag;
-      const borderHigh = onPerimeter && w >= 14 && h >= 14;
+      // Stylized Color Blocking + Vertical Gradient (brighter top, warm-tinted occlusion at bottom) + 1-2 texel plate linework
+      const sheenBand = Math.exp(-Math.pow((v - 0.72) * 2.4, 2)) * 0.14;
+      const warmShadow: [number, number, number] = [48, 28, 24];
+      const bottomOcc = v < 0.32 ? (0.32 - v) / 0.32 : 0;
+      const borderHigh = onPerimeter && w >= 8 && h >= 8;
       const innerInlay =
         !onPerimeter &&
         (lx === 1 || lx === w - 2 || ly === 1 || ly === h - 2) &&
-        w >= 18 &&
-        h >= 18;
+        w >= 12 &&
+        h >= 12;
 
-      let rgb = shadeHueShiftRgb(baseRgb, gradV * 0.38 + sheenBand + macroBrush);
+      const plateFlow = (smoothNoise2d(lx * 0.22, ly * 0.22, seed + 41) - 0.5) * 0.18;
+      let rgb = shadeHueShiftRgb(baseRgb, gradV * 0.55 + sheenBand + plateFlow);
+      if (bottomOcc > 0) {
+        rgb = mixRgb(rgb, warmShadow, bottomOcc * 0.24);
+      }
       let heightVal = 0.66 + sheenBand * 0.14;
       let emissiveRgb: [number, number, number] | undefined;
 
@@ -585,8 +584,8 @@ function sampleMaterialRecipe(
           recipe === 'rarity_armor' && rarityTier === 'epic'
             ? mixRgb(baseRgb, crimsonAccent, 0.25)
             : baseRgb;
-        rgb = shadeHueShiftRgb(grooveAccent, -0.09);
-        heightVal = 0.58;
+        rgb = shadeHueShiftRgb(grooveAccent, -0.12);
+        heightVal = 0.56;
       }
 
       if (
@@ -609,44 +608,52 @@ function sampleMaterialRecipe(
 
     case 'stitched_leather':
     case 'woven_cloth': {
-      const pleatPeriod = Math.max(5, Math.min(8, Math.floor(w / 3)));
-      const pleatPhase = ((lx % pleatPeriod) / pleatPeriod) * Math.PI * 2;
-      const pleatWave = Math.sin(pleatPhase) * (recipe === 'woven_cloth' ? 0.055 : 0.032);
-      const crease = smoothNoise2d(Math.floor(lx / 4) * 0.38, Math.floor(ly / 4) * 0.3, seed + 51) - 0.5;
+      // Color Blocking + Vertical Gradient + subtle Painted Folds (soft diagonal/curved crease) + 1-2 texel seam/border linework
+      const warmShadow: [number, number, number] = [52, 30, 24];
+      const bottomOcc = v < 0.32 ? (0.32 - v) / 0.32 : 0;
+      const foldCurve = Math.sin((lx * 0.42 + ly * 0.24) * 0.55 + Math.cos(ly * 0.18) * 1.35);
+      const paintedFold = foldCurve * (recipe === 'woven_cloth' ? 0.065 : 0.042);
+
       const isStitch =
         (lx === 1 || lx === w - 2 || ly === 1 || ly === h - 2) &&
         ((lx + ly) % 2 === 0) &&
-        w >= 12 &&
-        h >= 12;
-      const isHemTrim = (ly === 0 || ly === h - 1) && w >= 12 && h >= 12;
+        w >= 10 &&
+        h >= 10;
+      const isHemTrim = (ly === 0 || ly === h - 1 || lx === 0 || lx === w - 1) && w >= 10 && h >= 10;
       if (isStitch) {
         const stitchCol = recipe === 'stitched_leather' ? mixRgb(accentRgb, brassAccent, 0.35) : mixRgb(accentRgb, silverTrim, 0.3);
         return { rgb: shadeHueShiftRgb(stitchCol, 0.12), height: 0.74 };
       }
       if (isHemTrim) {
         const hemCol = recipe === 'woven_cloth' ? mixRgb(accentRgb, crimsonAccent, 0.25) : accentRgb;
-        return { rgb: shadeHueShiftRgb(hemCol, 0.07), height: 0.72 };
+        return { rgb: shadeHueShiftRgb(hemCol, -0.06), height: 0.72 };
       }
-      const rgb = shadeHueShiftRgb(baseRgb, crease * 0.11 + pleatWave + gradV * 0.38);
-      return { rgb, height: 0.62 + crease * 0.08 + pleatWave * 0.25 };
+      let rgb = shadeHueShiftRgb(baseRgb, paintedFold + gradV * 0.42);
+      if (bottomOcc > 0) {
+        rgb = mixRgb(rgb, warmShadow, bottomOcc * 0.24);
+      }
+      return { rgb, height: 0.62 + paintedFold * 0.28 };
     }
 
     case 'human_skin':
     case 'goblin_skin':
     case 'orc_hide':
     case 'demon_hide': {
-      const organic = smoothNoise2d(lx * 0.24, ly * 0.24, seed + 93) - 0.5;
+      // Clean Color Blocking + Vertical Gradient (brighter top, warm-tinted occlusion at bottom) without high-frequency noise
+      const warmShadow: [number, number, number] = [58, 30, 24];
+      const bottomOcc = v < 0.34 ? (0.34 - v) / 0.34 : 0;
+      const softTone = (smoothNoise2d(lx * 0.08, ly * 0.08, seed + 93) - 0.5) * 0.08;
       const ridge =
         recipe === 'demon_hide' || recipe === 'orc_hide'
-          ? Math.abs(Math.sin(lx * 0.55 + ly * 0.55 + organic * 2.5)) * 0.14
+          ? Math.abs(Math.sin(lx * 0.32 + ly * 0.28)) * 0.07
           : 0;
-      const scaleSpot =
-        recipe === 'demon_hide' && hash2d(Math.floor(lx / 2), Math.floor(ly / 2), seed + 17) > 0.72
-          ? -0.14
-          : 0;
+      let rgb = shadeHueShiftRgb(baseRgb, softTone + ridge + gradV * 0.55);
+      if (bottomOcc > 0) {
+        rgb = mixRgb(rgb, warmShadow, bottomOcc * 0.26);
+      }
       return {
-        rgb: shadeHueShiftRgb(baseRgb, organic * 0.22 + ridge + scaleSpot + gradV * 0.7),
-        height: 0.66 + organic * 0.2 + ridge,
+        rgb,
+        height: 0.66 + softTone * 0.25 + ridge,
       };
     }
 

@@ -399,7 +399,43 @@ export function buildQuadrupedCreature(
           tagPart(sparGeo, `wyvern_wing_spar_${wIdx}`, 'dragon_scales', spec.primaryHex),
           tagPart(memGeo, `wyvern_wing_mem_${wIdx}`, 'wing_membrane', spec.secondaryHex),
         ]);
+
+        // Muscular shoulder / wing-root collar bridging spine_03 to wing_root
+        const wingCollarGeo = makeSplineLoftGeometry(
+          [
+            [sx * bw * 0.3, bh * 0.16, 0.02 * s],
+            [sx * bw * 0.48, bh * 0.25, 0.0],
+            [sx * (bw * 0.56 + 0.05 * s), bh * 0.32, -0.02 * s],
+          ],
+          [0.105 * s, 0.085 * s, 0.068 * s],
+          8,
+          10,
+          { colorHex: spec.primaryHex }
+        );
+        spine3Parts.push(
+          tagPart(wingCollarGeo, `wyvern_wing_collar_${wIdx}`, 'dragon_scales', spec.primaryHex)
+        );
       }
+
+      // Smooth neck-base collar bridging spine_03 to neck
+      const neckCollarGeo = makeSplineLoftGeometry(
+        [
+          [0, bh * 0.1, 0.04 * s],
+          [0, bh * 0.26, 0.1 * s],
+          [0, bh * 0.42, 0.14 * s],
+        ],
+        [
+          [bw * 0.52, 0.16 * s],
+          [bw * 0.48, 0.15 * s],
+          [bw * 0.44, 0.14 * s],
+        ],
+        10,
+        12,
+        { colorHex: spec.primaryHex }
+      );
+      spine3Parts.push(
+        tagPart(neckCollarGeo, 'wyvern_neck_collar', 'dragon_scales', spec.primaryHex)
+      );
     } else {
       for (const [wIdx, sx] of [-1, 1].entries()) {
         const wingArm = makeBeveledBox(0.72 * s, 0.08 * s, 0.12 * s, 0.015 * s, spec.primaryHex);
