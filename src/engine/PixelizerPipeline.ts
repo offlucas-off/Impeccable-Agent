@@ -34,7 +34,7 @@ import type {
   SnapOptions,
 } from './types';
 
-export type VisualStylePresetId = 'nwl_snes' | 'hades_lab';
+export type VisualStylePresetId = 'stylized_crisp' | 'nwl_snes' | 'hades_lab';
 
 export interface PixelizerObjectAttachment {
   snap: SnapOptions;
@@ -106,10 +106,10 @@ export class PixelizerPipeline {
   private paletteMap = new Map<string, { config: ColorPaletteConfig; lut: PaletteLutPair | null }>();
   private rampMap = new Map<string, { config: LightingRampConfig; tex: THREE.DataTexture }>();
 
-  public activePaletteId = 'snes_pal_nwl';
+  public activePaletteId = 'resurrect64';
   public activeDitherId = 'bayer4x4';
-  public activeRampId = 'three_band';
-  public activeStylePreset: VisualStylePresetId = 'nwl_snes';
+  public activeRampId = 'crisp_stylized';
+  public activeStylePreset: VisualStylePresetId = 'stylized_crisp';
 
   private lastGrid: ComputedCameraGrid | null = null;
   private renderWidth = 1;
@@ -142,21 +142,21 @@ export class PixelizerPipeline {
 
     this.pipelineConfig = {
       filterMode: 'only_pixelized',
-      usePixelExpansion: true,
+      usePixelExpansion: false,
       useDepthTestForIdOutlines: true,
       idDepthThreshold: 0.008,
-      useNormalsForEdgeDetection: true,
-      normalEdgeThreshold: 0.22,
+      useNormalsForEdgeDetection: false,
+      normalEdgeThreshold: 0.68,
       useDepthTestForEdges: true,
-      edgeDepthThreshold: 0.012,
-      edgeHighlightStrength: 0.9,
-      edgeBevelStrength: 1.0,
+      edgeDepthThreshold: 0.015,
+      edgeHighlightStrength: 0.0,
+      edgeBevelStrength: 0.08,
       lightDirection: [0.55, 0.85, 0.5],
-      lightColor: '#fff6e8',
+      lightColor: '#fff8ee',
       lightIntensity: 1.35,
-      ambientSkyColor: '#7f93c2',
-      ambientIntensity: 0.55,
-      backgroundColor: '#13161f',
+      ambientSkyColor: '#9fb2d8',
+      ambientIntensity: 0.65,
+      backgroundColor: '#cfd5e0',
       backgroundTransparent: false,
       debugView: 'final',
       splitCompare: false,
@@ -417,7 +417,46 @@ export class PixelizerPipeline {
     scene?: THREE.Scene
   ): void {
     this.activeStylePreset = preset;
-    if (preset === 'nwl_snes') {
+    if (preset === 'stylized_crisp') {
+      this.activePaletteId = 'resurrect64';
+      this.activeDitherId = 'bayer4x4';
+      this.activeRampId = 'crisp_stylized';
+      this.pipelineConfig.filterMode = 'only_pixelized';
+      this.pipelineConfig.usePixelExpansion = false;
+      this.pipelineConfig.useDepthTestForIdOutlines = true;
+      this.pipelineConfig.useNormalsForEdgeDetection = false;
+      this.pipelineConfig.normalEdgeThreshold = 0.68;
+      this.pipelineConfig.edgeHighlightStrength = 0.0;
+      this.pipelineConfig.edgeBevelStrength = 0.08;
+      this.pipelineConfig.backgroundColor = '#cfd5e0';
+      this.pipelineConfig.lightColor = '#fff8ee';
+      this.pipelineConfig.lightIntensity = 1.35;
+      this.pipelineConfig.ambientSkyColor = '#9fb2d8';
+      this.pipelineConfig.ambientIntensity = 0.65;
+      this.pipelineConfig.bloomEnabled = false;
+      if (scene) {
+        scene.traverse((obj) => {
+          if (obj instanceof THREE.Mesh) {
+            const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+            for (const m of mats) {
+              if (m instanceof PixelizerMaterial && m.options.pixelated) {
+                m.updateOptions({
+                  pixelSize: 1,
+                  outlineColor: '#222736',
+                  outlineAlpha: 0.22,
+                  outlineWidthSteps: 1,
+                  edgeHighlight: 0.0,
+                  edgeBevelWeight: 0.1,
+                  rimIntensity: 0.0,
+                  useColorGrading: false,
+                  ditherSpace: 'object_uv',
+                });
+              }
+            }
+          }
+        });
+      }
+    } else if (preset === 'nwl_snes') {
       this.activePaletteId = 'snes_pal_nwl';
       this.activeDitherId = 'bayer4x4';
       this.activeRampId = 'three_band';
@@ -445,11 +484,13 @@ export class PixelizerPipeline {
                 m.updateOptions({
                   pixelSize: obj.userData.nwlFixedPixelSize ?? 3,
                   outlineColor: '#14101c',
+                  outlineAlpha: 1.0,
                   outlineWidthSteps: isBoss ? 2 : 1,
                   edgeHighlight: 0.35,
                   edgeBevelWeight: 0.75,
                   rimIntensity: isBoss ? 0.35 : 0.0,
                   rimColor: '#fa6a0a',
+                  useColorGrading: true,
                   ditherSpace: 'screen_macropixel',
                 });
               }
@@ -485,6 +526,7 @@ export class PixelizerPipeline {
                 m.updateOptions({
                   pixelSize: 1,
                   outlineColor: '#07060b',
+                  outlineAlpha: 1.0,
                   outlineWidthSteps: 2,
                   edgeHighlight: 0.14,
                   edgeBevelWeight: 0.5,
@@ -492,6 +534,7 @@ export class PixelizerPipeline {
                   rimIntensity: 0.72,
                   rimPower: 2.8,
                   rimSteppedThreshold: 0.34,
+                  useColorGrading: true,
                   ditherSpace: 'object_uv',
                 });
               }

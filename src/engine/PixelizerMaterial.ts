@@ -72,13 +72,13 @@ export class PixelizerMaterial extends THREE.ShaderMaterial {
     const white = getFallbackWhiteTexture();
     const resolved: Required<PixelizerMaterialOptions> = {
       pixelated: options.pixelated ?? true,
-      pixelSize: options.pixelSize ?? 3,
+      pixelSize: options.pixelSize ?? 1,
       objectId: options.objectId ?? 1,
-      outlineColor: options.outlineColor ?? '#14101c',
-      outlineAlpha: options.outlineAlpha ?? 1.0,
+      outlineColor: options.outlineColor ?? '#222736',
+      outlineAlpha: options.outlineAlpha ?? 0.22,
       outlineWidthSteps: options.outlineWidthSteps === 2 ? 2 : 1,
-      edgeHighlight: options.edgeHighlight ?? 0.35,
-      edgeBevelWeight: options.edgeBevelWeight ?? 0.65,
+      edgeHighlight: options.edgeHighlight ?? 0.0,
+      edgeBevelWeight: options.edgeBevelWeight ?? 0.1,
       baseColor: options.baseColor ?? '#ffffff',
       alpha: options.alpha ?? 1.0,
       alphaClipThreshold: options.alphaClipThreshold ?? 0.1,
@@ -106,10 +106,10 @@ export class PixelizerMaterial extends THREE.ShaderMaterial {
       rimIntensity: options.rimIntensity ?? 0.0,
       rimPower: options.rimPower ?? 3.2,
       rimSteppedThreshold: options.rimSteppedThreshold ?? 0.35,
-      useColorGrading: options.useColorGrading ?? true,
+      useColorGrading: options.useColorGrading ?? false,
       paletteId: options.paletteId ?? '',
       ditherPatternId: options.ditherPatternId ?? '',
-      ditherSpace: options.ditherSpace ?? 'screen_macropixel',
+      ditherSpace: options.ditherSpace ?? 'object_uv',
     };
 
     const uniforms = THREE.UniformsUtils.merge([

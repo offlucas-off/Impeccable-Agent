@@ -84,7 +84,7 @@ export function buildProceduralStructure(
   const seed = Math.floor(options.seed ?? 77);
   const rng = createSeededRng(seed);
   const visualStyle = options.visualStyle ?? 'lowpoly';
-  const px = options.pixelSize ?? 3;
+  const px = options.pixelSize ?? 1;
   const finishMode: FinishMode =
     visualStyle === 'voxel' ? 'textured_ao' : (options.finishMode ?? 'textured_ao');
   const aoStrength = options.aoStrength ?? 0.55;

@@ -3,13 +3,22 @@ import { describe, expect, it } from 'vitest';
 import {
   BUILTIN_LIGHTING_RAMPS,
   BUILTIN_PALETTES,
+  BOOTS_STYLES,
+  CHEST_STYLES,
   EQUIP_SLOTS,
+  GLOVES_STYLES,
+  HELMET_STYLES,
   ITEM_RARITIES,
+  LEGS_STYLES,
   NWL_MONSTER_IDS,
   NWL_NPC_IDS,
   NWL_SPELL_VFX_CATALOG,
   PLAYER_CLASSES,
+  PixelizerPipeline,
   RARITY_COLOR_TABLE,
+  SHOULDER_STYLES,
+  WEAPON_MAIN_STYLES,
+  WEAPON_OFFHAND_STYLES,
   buildGreenRuinsFloor1,
   buildNwlMonster,
   buildNwlNpc,
@@ -17,6 +26,7 @@ import {
   buildNwlSpellVfx,
   buildNwlStarterCity,
   buildNwlTilesetCatalog,
+  createRandomStyleLoadout,
   listAllPlayerEquipmentCatalog,
 } from '../src/engine';
 
@@ -236,5 +246,77 @@ describe('NWL Production Pipeline (Presets, Modular Gear, City, Bestiary, Dungeo
       vfx.updatePhase(0.5);
       vfx.dispose();
     }
+  });
+
+  it('defaults to Form-First stylized_crisp ramp/pipeline and supports modular EquipmentStyleLoadout mix-and-match', () => {
+    const crispRamp = BUILTIN_LIGHTING_RAMPS.find((r) => r.id === 'crisp_stylized');
+    expect(crispRamp).toBeDefined();
+    expect(PixelizerPipeline).toBeDefined();
+
+    // Verify all style catalogs can be mounted and swapped live without errors
+    const hero = buildNwlPlayerCharacter({
+      classId: 'knight',
+      rarity: 'epic',
+      styleLoadout: {
+        helmet: 'winged_helm',
+        chest: 'royal_tabard',
+        shoulders: 'heavy_pauldrons',
+        legs: 'battle_kilt',
+        boots: 'steel_sabatons',
+        gloves: 'heavy_gauntlets',
+        weaponMain: 'battleaxe',
+        weaponOffhand: 'tower_shield',
+      },
+    });
+
+    expect(hero.styleLoadout.helmet).toBe('winged_helm');
+    expect(hero.styleLoadout.weaponMain).toBe('battleaxe');
+    expect(hero.styleLoadout.weaponOffhand).toBe('tower_shield');
+    expect(hero.meshes.length).toBeGreaterThan(10);
+
+    // Swap individual style slots
+    hero.equipStyleSlot('helmet', 'wizard_hat');
+    expect(hero.styleLoadout.helmet).toBe('wizard_hat');
+    hero.equipStyleSlot('weaponMain', 'crossbow');
+    expect(hero.styleLoadout.weaponMain).toBe('crossbow');
+
+    // Exercise every main weapon and offhand style
+    for (const w of WEAPON_MAIN_STYLES) {
+      hero.equipStyleSlot('weaponMain', w.id);
+      expect(hero.styleLoadout.weaponMain).toBe(w.id);
+    }
+    for (const off of WEAPON_OFFHAND_STYLES) {
+      hero.equipStyleSlot('weaponOffhand', off.id);
+      expect(hero.styleLoadout.weaponOffhand).toBe(off.id);
+    }
+    for (const h of HELMET_STYLES) {
+      hero.equipStyleSlot('helmet', h.id);
+      expect(hero.styleLoadout.helmet).toBe(h.id);
+    }
+    for (const c of CHEST_STYLES) {
+      hero.equipStyleSlot('chest', c.id);
+      expect(hero.styleLoadout.chest).toBe(c.id);
+    }
+    for (const sh of SHOULDER_STYLES) {
+      hero.equipStyleSlot('shoulders', sh.id);
+      expect(hero.styleLoadout.shoulders).toBe(sh.id);
+    }
+    for (const l of LEGS_STYLES) {
+      hero.equipStyleSlot('legs', l.id);
+      expect(hero.styleLoadout.legs).toBe(l.id);
+    }
+    for (const b of BOOTS_STYLES) {
+      hero.equipStyleSlot('boots', b.id);
+      expect(hero.styleLoadout.boots).toBe(b.id);
+    }
+    for (const g of GLOVES_STYLES) {
+      hero.equipStyleSlot('gloves', g.id);
+      expect(hero.styleLoadout.gloves).toBe(g.id);
+    }
+
+    const rnd = createRandomStyleLoadout(() => 0.42);
+    hero.setStyleLoadout(rnd, 'legendary');
+    expect(hero.loadout.weapon).toBe('legendary');
+    hero.dispose();
   });
 });

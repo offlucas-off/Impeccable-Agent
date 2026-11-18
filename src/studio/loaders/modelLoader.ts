@@ -686,11 +686,11 @@ export function prepareLoadedObject(
         pixelated: true,
         pixelSize: basePx,
         objectId: assignedId,
-        outlineColor: '#14101c',
-        outlineAlpha: 1.0,
-        edgeHighlight: 0.35,
-        edgeBevelWeight: 0.65,
-        useColorGrading: true,
+        outlineColor: '#222736',
+        outlineAlpha: 0.42,
+        edgeHighlight: 0.22,
+        edgeBevelWeight: 0.45,
+        useColorGrading: false,
         ...defaults,
       };
 

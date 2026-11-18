@@ -83,17 +83,17 @@ function createVfxMaterial(
   const mat = new PixelizerMaterial(
     {
       pixelated: true,
-      pixelSize: 2,
+      pixelSize: 1,
       objectId,
-      outlineColor: '#14101c',
-      outlineAlpha: 1,
+      outlineColor: '#222736',
+      outlineAlpha: 0.42,
       baseColor: '#ffffff',
       emissionColor: emissive,
       emissionIntensity: 0.75,
-      edgeHighlight: 0.4,
-      edgeBevelWeight: 0.5,
+      edgeHighlight: 0.22,
+      edgeBevelWeight: 0.45,
       smoothness: 0.1,
-      useColorGrading: true,
+      useColorGrading: false,
     },
     res
   );

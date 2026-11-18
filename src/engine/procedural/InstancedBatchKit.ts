@@ -54,7 +54,7 @@ export function buildInstancedPropBatch(options: InstancedBatchOptions): THREE.I
     snap: {
       snapPosition: false,
       alignPixelGrid: true,
-      alignmentPixelSize: options.pixelSize ?? 3,
+      alignmentPixelSize: options.pixelSize ?? 1,
       angleSnapMode: 'none',
       angleResolutionDeg: 45,
     },

@@ -21,6 +21,7 @@ export * from './procedural/VertexAndTexelBaker';
 export * from './procedural/PropBuilder';
 export * from './procedural/CharacterBuilder';
 export * from './procedural/TilesetStructureSolver';
+export * from './procedural/EquipmentCatalog';
 export * from './procedural/PlayerEquipmentBuilder';
 export * from './procedural/NpcBuilder';
 export * from './procedural/CityBuilder';

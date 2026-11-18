@@ -259,7 +259,7 @@ export function buildNwlMonster(
 ): GeneratedMonsterResult {
   const spec = NWL_MONSTER_SPECS[id];
   const rigScale = spec.targetHeightM / 1.829;
-  const px = options.pixelSize ?? 3;
+  const px = options.pixelSize ?? 1;
   const objId = options.objectId ?? 85;
   const finishMode: FinishMode = options.finishMode ?? 'textured_ao';
   const seed = Math.floor(options.seed ?? 303);

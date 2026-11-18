@@ -3,6 +3,16 @@ import type { LightingRampConfig } from './types';
 
 export const BUILTIN_LIGHTING_RAMPS: LightingRampConfig[] = [
   {
+    id: 'crisp_stylized',
+    name: 'Crisp Stylized (Form-First)',
+    smooth: true,
+    stops: [
+      { position: 0.0, color: '#6b7796' },
+      { position: 0.35, color: '#c4cce0' },
+      { position: 0.82, color: '#ffffff' },
+    ],
+  },
+  {
     id: 'three_band',
     name: '3-Band Cel (Classic)',
     smooth: false,

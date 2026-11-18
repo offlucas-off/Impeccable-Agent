@@ -182,7 +182,7 @@ export function createNwlPlaySandbox(
     {
       classId: 'knight',
       rarity: 'normal',
-      pixelSize: 3,
+      pixelSize: 1,
       objectId: 10,
       finishMode: sandboxFinish.finishMode,
       materialSeed: sandboxFinish.seed,
@@ -411,13 +411,14 @@ export function createNwlPlaySandbox(
     const mat = new PixelizerMaterial(
       {
         pixelated: true,
-        pixelSize: 2,
+        pixelSize: 1,
         objectId: 185,
-        outlineColor: '#14101c',
+        outlineColor: '#222736',
+        outlineAlpha: 0.42,
         baseColor: '#ffffff',
         emissionColor: pal.glow,
         emissionIntensity: 0.7,
-        useColorGrading: true,
+        useColorGrading: false,
       },
       res()
     );

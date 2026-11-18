@@ -25,6 +25,27 @@ import {
 } from '../../engine/procedural/NwlTilesetDungeon';
 import type { UnwrapMetricsSummary } from '../../engine/procedural/PixelMaterialSynth';
 import {
+  BOOTS_STYLES,
+  CHEST_STYLES,
+  CLASS_DEFAULT_STYLE_LOADOUT,
+  GLOVES_STYLES,
+  HELMET_STYLES,
+  LEGS_STYLES,
+  SHOULDER_STYLES,
+  WEAPON_MAIN_STYLES,
+  WEAPON_OFFHAND_STYLES,
+  createRandomStyleLoadout,
+  type BootsStyleId,
+  type ChestStyleId,
+  type EquipmentStyleLoadout,
+  type GlovesStyleId,
+  type HelmetStyleId,
+  type LegsStyleId,
+  type ShoulderStyleId,
+  type WeaponMainStyleId,
+  type WeaponOffhandStyleId,
+} from '../../engine/procedural/EquipmentCatalog';
+import {
   buildNwlPlayerCharacter,
   type EquipSlot,
   type ItemRarity,
@@ -109,16 +130,16 @@ export function mountGeneratorPanel(
         <div class="slider-row">
           <div class="slider-head">
             <span>Vertex &amp; Texel AO</span>
-            <span id="gen-ao-val" class="slider-val">0.55</span>
+            <span id="gen-ao-val" class="slider-val">0.28</span>
           </div>
-          <input id="gen-ao-str" type="range" min="0" max="1" step="0.05" value="0.55" />
+          <input id="gen-ao-str" type="range" min="0" max="1" step="0.05" value="0.28" />
         </div>
         <div class="slider-row">
           <div class="slider-head">
             <span>Normal Relief</span>
-            <span id="gen-norm-val" class="slider-val">0.36</span>
+            <span id="gen-norm-val" class="slider-val">0.14</span>
           </div>
-          <input id="gen-norm-str" type="range" min="0" max="1" step="0.05" value="0.36" />
+          <input id="gen-norm-str" type="range" min="0" max="1" step="0.05" value="0.14" />
         </div>
         <div id="gen-quality-stats" class="voxel-stats-box">
           <span>UV &amp; Texture Quality Gate pronto</span>
@@ -160,7 +181,40 @@ export function mountGeneratorPanel(
             <option value="gloves">Slot: Luva</option>
             <option value="weapon">Slot: Arma</option>
           </select>
-          <button id="gen-btn-swap-slot" class="btn btn-sm" type="button">Trocar Peça</button>
+          <button id="gen-btn-swap-slot" class="btn btn-sm" type="button">Trocar Raridade</button>
+        </div>
+
+        <div style="border-top:1px solid var(--border-subtle);padding-top:6px;margin-top:6px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;">
+            <span style="font-size:11px;font-weight:600;color:var(--text-secondary);">Mix &amp; Match Modular</span>
+            <button id="gen-btn-randomize-gear" class="btn btn-sm" type="button">Aleatorizar</button>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;">
+            <select id="gen-style-helmet" class="select-ctrl select-ctrl-sm" title="Elmo">
+              ${HELMET_STYLES.map((s) => `<option value="${s.id}">${s.labelPt}</option>`).join('')}
+            </select>
+            <select id="gen-style-chest" class="select-ctrl select-ctrl-sm" title="Peitoral">
+              ${CHEST_STYLES.map((s) => `<option value="${s.id}">${s.labelPt}</option>`).join('')}
+            </select>
+            <select id="gen-style-shoulders" class="select-ctrl select-ctrl-sm" title="Ombreiras">
+              ${SHOULDER_STYLES.map((s) => `<option value="${s.id}">${s.labelPt}</option>`).join('')}
+            </select>
+            <select id="gen-style-gloves" class="select-ctrl select-ctrl-sm" title="Luvas">
+              ${GLOVES_STYLES.map((s) => `<option value="${s.id}">${s.labelPt}</option>`).join('')}
+            </select>
+            <select id="gen-style-legs" class="select-ctrl select-ctrl-sm" title="Calça / Kilt">
+              ${LEGS_STYLES.map((s) => `<option value="${s.id}">${s.labelPt}</option>`).join('')}
+            </select>
+            <select id="gen-style-boots" class="select-ctrl select-ctrl-sm" title="Botas">
+              ${BOOTS_STYLES.map((s) => `<option value="${s.id}">${s.labelPt}</option>`).join('')}
+            </select>
+            <select id="gen-style-weapon-main" class="select-ctrl select-ctrl-sm" title="Arma Principal">
+              ${WEAPON_MAIN_STYLES.map((s) => `<option value="${s.id}">${s.labelPt}</option>`).join('')}
+            </select>
+            <select id="gen-style-weapon-offhand" class="select-ctrl select-ctrl-sm" title="Mão Secundária">
+              ${WEAPON_OFFHAND_STYLES.map((s) => `<option value="${s.id}">${s.labelPt}</option>`).join('')}
+            </select>
+          </div>
         </div>
       </div>
     </div>
@@ -338,17 +392,76 @@ export function mountGeneratorPanel(
     valNormStr.textContent = Number(rngNormStr.value).toFixed(2);
   });
 
+  const selClass = container.querySelector<HTMLSelectElement>('#gen-nwl-class')!;
+  const selRarity = container.querySelector<HTMLSelectElement>('#gen-nwl-rarity')!;
+  const selHelmet = container.querySelector<HTMLSelectElement>('#gen-style-helmet')!;
+  const selChest = container.querySelector<HTMLSelectElement>('#gen-style-chest')!;
+  const selShoulders = container.querySelector<HTMLSelectElement>('#gen-style-shoulders')!;
+  const selGloves = container.querySelector<HTMLSelectElement>('#gen-style-gloves')!;
+  const selLegs = container.querySelector<HTMLSelectElement>('#gen-style-legs')!;
+  const selBoots = container.querySelector<HTMLSelectElement>('#gen-style-boots')!;
+  const selWeaponMain = container.querySelector<HTMLSelectElement>('#gen-style-weapon-main')!;
+  const selWeaponOffhand = container.querySelector<HTMLSelectElement>('#gen-style-weapon-offhand')!;
+
+  const getStyleLoadout = (): EquipmentStyleLoadout => ({
+    helmet: selHelmet.value as HelmetStyleId,
+    chest: selChest.value as ChestStyleId,
+    shoulders: selShoulders.value as ShoulderStyleId,
+    gloves: selGloves.value as GlovesStyleId,
+    legs: selLegs.value as LegsStyleId,
+    boots: selBoots.value as BootsStyleId,
+    weaponMain: selWeaponMain.value as WeaponMainStyleId,
+    weaponOffhand: selWeaponOffhand.value as WeaponOffhandStyleId,
+  });
+
+  const applyStyleLoadoutToUi = (loadout: EquipmentStyleLoadout) => {
+    selHelmet.value = loadout.helmet;
+    selChest.value = loadout.chest;
+    selShoulders.value = loadout.shoulders;
+    selGloves.value = loadout.gloves;
+    selLegs.value = loadout.legs;
+    selBoots.value = loadout.boots;
+    selWeaponMain.value = loadout.weaponMain;
+    selWeaponOffhand.value = loadout.weaponOffhand;
+  };
+
+  selClass.addEventListener('change', () => {
+    const classId = selClass.value as PlayerClassId;
+    applyStyleLoadoutToUi(CLASS_DEFAULT_STYLE_LOADOUT[classId]);
+  });
+
+  const styleSelects = [
+    selHelmet,
+    selChest,
+    selShoulders,
+    selGloves,
+    selLegs,
+    selBoots,
+    selWeaponMain,
+    selWeaponOffhand,
+  ];
+  for (const sel of styleSelects) {
+    sel.addEventListener('change', () => {
+      const player = ctx.getCurrentPlayerInstance();
+      if (!player) return;
+      const next = getStyleLoadout();
+      player.setStyleLoadout(next);
+      updateQualityStats(player.root.userData.unwrapMetrics as UnwrapMetricsSummary | undefined);
+      statusEl.textContent = `Mix & Match ao vivo: ${next.weaponMain} + ${next.weaponOffhand} (${next.helmet})`;
+    });
+  }
+
   const runNwlHero = () => {
-    const classId = container.querySelector<HTMLSelectElement>('#gen-nwl-class')!
-      .value as PlayerClassId;
-    const rarity = container.querySelector<HTMLSelectElement>('#gen-nwl-rarity')!
-      .value as ItemRarity;
+    const classId = selClass.value as PlayerClassId;
+    const rarity = selRarity.value as ItemRarity;
     const finish = getFinishOptions();
+    const styleLoadout = getStyleLoadout();
     const player = buildNwlPlayerCharacter(
       {
         classId,
         rarity,
-        pixelSize: 3,
+        styleLoadout,
+        pixelSize: 1,
         finishMode: finish.finishMode,
         materialSeed: finish.seed,
         aoStrength: finish.aoStrength,
@@ -357,7 +470,7 @@ export function mountGeneratorPanel(
       ctx.getSharedMaterialResources()
     );
     ctx.mountNwlPlayer(player);
-    statusEl.textContent = `Herói ${classId.toUpperCase()} (${rarity}) no PlayerBaseShell 1.79m (6 slots · ${finish.finishMode})`;
+    statusEl.textContent = `Herói ${classId.toUpperCase()} (${rarity}) · ${styleLoadout.weaponMain} + ${styleLoadout.helmet} (${finish.finishMode})`;
   };
 
   container.querySelector('#gen-btn-nwl-hero')!.addEventListener('click', () => {
@@ -365,10 +478,23 @@ export function mountGeneratorPanel(
     runNwlHero();
   });
 
+  container.querySelector('#gen-btn-randomize-gear')!.addEventListener('click', () => {
+    const rnd = createRandomStyleLoadout();
+    applyStyleLoadoutToUi(rnd);
+    const player = ctx.getCurrentPlayerInstance();
+    if (player) {
+      player.setStyleLoadout(rnd);
+      updateQualityStats(player.root.userData.unwrapMetrics as UnwrapMetricsSummary | undefined);
+      statusEl.textContent = `Equipamento aleatório: ${rnd.weaponMain} + ${rnd.weaponOffhand} · ${rnd.helmet}`;
+    } else {
+      lastGeneratedAction = runNwlHero;
+      runNwlHero();
+    }
+  });
+
   container.querySelector('#gen-btn-swap-slot')!.addEventListener('click', () => {
     const slot = container.querySelector<HTMLSelectElement>('#gen-slot-sel')!.value as EquipSlot;
-    const rarity = container.querySelector<HTMLSelectElement>('#gen-nwl-rarity')!
-      .value as ItemRarity;
+    const rarity = selRarity.value as ItemRarity;
     const player = ctx.getCurrentPlayerInstance();
     if (!player) {
       statusEl.textContent = 'Gere primeiro o Herói Modular NWL acima para trocar peças ao vivo!';
@@ -385,7 +511,7 @@ export function mountGeneratorPanel(
     const res = buildNwlNpc(
       npcId,
       {
-        pixelSize: 3,
+        pixelSize: 1,
         finishMode: finish.finishMode,
         seed: finish.seed,
         aoStrength: finish.aoStrength,
@@ -409,7 +535,7 @@ export function mountGeneratorPanel(
     const res = buildNwlMonster(
       mId,
       {
-        pixelSize: 3,
+        pixelSize: 1,
         finishMode: finish.finishMode,
         seed: finish.seed,
         aoStrength: finish.aoStrength,

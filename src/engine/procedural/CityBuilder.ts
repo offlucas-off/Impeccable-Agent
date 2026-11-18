@@ -179,7 +179,7 @@ export function buildEnterableNwlHouse(
   const aoStrength = options.aoStrength ?? 0.55;
   const normalStrength = options.normalStrength ?? 0.36;
 
-  const px = 3;
+  const px = 1;
   const w = spec.tilesW * NWL_TILE;
   const d = spec.tilesD * NWL_TILE;
   const wallH = 3.0; // NWL official 2 tiles height = 3.0m
@@ -782,7 +782,7 @@ export function buildNwlStarterCity(
   root.name = 'NWL_Cidade_Principal_Portais';
   const materials: PixelizerMaterial[] = [];
   const colliders: CityColliderBox[] = [];
-  const px = 3;
+  const px = 1;
 
   // 1. Base Island Ground & 1.5m Tile Plaza (27m x 27m)
   const sheet = isTextured

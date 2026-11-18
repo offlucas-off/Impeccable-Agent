@@ -150,7 +150,7 @@ export function buildNwlTilesetCatalog(
   const root = new THREE.Group();
   root.name = `NWL_Tileset_${biome}`;
   const materials: PixelizerMaterial[] = [];
-  const px = 3;
+  const px = 1;
 
   const palFloorA =
     biome === 'green_ruins'
@@ -602,7 +602,7 @@ export function buildGreenRuinsFloor1(
   const rng = createSeededRng(seed);
   const cols = 19;
   const rows = 27;
-  const px = 3;
+  const px = 1;
 
   const walkableGrid: boolean[][] = Array.from({ length: rows }, () =>
     Array(cols).fill(false)

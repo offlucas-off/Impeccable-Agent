@@ -422,7 +422,7 @@ export function buildNwlNpc(
   sharedResources?: PixelizerMaterialResources
 ): GeneratedNpcResult {
   const spec = NWL_NPC_PROFILES[id];
-  const px = options.pixelSize ?? 3;
+  const px = options.pixelSize ?? 1;
   const objId = options.objectId ?? 22;
   const finishMode: FinishMode = options.finishMode ?? 'textured_ao';
   const seed = Math.floor(options.seed ?? 202);

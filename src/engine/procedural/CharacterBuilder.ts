@@ -216,7 +216,7 @@ export function buildProceduralUalCharacter(
   const rng = createSeededRng(seed);
   const pal = ARCHETYPE_PALETTES[archetype];
   const objId = options.objectId ?? 10;
-  const px = options.pixelSize ?? 3;
+  const px = options.pixelSize ?? 1;
   const finishMode: FinishMode = options.finishMode ?? 'textured_ao';
   const aoStrength = options.aoStrength ?? 0.55;
   const normalStrength = options.normalStrength ?? 0.36;

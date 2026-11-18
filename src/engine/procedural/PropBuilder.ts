@@ -501,7 +501,7 @@ export function buildProceduralProp(
 
   const materials: PixelizerMaterial[] = [];
   const objId = options.objectId ?? 22;
-  const px = options.pixelSize ?? 3;
+  const px = options.pixelSize ?? 1;
 
   if (options.visualStyle === 'voxel') {
     const bakedMat = createPixelizerMaterialFromBaked(

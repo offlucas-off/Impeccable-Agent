@@ -198,9 +198,10 @@ export function createStageManager(
       },
     });
     ctx.scene.add(ctx.activeSandbox.root);
-    if (refs.selStylePreset.value === 'hades_lab') {
-      ctx.pipeline.applyVisualStylePreset('hades_lab', ctx.scene);
-    }
+    ctx.pipeline.applyVisualStylePreset(
+      (refs.selStylePreset.value as VisualStylePresetId) || 'stylized_crisp',
+      ctx.scene
+    );
 
     ctx.pipeline.cameraConfig.orthoHeight = 10.5;
     const rngOrtho = ctx.rootElement.querySelector<HTMLInputElement>('#rng-ortho-h');
@@ -233,9 +234,10 @@ export function createStageManager(
     }
     ctx.activeStage = next;
     ctx.scene.add(next.sceneRoot);
-    if ((refs.selStylePreset.value as VisualStylePresetId) === 'hades_lab') {
-      ctx.pipeline.applyVisualStylePreset('hades_lab', ctx.scene);
-    }
+    ctx.pipeline.applyVisualStylePreset(
+      (refs.selStylePreset.value as VisualStylePresetId) || 'stylized_crisp',
+      ctx.scene
+    );
     applyStageCameraFraming(next.subjectRoot, ctx.activeStructureRoot === next.subjectRoot);
     refs.captionTitle.textContent = next.name;
     refs.captionDesc.textContent = next.description;
@@ -639,7 +641,7 @@ export function createStageManager(
         {
           classId: classMap[value],
           rarity: 'normal',
-          pixelSize: 3,
+          pixelSize: 1,
           finishMode: finish?.finishMode,
           materialSeed: finish?.seed,
           aoStrength: finish?.aoStrength,
@@ -656,7 +658,7 @@ export function createStageManager(
       const boss = buildNwlMonster(
         'demons.boss_demon',
         {
-          pixelSize: 3,
+          pixelSize: 1,
           finishMode: finish?.finishMode,
           seed: finish?.seed,
           aoStrength: finish?.aoStrength,
@@ -744,7 +746,7 @@ export function createStageManager(
         const m = buildNwlMonster(
           id,
           {
-            pixelSize: 3,
+            pixelSize: 1,
             finishMode: finish?.finishMode,
             seed: finish ? finish.seed + i * 17 : undefined,
             aoStrength: finish?.aoStrength,

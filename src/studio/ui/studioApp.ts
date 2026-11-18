@@ -107,7 +107,8 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
           </optgroup>
         </select>
         <select id="sel-style-preset" class="select-ctrl" aria-label="Visual Style Preset" title="Preset Visual Oficial vs Teste Experimental">
-          <option value="nwl_snes">Estilo: NWL SNES Dark Fantasy (3×3)</option>
+          <option value="stylized_crisp" selected>Estilo: Form-First Crisp (1:1 Limpo)</option>
+          <option value="nwl_snes">Legado: NWL SNES Dark Fantasy (3×3)</option>
           <option value="hades_lab">Lab: Hades Graphic Ink v2 (2px + Rim)</option>
         </select>
         <button id="btn-play-sandbox" class="btn btn-primary" type="button" title="Abrir Sandbox Jogável (Cidade + Ruínas Andar 1)">
@@ -577,7 +578,7 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
           pipeline.getSharedResourcesForMaterial(),
           {
             targetHeightM: 1.79,
-            pixelSize: 3,
+            pixelSize: 1,
             objectId: 10,
             name: `${getExportSlug()}_ual`,
           }
@@ -697,6 +698,7 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
     dirLight.intensity = pipeline.pipelineConfig.lightIntensity;
     hemiLight.color.set(pipeline.pipelineConfig.ambientSkyColor);
     ambientLight.color.set(pipeline.pipelineConfig.ambientSkyColor);
+    pipelinePanel.syncFromPipeline();
     paletteEditor.refresh();
     exportPanel.syncConversionModeUi();
     objectPanel.syncObjectInspector();
