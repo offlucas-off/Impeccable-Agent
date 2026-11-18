@@ -1,8 +1,18 @@
+import type * as THREE from 'three';
+
 export type VfxStageName = 'telegraph' | 'cast' | 'flight' | 'impact' | 'linger';
 
 export interface VfxParticleBurstSpec {
   count: number;
   colorHex: string;
+  /** Optional intermediate color reached around age=0.45 before transitioning to endColor. */
+  midColor?: THREE.ColorRepresentation;
+  /** Optional target color at age=1.0 for color-over-life interpolation. */
+  endColor?: THREE.ColorRepresentation;
+  /** Optional initial scale multiplier at age=0 (defaults to 1.0). */
+  startScale?: number;
+  /** Optional final scale multiplier at age=1 (defaults to 0.0). */
+  endScale?: number;
   speedMin: number;
   speedMax: number;
   lifeSec: number;

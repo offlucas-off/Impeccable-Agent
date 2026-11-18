@@ -13,10 +13,9 @@ import {
   type UalGenderProfile,
   type UalRigBuildMode,
 } from '../rigging/UalRigSpec';
-import type { PixelizerMaterialOptions } from '../types';
 import {
   bakeTaggedPartsAsset,
-  type BakedAssetResult,
+  bakedToMaterialOptions,
   type UnwrapMetricsSummary,
 } from './PixelMaterialSynth';
 import {
@@ -165,34 +164,18 @@ function getBoneSpanY(rig: CanonicalUalRig, boneName: string, fallback: number):
   return fallback;
 }
 
-function bakedToMaterialOptions(
-  baked: BakedAssetResult,
-  extras: Partial<PixelizerMaterialOptions> = {}
-): Partial<PixelizerMaterialOptions> {
-  const hasTex = Boolean(baked.textures);
-  const hasEmission = Boolean(baked.textures?.hasEmission && baked.textures.emissionMap);
-  return {
-    baseColor: '#ffffff',
-    diffuseVertexColorWeight: 1.0,
-    edgeHighlight: 0.36,
-    edgeBevelWeight: 0.72,
-    smoothness: 0.22,
-    albedoMap: baked.textures?.albedoMap ?? null,
-    normalMap: baked.textures?.normalMap ?? null,
-    normalScale: hasTex ? 0.85 : 1.0,
-    useVertexTangents: Boolean(baked.hasTangents && baked.textures?.normalMap),
-    emissionMap: hasEmission ? (baked.textures?.emissionMap ?? null) : null,
-    emissionColor: hasEmission ? '#ffffff' : '#000000',
-    emissionIntensity: hasEmission ? 1.15 : 0.0,
-    ...extras,
-  };
-}
-
 function disposeCharacterMaterialsSafely(materials: PixelizerMaterial[]): void {
   const seen = new Set<THREE.Texture>();
   for (const mat of materials) {
     const o = mat.options;
-    for (const tex of [o.albedoMap, o.normalMap, o.emissionMap]) {
+    for (const tex of [
+      o.albedoMap,
+      o.normalMap,
+      o.roughnessMap,
+      o.aoMap,
+      o.metalnessMap,
+      o.emissionMap,
+    ]) {
       if (tex && !seen.has(tex)) {
         seen.add(tex);
         if (tex.userData?.pooled !== true) {

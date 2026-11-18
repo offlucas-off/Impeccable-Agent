@@ -317,6 +317,9 @@ export function buildQuadrupedCreature(
         metallic: isMetal ? 0.65 : 0.05,
         albedoMap: baked.textures?.albedoMap ?? null,
         normalMap: baked.textures?.normalMap ?? null,
+        roughnessMap: baked.textures?.roughnessMap ?? null,
+        aoMap: baked.textures?.aoMap ?? null,
+        metalnessMap: baked.textures?.metalnessMap ?? null,
         normalScale: hasTex ? 0.85 : 1.0,
         useVertexTangents: Boolean(baked.hasTangents && baked.textures?.normalMap),
         emissionMap: hasEmission ? (baked.textures?.emissionMap ?? null) : null,
@@ -1289,7 +1292,14 @@ export function buildQuadrupedCreature(
       }
       for (const mat of materials) {
         const opts = mat.options;
-        for (const tex of [opts.albedoMap, opts.normalMap, opts.emissionMap]) {
+        for (const tex of [
+          opts.albedoMap,
+          opts.normalMap,
+          opts.roughnessMap,
+          opts.aoMap,
+          opts.metalnessMap,
+          opts.emissionMap,
+        ]) {
           if (tex && tex.userData?.pooled !== true) tex.dispose();
         }
         mat.dispose();

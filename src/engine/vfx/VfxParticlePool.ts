@@ -7,6 +7,8 @@ const SCRATCH_QUAT = new THREE.Quaternion();
 const SCRATCH_SCALE = new THREE.Vector3();
 const SCRATCH_MAT = new THREE.Matrix4();
 const SCRATCH_COLOR = new THREE.Color();
+const SCRATCH_MID_COLOR = new THREE.Color();
+const SCRATCH_END_COLOR = new THREE.Color();
 
 export class InstancedVfxParticlePool {
   public readonly mesh: THREE.InstancedMesh;
@@ -27,6 +29,15 @@ export class InstancedVfxParticlePool {
   private cr: Float32Array;
   private cg: Float32Array;
   private cb: Float32Array;
+  private mr: Float32Array;
+  private mg: Float32Array;
+  private mb: Float32Array;
+  private hasMid: Uint8Array;
+  private er: Float32Array;
+  private eg: Float32Array;
+  private eb: Float32Array;
+  private startScale: Float32Array;
+  private endScale: Float32Array;
 
   constructor(maxParticles = 256, sharedResources?: PixelizerMaterialResources) {
     this.maxParticles = Math.max(16, maxParticles);
@@ -76,6 +87,15 @@ export class InstancedVfxParticlePool {
     this.cr = new Float32Array(this.maxParticles);
     this.cg = new Float32Array(this.maxParticles);
     this.cb = new Float32Array(this.maxParticles);
+    this.mr = new Float32Array(this.maxParticles);
+    this.mg = new Float32Array(this.maxParticles);
+    this.mb = new Float32Array(this.maxParticles);
+    this.hasMid = new Uint8Array(this.maxParticles);
+    this.er = new Float32Array(this.maxParticles);
+    this.eg = new Float32Array(this.maxParticles);
+    this.eb = new Float32Array(this.maxParticles);
+    this.startScale = new Float32Array(this.maxParticles);
+    this.endScale = new Float32Array(this.maxParticles);
   }
 
   public spawnBurst(origin: THREE.Vector3, spec: VfxParticleBurstSpec, dir?: THREE.Vector3): void {
@@ -83,6 +103,26 @@ export class InstancedVfxParticlePool {
     const r = SCRATCH_COLOR.r;
     const g = SCRATCH_COLOR.g;
     const b = SCRATCH_COLOR.b;
+
+    const hasMidColor = spec.midColor !== undefined ? 1 : 0;
+    if (hasMidColor) {
+      SCRATCH_MID_COLOR.set(spec.midColor!);
+    }
+    const mr = hasMidColor ? SCRATCH_MID_COLOR.r : r;
+    const mg = hasMidColor ? SCRATCH_MID_COLOR.g : g;
+    const mb = hasMidColor ? SCRATCH_MID_COLOR.b : b;
+
+    if (spec.endColor !== undefined) {
+      SCRATCH_END_COLOR.set(spec.endColor);
+    } else {
+      SCRATCH_END_COLOR.copy(SCRATCH_COLOR);
+    }
+    const er = SCRATCH_END_COLOR.r;
+    const eg = SCRATCH_END_COLOR.g;
+    const eb = SCRATCH_END_COLOR.b;
+
+    const sScale = spec.startScale ?? 1.0;
+    const eScale = spec.endScale ?? 0.0;
     const grav = spec.gravity ?? -6.0;
     const spread = spec.spreadAngleRad ?? Math.PI;
     const upBias = spec.upwardBias ?? 0.35;
@@ -122,6 +162,16 @@ export class InstancedVfxParticlePool {
       this.cr[idx] = r;
       this.cg[idx] = g;
       this.cb[idx] = b;
+      this.mr[idx] = mr;
+      this.mg[idx] = mg;
+      this.mb[idx] = mb;
+      this.hasMid[idx] = hasMidColor;
+      this.er[idx] = er;
+      this.eg[idx] = eg;
+      this.eb[idx] = eb;
+      this.startScale[idx] = sScale;
+      this.endScale[idx] = eScale;
+      this.mesh.setColorAt(idx, SCRATCH_COLOR);
     }
   }
 
@@ -150,6 +200,15 @@ export class InstancedVfxParticlePool {
           this.cr[i] = this.cr[last];
           this.cg[i] = this.cg[last];
           this.cb[i] = this.cb[last];
+          this.mr[i] = this.mr[last];
+          this.mg[i] = this.mg[last];
+          this.mb[i] = this.mb[last];
+          this.hasMid[i] = this.hasMid[last];
+          this.er[i] = this.er[last];
+          this.eg[i] = this.eg[last];
+          this.eb[i] = this.eb[last];
+          this.startScale[i] = this.startScale[last];
+          this.endScale[i] = this.endScale[last];
         }
         this.activeCount--;
         continue;
@@ -160,17 +219,39 @@ export class InstancedVfxParticlePool {
       this.py[i] += this.vy[i] * dt;
       this.pz[i] += this.vz[i] * dt;
 
-      const t = Math.max(0, this.life[i] / this.maxLife[i]);
-      // Stepped pixel scale shrink
-      const steppedT = Math.ceil(t * 4) / 4;
-      const s = this.size[i] * steppedT;
+      const age = Math.min(1, Math.max(0, 1 - this.life[i] / this.maxLife[i]));
+      const scaleFactor = Math.max(
+        0,
+        this.startScale[i] + (this.endScale[i] - this.startScale[i]) * age
+      );
+      const s = this.size[i] * scaleFactor;
 
       SCRATCH_POS.set(this.px[i], this.py[i], this.pz[i]);
       SCRATCH_SCALE.set(s, s, s);
       SCRATCH_MAT.compose(SCRATCH_POS, SCRATCH_QUAT, SCRATCH_SCALE);
       this.mesh.setMatrixAt(i, SCRATCH_MAT);
 
-      SCRATCH_COLOR.setRGB(this.cr[i], this.cg[i], this.cb[i]);
+      let outR: number;
+      let outG: number;
+      let outB: number;
+      if (this.hasMid[i]) {
+        if (age < 0.45) {
+          const k = age / 0.45;
+          outR = this.cr[i] + (this.mr[i] - this.cr[i]) * k;
+          outG = this.cg[i] + (this.mg[i] - this.cg[i]) * k;
+          outB = this.cb[i] + (this.mb[i] - this.cb[i]) * k;
+        } else {
+          const k = (age - 0.45) / 0.55;
+          outR = this.mr[i] + (this.er[i] - this.mr[i]) * k;
+          outG = this.mg[i] + (this.eg[i] - this.mg[i]) * k;
+          outB = this.mb[i] + (this.eb[i] - this.mb[i]) * k;
+        }
+      } else {
+        outR = this.cr[i] + (this.er[i] - this.cr[i]) * age;
+        outG = this.cg[i] + (this.eg[i] - this.cg[i]) * age;
+        outB = this.cb[i] + (this.eb[i] - this.cb[i]) * age;
+      }
+      SCRATCH_COLOR.setRGB(outR, outG, outB);
       this.mesh.setColorAt(i, SCRATCH_COLOR);
 
       i++;

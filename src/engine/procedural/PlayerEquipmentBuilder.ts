@@ -13,7 +13,6 @@ import {
   type CanonicalUalRig,
   type UalSocketName,
 } from '../rigging/UalRigSpec';
-import type { PixelizerMaterialOptions } from '../types';
 import {
   CLASS_DEFAULT_STYLE_LOADOUT,
   CLASS_NORMAL_PALETTES,
@@ -27,6 +26,7 @@ import {
 import { buildStylizedHairParts } from './CharacterBuilder';
 import {
   bakeTaggedPartsAsset,
+  bakedToMaterialOptions,
   type BakedAssetResult,
   type UnwrapMetricsSummary,
 } from './PixelMaterialSynth';
@@ -249,33 +249,17 @@ function disposePartsArray(parts: TaggedGeometryPart[]): void {
   }
 }
 
-function bakedToMaterialOptions(
-  baked: BakedAssetResult,
-  extras: Partial<PixelizerMaterialOptions> = {}
-): Partial<PixelizerMaterialOptions> {
-  const hasTex = Boolean(baked.textures);
-  const hasEmission = Boolean(baked.textures?.hasEmission && baked.textures.emissionMap);
-  return {
-    baseColor: '#ffffff',
-    diffuseVertexColorWeight: 1.0,
-    edgeHighlight: 0.36,
-    edgeBevelWeight: 0.72,
-    smoothness: 0.25,
-    albedoMap: baked.textures?.albedoMap ?? null,
-    normalMap: baked.textures?.normalMap ?? null,
-    normalScale: hasTex ? 0.85 : 1.0,
-    useVertexTangents: Boolean(baked.hasTangents && baked.textures?.normalMap),
-    emissionMap: hasEmission ? (baked.textures?.emissionMap ?? null) : null,
-    emissionColor: hasEmission ? '#ffffff' : '#000000',
-    emissionIntensity: hasEmission ? 1.15 : 0.0,
-    ...extras,
-  };
-}
-
 function disposeMaterialAndUnpooledTextures(mat: PixelizerMaterial): void {
   const opts = mat.options;
   const seen = new Set<THREE.Texture>();
-  for (const tex of [opts.albedoMap, opts.normalMap, opts.emissionMap]) {
+  for (const tex of [
+    opts.albedoMap,
+    opts.normalMap,
+    opts.roughnessMap,
+    opts.aoMap,
+    opts.metalnessMap,
+    opts.emissionMap,
+  ]) {
     if (tex && !seen.has(tex)) {
       seen.add(tex);
       if (tex.userData?.pooled !== true) {

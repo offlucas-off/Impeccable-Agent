@@ -27,9 +27,10 @@ export interface PixelizerMaterialResources {
  */
 export function enforcePixelArtTextureSampling<T extends THREE.Texture>(
   tex: T,
-  kind: 'albedo' | 'normal' | 'emission' = 'albedo'
+  kind: 'albedo' | 'normal' | 'emission' | 'data' = 'albedo'
 ): T {
-  const targetSpace = kind === 'normal' ? THREE.NoColorSpace : THREE.SRGBColorSpace;
+  const targetSpace =
+    kind === 'normal' || kind === 'data' ? THREE.NoColorSpace : THREE.SRGBColorSpace;
   let changed = false;
   if (tex.magFilter !== THREE.NearestFilter) {
     tex.magFilter = THREE.NearestFilter;
@@ -59,9 +60,10 @@ export function enforcePixelArtTextureSampling<T extends THREE.Texture>(
  */
 export function enforceHiFiTextureSampling<T extends THREE.Texture>(
   tex: T,
-  kind: 'albedo' | 'normal' | 'emission' = 'albedo'
+  kind: 'albedo' | 'normal' | 'emission' | 'data' = 'albedo'
 ): T {
-  const targetSpace = kind === 'normal' ? THREE.NoColorSpace : THREE.SRGBColorSpace;
+  const targetSpace =
+    kind === 'normal' || kind === 'data' ? THREE.NoColorSpace : THREE.SRGBColorSpace;
   const img = tex.image as { width?: number; height?: number } | undefined;
   const canMip = Boolean(img && (img.width ?? 0) > 1 && (img.height ?? 0) > 1);
   const targetMin = canMip ? THREE.LinearMipmapLinearFilter : THREE.LinearFilter;
@@ -130,6 +132,9 @@ export class PixelizerMaterial extends THREE.ShaderMaterial {
       albedoMap: options.albedoMap ?? null,
       normalMap: options.normalMap ?? null,
       normalScale: options.normalScale ?? 1.0,
+      roughnessMap: options.roughnessMap ?? null,
+      aoMap: options.aoMap ?? null,
+      metalnessMap: options.metalnessMap ?? null,
       useVertexTangents: options.useVertexTangents ?? false,
       emissionMap: options.emissionMap ?? null,
       emissionColor: options.emissionColor ?? '#000000',
@@ -255,6 +260,18 @@ export class PixelizerMaterial extends THREE.ShaderMaterial {
     } else if (patch.smoothness !== undefined && patch.roughness === undefined) {
       this.options.roughness = Math.max(0, Math.min(1, 1 - patch.smoothness));
     }
+    if ('roughnessMap' in patch && !patch.roughnessMap) {
+      delete this.userData.roughnessMap;
+    }
+    if ('aoMap' in patch && !patch.aoMap) {
+      delete this.userData.aoMap;
+    }
+    if ('metalnessMap' in patch && !patch.metalnessMap) {
+      delete this.userData.metalnessMap;
+    }
+    if ('emissionMap' in patch && !patch.emissionMap) {
+      delete this.userData.emissionMap;
+    }
     this.syncUniforms();
   }
 
@@ -309,6 +326,15 @@ export class PixelizerMaterial extends THREE.ShaderMaterial {
       if (o.emissionMap) {
         enforcePixelArtTextureSampling(o.emissionMap, 'emission');
       }
+      if (o.roughnessMap) {
+        enforcePixelArtTextureSampling(o.roughnessMap, 'data');
+      }
+      if (o.aoMap) {
+        enforcePixelArtTextureSampling(o.aoMap, 'data');
+      }
+      if (o.metalnessMap) {
+        enforcePixelArtTextureSampling(o.metalnessMap, 'data');
+      }
     } else {
       if (o.albedoMap) {
         enforceHiFiTextureSampling(o.albedoMap, 'albedo');
@@ -319,6 +345,28 @@ export class PixelizerMaterial extends THREE.ShaderMaterial {
       if (o.emissionMap) {
         enforceHiFiTextureSampling(o.emissionMap, 'emission');
       }
+      if (o.roughnessMap) {
+        enforceHiFiTextureSampling(o.roughnessMap, 'data');
+      }
+      if (o.aoMap) {
+        enforceHiFiTextureSampling(o.aoMap, 'data');
+      }
+      if (o.metalnessMap) {
+        enforceHiFiTextureSampling(o.metalnessMap, 'data');
+      }
+    }
+
+    if (o.roughnessMap) {
+      this.userData.roughnessMap = o.roughnessMap;
+    }
+    if (o.aoMap) {
+      this.userData.aoMap = o.aoMap;
+    }
+    if (o.metalnessMap) {
+      this.userData.metalnessMap = o.metalnessMap;
+    }
+    if (o.emissionMap) {
+      this.userData.emissionMap = o.emissionMap;
     }
 
     const wantTangent = Boolean(o.useVertexTangents && o.normalMap);
@@ -415,6 +463,15 @@ export function convertStandardMaterialToPixelizer(
   }
   if (src && 'normalMap' in src && src.normalMap instanceof THREE.Texture) {
     opts.normalMap = src.normalMap;
+  }
+  if (src && 'roughnessMap' in src && src.roughnessMap instanceof THREE.Texture) {
+    opts.roughnessMap = src.roughnessMap;
+  }
+  if (src && 'aoMap' in src && src.aoMap instanceof THREE.Texture) {
+    opts.aoMap = src.aoMap;
+  }
+  if (src && 'metalnessMap' in src && src.metalnessMap instanceof THREE.Texture) {
+    opts.metalnessMap = src.metalnessMap;
   }
   if (src && 'emissive' in src && src.emissive instanceof THREE.Color) {
     opts.emissionColor = '#' + src.emissive.getHexString();

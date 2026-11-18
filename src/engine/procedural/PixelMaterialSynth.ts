@@ -2756,9 +2756,40 @@ export function bakeTaggedPartsAsset(
 }
 
 /**
+ * Converts a `BakedAssetResult` into `PixelizerMaterialOptions`, propagating all synthesized PBR
+ * maps (`albedoMap`, `normalMap`, `roughnessMap`, `aoMap`, `metalnessMap`, `emissionMap`) and
+ * tangent flags so `PixelizerMaterial` and `RiggedExporter` receive the complete texture set.
+ */
+export function bakedToMaterialOptions(
+  baked: BakedAssetResult,
+  base: Partial<PixelizerMaterialOptions> = {}
+): PixelizerMaterialOptions {
+  const hasTex = Boolean(baked.textures);
+  const hasEmission = Boolean(baked.textures?.hasEmission && baked.textures.emissionMap);
+  return {
+    baseColor: '#ffffff',
+    diffuseVertexColorWeight: 1.0,
+    edgeHighlight: 0.36,
+    edgeBevelWeight: 0.72,
+    smoothness: 0.22,
+    albedoMap: baked.textures?.albedoMap ?? null,
+    normalMap: baked.textures?.normalMap ?? null,
+    roughnessMap: baked.textures?.roughnessMap ?? null,
+    aoMap: baked.textures?.aoMap ?? null,
+    metalnessMap: baked.textures?.metalnessMap ?? null,
+    normalScale: hasTex ? 0.85 : 1.0,
+    useVertexTangents: Boolean(baked.hasTangents && baked.textures?.normalMap),
+    emissionMap: hasEmission ? (baked.textures?.emissionMap ?? null) : null,
+    emissionColor: hasEmission ? '#ffffff' : '#000000',
+    emissionIntensity: hasEmission ? 1.15 : 0.0,
+    ...base,
+  };
+}
+
+/**
  * Creates a `PixelizerMaterial` pre-configured for a `BakedAssetResult`, automatically wiring
- * `albedoMap`, `normalMap`, `useVertexTangents`, `emissionMap`, and safe linear vertex tints
- * (plus attaching `roughnessMap`, `aoMap`, `metalnessMap` in `userData` for PBR/GLB consumers).
+ * `albedoMap`, `normalMap`, `roughnessMap`, `aoMap`, `metalnessMap`, `useVertexTangents`,
+ * `emissionMap`, and safe linear vertex tints.
  */
 export function createPixelizerMaterialFromBaked(
   baked: BakedAssetResult,
@@ -2766,34 +2797,16 @@ export function createPixelizerMaterialFromBaked(
   sharedResources?: PixelizerMaterialResources
 ): PixelizerMaterial {
   const hasTex = Boolean(baked.textures);
-  const hasEmission = Boolean(baked.textures?.hasEmission && baked.textures.emissionMap);
-
-  const opts: PixelizerMaterialOptions = {
-    baseColor: '#ffffff',
-    diffuseVertexColorWeight: 1.0,
+  const opts = bakedToMaterialOptions(baked, {
     edgeHighlight: 0.42,
     edgeBevelWeight: 0.6,
     smoothness: 0.35,
-    albedoMap: baked.textures?.albedoMap ?? null,
-    normalMap: baked.textures?.normalMap ?? null,
     normalScale: hasTex ? 0.92 : 1.0,
-    useVertexTangents: Boolean(baked.hasTangents && baked.textures?.normalMap),
-    emissionMap: hasEmission ? (baked.textures?.emissionMap ?? null) : null,
-    emissionColor: hasEmission ? '#ffffff' : '#000000',
-    emissionIntensity: hasEmission ? 1.15 : 0.0,
     ...matOverrides,
-  };
+  });
 
   const mat = new PixelizerMaterial(opts, sharedResources);
   mat.vertexColors = true;
-  if (baked.textures) {
-    mat.userData = {
-      ...mat.userData,
-      roughnessMap: baked.textures.roughnessMap,
-      aoMap: baked.textures.aoMap,
-      metalnessMap: baked.textures.metalnessMap,
-    };
-  }
   return mat;
 }
 

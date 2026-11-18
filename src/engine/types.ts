@@ -111,6 +111,12 @@ export interface PixelizerMaterialOptions {
   albedoMap?: THREE.Texture | null;
   normalMap?: THREE.Texture | null;
   normalScale?: number;
+  /** Optional PBR roughness map (linear / NoColorSpace) propagated to userData & GLB export */
+  roughnessMap?: THREE.Texture | null;
+  /** Optional PBR ambient occlusion map (linear / NoColorSpace) propagated to userData & GLB export */
+  aoMap?: THREE.Texture | null;
+  /** Optional PBR metalness map (linear / NoColorSpace) propagated to userData & GLB export */
+  metalnessMap?: THREE.Texture | null;
   /** Enable vertex `tangent` (vec4) attribute TBN when geometry supplies valid tangents */
   useVertexTangents?: boolean;
   emissionMap?: THREE.Texture | null;

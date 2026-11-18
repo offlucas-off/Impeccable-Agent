@@ -22,6 +22,9 @@ void main() {
   #else
     vVertexColor = vec4(1.0);
   #endif
+  #ifdef USE_INSTANCING_COLOR
+    vVertexColor.rgb *= instanceColor;
+  #endif
 
   vec3 objectNormal = vec3(normal);
   #ifdef USE_TANGENT

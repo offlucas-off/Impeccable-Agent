@@ -11,10 +11,9 @@ import {
   createCanonicalUalRig,
   type CanonicalUalRig,
 } from '../rigging/UalRigSpec';
-import type { PixelizerMaterialOptions } from '../types';
 import {
+  bakedToMaterialOptions,
   bakeTaggedPartsAsset,
-  type BakedAssetResult,
   type UnwrapMetricsSummary,
 } from './PixelMaterialSynth';
 import {
@@ -397,34 +396,108 @@ function getBoneSpanY(rig: CanonicalUalRig, boneName: string, fallback: number):
   return fallback;
 }
 
-function bakedToMaterialOptions(
-  baked: BakedAssetResult,
-  extras: Partial<PixelizerMaterialOptions> = {}
-): Partial<PixelizerMaterialOptions> {
-  const hasTex = Boolean(baked.textures);
-  const hasEmission = Boolean(baked.textures?.hasEmission && baked.textures.emissionMap);
-  return {
-    baseColor: '#ffffff',
-    diffuseVertexColorWeight: 1.0,
-    edgeHighlight: 0.36,
-    edgeBevelWeight: 0.72,
-    smoothness: 0.22,
-    albedoMap: baked.textures?.albedoMap ?? null,
-    normalMap: baked.textures?.normalMap ?? null,
-    normalScale: hasTex ? 0.85 : 1.0,
-    useVertexTangents: Boolean(baked.hasTangents && baked.textures?.normalMap),
-    emissionMap: hasEmission ? (baked.textures?.emissionMap ?? null) : null,
-    emissionColor: hasEmission ? '#ffffff' : '#000000',
-    emissionIntensity: hasEmission ? 1.15 : 0.0,
-    ...extras,
-  };
+function makeBossWingMembraneGrid(
+  ribStart: [number, number, number],
+  ribEnd: [number, number, number],
+  trailStart: [number, number, number],
+  trailEnd: [number, number, number],
+  uSegs: number,
+  vSegs: number,
+  archY: number,
+  scallopDepth: number,
+  tatterDepth: number,
+  hexColor: string
+): THREE.BufferGeometry {
+  const positions: number[] = [];
+  const uvs: number[] = [];
+  const frontGrid: [number, number, number][][] = [];
+  const backGrid: [number, number, number][][] = [];
+
+  // Approximate plane normal for subtle non-degenerate double-sided membrane thickness
+  const ux = ribEnd[0] - ribStart[0];
+  const uy = ribEnd[1] - ribStart[1];
+  const uz = ribEnd[2] - ribStart[2];
+  const vxDir = trailStart[0] - ribStart[0];
+  const vyDir = trailStart[1] - ribStart[1];
+  const vzDir = trailStart[2] - ribStart[2];
+  let nx = uy * vzDir - uz * vyDir;
+  let ny = uz * vxDir - ux * vzDir;
+  let nz = ux * vyDir - uy * vxDir;
+  const nLen = Math.hypot(nx, ny, nz) || 1;
+  const halfThick = 0.0035;
+  nx = (nx / nLen) * halfThick;
+  ny = (ny / nLen) * halfThick;
+  nz = (nz / nLen) * halfThick;
+
+  for (let iv = 0; iv <= vSegs; iv++) {
+    const v = iv / vSegs;
+    const fRow: [number, number, number][] = [];
+    const bRow: [number, number, number][] = [];
+    for (let iu = 0; iu <= uSegs; iu++) {
+      const u = iu / uSegs;
+      const lx = ribStart[0] + (ribEnd[0] - ribStart[0]) * u;
+      const ly = ribStart[1] + (ribEnd[1] - ribStart[1]) * u;
+      const lz = ribStart[2] + (ribEnd[2] - ribStart[2]) * u;
+
+      const tx = trailStart[0] + (trailEnd[0] - trailStart[0]) * u;
+      const ty = trailStart[1] + (trailEnd[1] - trailStart[1]) * u;
+      const tz = trailStart[2] + (trailEnd[2] - trailStart[2]) * u;
+
+      // Parabolic scallop + ragged demonic notches near trailing edge
+      const notch = Math.pow(Math.abs(Math.sin(u * Math.PI * 2.0)), 2.4) * tatterDepth;
+      const scallop = (Math.sin(u * Math.PI) * scallopDepth + notch) * (v * v);
+      const vx = lx + (tx - lx) * v;
+      const vz = lz + (tz - lz) * v + scallop;
+      const camber = Math.sin(v * Math.PI) * (0.4 + 0.6 * Math.sin(u * Math.PI)) * archY;
+      const vy = ly + (ty - ly) * v + camber + scallop * 0.35;
+      fRow.push([vx + nx, vy + ny, vz + nz]);
+      bRow.push([vx - nx, vy - ny, vz - nz]);
+    }
+    frontGrid.push(fRow);
+    backGrid.push(bRow);
+  }
+
+  for (let iv = 0; iv < vSegs; iv++) {
+    const v0 = iv / vSegs;
+    const v1 = (iv + 1) / vSegs;
+    for (let iu = 0; iu < uSegs; iu++) {
+      const u0 = iu / uSegs;
+      const u1 = (iu + 1) / uSegs;
+      const fa = frontGrid[iv][iu];
+      const fb = frontGrid[iv][iu + 1];
+      const fc = frontGrid[iv + 1][iu + 1];
+      const fd = frontGrid[iv + 1][iu];
+      positions.push(...fa, ...fb, ...fc, ...fa, ...fc, ...fd);
+      uvs.push(u0, v0, u1, v0, u1, v1, u0, v0, u1, v1, u0, v1);
+
+      const ba = backGrid[iv][iu];
+      const bb = backGrid[iv][iu + 1];
+      const bc = backGrid[iv + 1][iu + 1];
+      const bd = backGrid[iv + 1][iu];
+      positions.push(...ba, ...bc, ...bb, ...ba, ...bd, ...bc);
+      uvs.push(u0, v0, u1, v1, u1, v0, u0, v0, u0, v1, u1, v1);
+    }
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  geo.computeVertexNormals();
+  return prepareColoredPart(geo, hexColor, 0.03);
 }
 
 function disposeMonsterMaterialsSafely(materials: PixelizerMaterial[]): void {
   const seen = new Set<THREE.Texture>();
   for (const mat of materials) {
     const o = mat.options;
-    for (const tex of [o.albedoMap, o.normalMap, o.emissionMap]) {
+    for (const tex of [
+      o.albedoMap,
+      o.normalMap,
+      o.roughnessMap,
+      o.aoMap,
+      o.metalnessMap,
+      o.emissionMap,
+    ]) {
       if (tex && !seen.has(tex)) {
         seen.add(tex);
         if (tex.userData?.pooled !== true) {
@@ -453,6 +526,7 @@ export function buildNwlMonster(
 
   const isGoblin = id.startsWith('orcs.goblin');
   const isBoss = spec.role === 'boss';
+  const isBossDemon = id === 'demons.boss_demon';
   const isSkeleton = id.startsWith('monster.skeleton');
   const isGolem = id === 'monster.crystal_golem' || id === 'boss.colossus_golem';
   const skinRecipe: MaterialRecipeId = isGoblin
@@ -624,34 +698,97 @@ export function buildNwlMonster(
     );
     pelvisParts.push(tagPart(lizTail, 'lizard_tail', 'orc_hide', spec.skinColor));
   }
+  if (isBossDemon) {
+    // Muscular spiked demonic tail curving back and upward from pelvis
+    const demonTail = makeSplineLoftGeometry(
+      [
+        [0, 0.03, -0.1 * bulk],
+        [0, -0.05, -0.28 * bulk],
+        [0.03, -0.08, -0.48 * bulk],
+        [0.06, 0.02, -0.64 * bulk],
+      ],
+      [0.052 * bulk, 0.036 * bulk, 0.022 * bulk, 0.008 * bulk],
+      10,
+      14,
+      { colorHex: spec.skinColor, ridgeAmplitude: 0.012 }
+    );
+    const tailBarb = makeSwordBladeGeometry(0.065, 0.024, 0.11, 0.05, spec.armorColor);
+    tailBarb.rotateX(-Math.PI * 0.35);
+    tailBarb.translate(0.06, 0.03, -0.66 * bulk);
+    pelvisParts.push(
+      tagPart(demonTail, 'demon_tail', 'demon_hide', spec.skinColor, { lockVertical: false }),
+      tagPart(tailBarb, 'demon_tail_barb', 'magma_obsidian', spec.armorColor, {
+        accentHex: spec.accentColor,
+        lockVertical: false,
+      })
+    );
+  }
   addBakedBone('Monster_Pelvis', 'pelvis', pelvisParts);
 
-  addBakedBone('Monster_Spine1', 'spine_01', [
+  const spine1Parts: TaggedGeometryPart[] = [
     tagPart(
       makeAnatomicalTorsoGeometry(
-        spine1Len * 1.1,
-        (isSkeleton ? 0.068 : 0.14) * bulk,
-        (isSkeleton ? 0.056 : 0.1) * bulk,
-        (isSkeleton ? 0.082 : 0.16) * bulk,
-        (isSkeleton ? 0.068 : 0.115) * bulk,
-        { radialSegs: 14, heightSegs: 5, hexColor: spec.skinColor, musculature: isSkeleton ? 0.35 : 0.85 }
+        spine1Len * 1.12,
+        (isSkeleton ? 0.068 : isBossDemon ? 0.132 : 0.14) * bulk,
+        (isSkeleton ? 0.056 : isBossDemon ? 0.098 : 0.1) * bulk,
+        (isSkeleton ? 0.082 : isBossDemon ? 0.172 : 0.16) * bulk,
+        (isSkeleton ? 0.068 : isBossDemon ? 0.122 : 0.115) * bulk,
+        {
+          radialSegs: isBossDemon ? 16 : 14,
+          heightSegs: isBossDemon ? 6 : 5,
+          hexColor: spec.skinColor,
+          musculature: isSkeleton ? 0.35 : isBossDemon ? 1.15 : 0.85,
+        }
       ),
       'm_spine1_belly',
       skinRecipe,
       spec.skinColor,
       { accentHex: spec.accentColor }
     ),
-  ]);
+  ];
+  if (isBossDemon) {
+    // Segmented obsidian flank rib plates framing athletic V-taper waist
+    for (const [fIdx, sx] of [-1, 1].entries()) {
+      const flankPlate = makeSplineLoftGeometry(
+        [
+          [sx * 0.115 * bulk, spine1Len * 0.18, 0.05 * bulk],
+          [sx * 0.155 * bulk, spine1Len * 0.56, 0.0],
+          [sx * 0.168 * bulk, spine1Len * 0.94, -0.05 * bulk],
+        ],
+        [
+          [0.022 * bulk, 0.045 * bulk],
+          [0.026 * bulk, 0.055 * bulk],
+          [0.024 * bulk, 0.05 * bulk],
+        ],
+        8,
+        10,
+        { colorHex: spec.armorColor }
+      );
+      spine1Parts.push(
+        tagPart(flankPlate, `demon_flank_plate_${fIdx}`, 'magma_obsidian', spec.armorColor, {
+          accentHex: spec.accentColor,
+          lockVertical: false,
+        })
+      );
+    }
+  }
+  addBakedBone('Monster_Spine1', 'spine_01', spine1Parts);
 
   const spine2Parts: TaggedGeometryPart[] = [
     tagPart(
       makeAnatomicalTorsoGeometry(
-        spine2Len * 1.12,
-        0.155 * bulk,
-        0.11 * bulk,
-        0.178 * bulk,
-        0.125 * bulk,
-        { isArmored: !isSkeleton, radialSegs: 16, heightSegs: 6, hexColor: spec.armorColor }
+        spine2Len * 1.14,
+        (isBossDemon ? 0.17 : 0.155) * bulk,
+        (isBossDemon ? 0.118 : 0.11) * bulk,
+        (isBossDemon ? 0.215 : 0.178) * bulk,
+        (isBossDemon ? 0.14 : 0.125) * bulk,
+        {
+          isArmored: !isSkeleton,
+          radialSegs: isBossDemon ? 18 : 16,
+          heightSegs: isBossDemon ? 7 : 6,
+          hexColor: spec.armorColor,
+          musculature: isBossDemon ? 1.15 : 1.0,
+        }
       ),
       'm_spine2_armor',
       isSkeleton ? 'bone_ivory' : armorRecipe,
@@ -659,6 +796,28 @@ export function buildNwlMonster(
       { accentHex: spec.accentColor }
     ),
   ];
+  if (isBossDemon) {
+    for (let sIdx = 0; sIdx < 2; sIdx++) {
+      const sy = spine2Len * (0.34 + sIdx * 0.42);
+      const dorsalSpur = makeCurvedHornGeometry(
+        7,
+        0.028,
+        0.005,
+        0.16,
+        0,
+        -0.06,
+        7,
+        '#d8be84'
+      );
+      dorsalSpur.rotateX(-Math.PI * 0.42);
+      dorsalSpur.translate(0, sy, -0.125 * bulk);
+      spine2Parts.push(
+        tagPart(dorsalSpur, `demon_spine2_spur_${sIdx}`, 'bone_ivory', '#d8be84', {
+          lockVertical: false,
+        })
+      );
+    }
+  }
   if (isSkeleton) {
     // Sculpted ribcage arches around spine_02
     for (let rIdx = 0; rIdx < 3; rIdx++) {
@@ -703,12 +862,18 @@ export function buildNwlMonster(
   const chestParts: TaggedGeometryPart[] = [
     tagPart(
       makeAnatomicalTorsoGeometry(
-        spine3Len * 0.94,
-        0.185 * bulk,
-        0.13 * bulk,
-        0.21 * bulk,
-        0.14 * bulk,
-        { isArmored: !isSkeleton, radialSegs: 18, heightSegs: 7, hexColor: spec.armorColor }
+        spine3Len * (isBossDemon ? 1.04 : 0.94),
+        (isBossDemon ? 0.215 : 0.185) * bulk,
+        (isBossDemon ? 0.14 : 0.13) * bulk,
+        (isBossDemon ? 0.275 : 0.21) * bulk,
+        (isBossDemon ? 0.175 : 0.14) * bulk,
+        {
+          isArmored: !isSkeleton,
+          radialSegs: isBossDemon ? 20 : 18,
+          heightSegs: isBossDemon ? 8 : 7,
+          hexColor: spec.armorColor,
+          musculature: isBossDemon ? 1.25 : 1.0,
+        }
       ),
       'm_spine3_core',
       isSkeleton ? 'bone_ivory' : armorRecipe,
@@ -816,6 +981,170 @@ export function buildNwlMonster(
       tagPart(mantle, 'cultist_mantle', 'woven_cloth', spec.trimColor),
       tagPart(sigil, 'cultist_sigil', 'runic_glow', spec.accentColor, { lockVertical: false })
     );
+  } else if (isBossDemon) {
+    // Broad sculpted demonic upper-chest musculature, trapezius yoke, lats & scapular wing mounts
+    const demonSdf = makeSdfOrganicMesh(
+      (x, y, z) => {
+        const lats = sdEllipsoid(
+          x,
+          y,
+          z,
+          0,
+          spine3Len * 0.6,
+          -0.015 * bulk,
+          0.295 * bulk,
+          spine3Len * 0.52,
+          0.145 * bulk
+        );
+        const trapL = sdCapsule(
+          x,
+          y,
+          z,
+          0.07 * bulk,
+          spine3Len * 0.98,
+          -0.02,
+          0.275 * bulk,
+          spine3Len * 0.82,
+          -0.02,
+          0.088 * bulk
+        );
+        const trapR = sdCapsule(
+          x,
+          y,
+          z,
+          -0.07 * bulk,
+          spine3Len * 0.98,
+          -0.02,
+          -0.275 * bulk,
+          spine3Len * 0.82,
+          -0.02,
+          0.088 * bulk
+        );
+        const pecL = sdEllipsoid(
+          x,
+          y,
+          z,
+          0.125 * bulk,
+          spine3Len * 0.66,
+          0.105 * bulk,
+          0.115 * bulk,
+          0.082,
+          0.078 * bulk
+        );
+        const pecR = sdEllipsoid(
+          x,
+          y,
+          z,
+          -0.125 * bulk,
+          spine3Len * 0.66,
+          0.105 * bulk,
+          0.115 * bulk,
+          0.082,
+          0.078 * bulk
+        );
+        const dorsalRidge = sdEllipsoid(
+          x,
+          y,
+          z,
+          0,
+          spine3Len * 0.64,
+          -0.125 * bulk,
+          0.125 * bulk,
+          spine3Len * 0.46,
+          0.085 * bulk
+        );
+        return sminPoly(
+          sminPoly(sminPoly(lats, Math.min(trapL, trapR), 0.036), Math.min(pecL, pecR), 0.032),
+          dorsalRidge,
+          0.03
+        );
+      },
+      [-0.38 * bulk, 0.0, -0.22 * bulk],
+      [0.38 * bulk, spine3Len * 1.12, 0.22 * bulk],
+      26,
+      spec.skinColor,
+      { flatShaded: false }
+    );
+    // High spiked obsidian gorget collar framing the smaller proportional head
+    const gorget = makeLatheProfile(
+      [
+        [0.16 * bulk, spine3Len * 0.82],
+        [0.23 * bulk, spine3Len * 0.94],
+        [0.19 * bulk, spine3Len * 1.06],
+      ],
+      18,
+      spec.armorColor,
+      { smoothRadialNormals: true }
+    );
+    // Sculpted obsidian pectoral chestplate ribs + glowing molten heart core
+    const runeCore = prepareColoredPart(new THREE.OctahedronGeometry(0.068, 1), spec.accentColor);
+    runeCore.scale(0.85, 1.3, 0.65);
+    runeCore.translate(0, spine3Len * 0.62, 0.195 * bulk);
+    chestParts.push(
+      tagPart(demonSdf, 'demon_carapace_sdf', 'demon_hide', spec.skinColor, {
+        accentHex: spec.trimColor,
+        lockVertical: false,
+      }),
+      tagPart(gorget, 'demon_gorget', 'magma_obsidian', spec.armorColor, {
+        accentHex: spec.accentColor,
+      }),
+      tagPart(runeCore, 'demon_chest_rune', 'runic_glow', spec.accentColor, {
+        accentHex: '#ffd541',
+        lockVertical: false,
+      })
+    );
+    for (const [bIdx, sx] of [-1, 1].entries()) {
+      const chestPlateArch = makeSplineLoftGeometry(
+        [
+          [sx * 0.04 * bulk, spine3Len * 0.44, 0.185 * bulk],
+          [sx * 0.17 * bulk, spine3Len * 0.64, 0.17 * bulk],
+          [sx * 0.25 * bulk, spine3Len * 0.86, 0.06 * bulk],
+        ],
+        [
+          [0.026 * bulk, 0.018 * bulk],
+          [0.036 * bulk, 0.024 * bulk],
+          [0.028 * bulk, 0.02 * bulk],
+        ],
+        8,
+        10,
+        { colorHex: spec.armorColor }
+      );
+      const dorsalHorn = makeCurvedHornGeometry(
+        8,
+        0.038,
+        0.007,
+        0.24,
+        sx * 0.055,
+        -0.11,
+        8,
+        '#d8be84'
+      );
+      dorsalHorn.rotateX(-0.56);
+      dorsalHorn.translate(sx * 0.105 * bulk, spine3Len * 0.72, -0.145 * bulk);
+
+      const wingCollar = makeSplineLoftGeometry(
+        [
+          [sx * 0.055 * bulk, spine3Len * 0.56, -0.135 * bulk],
+          [sx * 0.115 * bulk, spine3Len * 0.64, -0.175 * bulk],
+        ],
+        [0.078, 0.064],
+        10,
+        6,
+        { colorHex: spec.skinColor }
+      );
+      chestParts.push(
+        tagPart(chestPlateArch, `demon_chest_arch_${bIdx}`, 'magma_obsidian', spec.armorColor, {
+          accentHex: spec.accentColor,
+          lockVertical: false,
+        }),
+        tagPart(dorsalHorn, `demon_dorsal_spike_${bIdx}`, 'bone_ivory', '#d8be84', {
+          lockVertical: false,
+        }),
+        tagPart(wingCollar, `demon_wing_collar_${bIdx}`, 'demon_hide', spec.skinColor, {
+          lockVertical: false,
+        })
+      );
+    }
   } else if (isBoss) {
     const sdfChest = makeSdfOrganicMesh(
       (x, y, z) => {
@@ -918,14 +1247,185 @@ export function buildNwlMonster(
   }
   addBakedBone('Monster_Spine3', 'spine_03', chestParts, false);
 
+  if (isBossDemon) {
+    // Imposing articulated demonic bat wings attached to spine_03
+    const lerp3 = (
+      a: readonly [number, number, number],
+      b: readonly [number, number, number],
+      t: number
+    ): [number, number, number] => [
+      a[0] + (b[0] - a[0]) * t,
+      a[1] + (b[1] - a[1]) * t,
+      a[2] + (b[2] - a[2]) * t,
+    ];
+    for (const [wIdx, sx] of [-1, 1].entries()) {
+      const side = sx > 0 ? 'l' : 'r';
+      const wRoot: [number, number, number] = [sx * 0.1 * bulk, spine3Len * 0.62, -0.15 * bulk];
+      const wElbow: [number, number, number] = [sx * 0.36, spine3Len * 0.92, -0.34];
+      const wWrist: [number, number, number] = [sx * 0.72, spine3Len + 0.27, -0.26];
+
+      const f1Mid: [number, number, number] = [sx * 0.98, spine3Len + 0.29, -0.38];
+      const f1End: [number, number, number] = [sx * 1.24, spine3Len + 0.08, -0.56];
+      const f2Mid: [number, number, number] = [sx * 0.94, spine3Len + 0.02, -0.44];
+      const f2End: [number, number, number] = [sx * 1.12, spine3Len - 0.28, -0.62];
+      const f3Mid: [number, number, number] = [sx * 0.76, spine3Len - 0.18, -0.46];
+      const f3End: [number, number, number] = [sx * 0.82, spine3Len - 0.56, -0.62];
+      const f4Mid: [number, number, number] = [sx * 0.52, spine3Len - 0.28, -0.44];
+      const f4End: [number, number, number] = [sx * 0.48, spine3Len - 0.64, -0.56];
+
+      const armSpar = makeSplineLoftGeometry(
+        [wRoot, wElbow, wWrist],
+        [0.068, 0.052, 0.038],
+        10,
+        12,
+        { colorHex: spec.armorColor }
+      );
+      const thumbClaw = makeCurvedHornGeometry(
+        7,
+        0.032,
+        0.005,
+        0.18,
+        sx * 0.04,
+        0.08,
+        8,
+        '#d8be84'
+      );
+      thumbClaw.rotateX(0.35);
+      thumbClaw.translate(wWrist[0], wWrist[1], wWrist[2]);
+
+      const finger1 = makeSplineLoftGeometry([wWrist, f1Mid, f1End], [0.036, 0.024, 0.008], 8, 10, {
+        colorHex: spec.armorColor,
+      });
+      const finger2 = makeSplineLoftGeometry([wWrist, f2Mid, f2End], [0.028, 0.018, 0.007], 7, 10, {
+        colorHex: spec.armorColor,
+      });
+      const finger3 = makeSplineLoftGeometry([wWrist, f3Mid, f3End], [0.026, 0.016, 0.006], 7, 10, {
+        colorHex: spec.armorColor,
+      });
+      const finger4 = makeSplineLoftGeometry([wWrist, f4Mid, f4End], [0.024, 0.015, 0.006], 7, 10, {
+        colorHex: spec.armorColor,
+      });
+
+      const memHex = '#3b0d18';
+      const innerTrailA: [number, number, number] = [sx * 0.11, spine3Len - 0.42, -0.22];
+      const innerTrailB: [number, number, number] = [sx * 0.36, spine3Len - 0.54, -0.46];
+      const bayFlank = makeBossWingMembraneGrid(
+        wRoot,
+        wElbow,
+        innerTrailA,
+        innerTrailB,
+        6,
+        5,
+        0.05,
+        0.06,
+        0.025,
+        memHex
+      );
+      const bayArm = makeBossWingMembraneGrid(
+        wElbow,
+        wWrist,
+        innerTrailB,
+        f4End,
+        6,
+        5,
+        0.06,
+        0.08,
+        0.035,
+        memHex
+      );
+      const bay43 = makeBossWingMembraneGrid(
+        lerp3(wWrist, f4End, 0.1),
+        lerp3(wWrist, f3End, 0.1),
+        f4End,
+        f3End,
+        6,
+        5,
+        0.045,
+        0.075,
+        0.032,
+        memHex
+      );
+      const bay32 = makeBossWingMembraneGrid(
+        lerp3(wWrist, f3End, 0.1),
+        lerp3(wWrist, f2End, 0.1),
+        f3End,
+        f2End,
+        6,
+        5,
+        0.045,
+        0.08,
+        0.035,
+        memHex
+      );
+      const bay21 = makeBossWingMembraneGrid(
+        lerp3(wWrist, f2End, 0.1),
+        lerp3(wWrist, f1End, 0.1),
+        f2End,
+        f1End,
+        6,
+        5,
+        0.04,
+        0.075,
+        0.032,
+        memHex
+      );
+
+      addBakedBone(`Monster_Wing_${side}`, 'spine_03', [
+        tagPart(armSpar, `demon_wing_arm_${wIdx}`, 'magma_obsidian', spec.armorColor, {
+          accentHex: spec.accentColor,
+          lockVertical: false,
+        }),
+        tagPart(thumbClaw, `demon_wing_thumb_${wIdx}`, 'bone_ivory', '#d8be84', {
+          lockVertical: false,
+        }),
+        tagPart(finger1, `demon_wing_f1_${wIdx}`, 'magma_obsidian', spec.armorColor, {
+          accentHex: spec.accentColor,
+          lockVertical: false,
+        }),
+        tagPart(finger2, `demon_wing_f2_${wIdx}`, 'magma_obsidian', spec.armorColor, {
+          accentHex: spec.accentColor,
+          lockVertical: false,
+        }),
+        tagPart(finger3, `demon_wing_f3_${wIdx}`, 'magma_obsidian', spec.armorColor, {
+          accentHex: spec.accentColor,
+          lockVertical: false,
+        }),
+        tagPart(finger4, `demon_wing_f4_${wIdx}`, 'magma_obsidian', spec.armorColor, {
+          accentHex: spec.accentColor,
+          lockVertical: false,
+        }),
+        tagPart(bayFlank, `demon_wing_mem_flank_${wIdx}`, 'wing_membrane', memHex, {
+          accentHex: spec.accentColor,
+          lockVertical: false,
+        }),
+        tagPart(bayArm, `demon_wing_mem_arm_${wIdx}`, 'wing_membrane', memHex, {
+          accentHex: spec.accentColor,
+          lockVertical: false,
+        }),
+        tagPart(bay43, `demon_wing_mem_43_${wIdx}`, 'wing_membrane', memHex, {
+          accentHex: spec.accentColor,
+          lockVertical: false,
+        }),
+        tagPart(bay32, `demon_wing_mem_32_${wIdx}`, 'wing_membrane', memHex, {
+          accentHex: spec.accentColor,
+          lockVertical: false,
+        }),
+        tagPart(bay21, `demon_wing_mem_21_${wIdx}`, 'wing_membrane', memHex, {
+          accentHex: spec.accentColor,
+          lockVertical: false,
+        }),
+      ]);
+    }
+  }
+
   addBakedBone('Monster_Neck', 'neck_01', [
     tagPart(
       makeSculptedLimbGeometry(
-        neckLen * 1.1,
-        (isSkeleton ? 0.036 : 0.058) * bulk,
-        (isSkeleton ? 0.036 : 0.058) * bulk,
-        (isSkeleton ? 0.032 : 0.055) * bulk,
-        (isSkeleton ? 0.032 : 0.055) * bulk,
+        neckLen * (isBossDemon ? 1.15 : 1.1),
+        (isSkeleton ? 0.036 : isBossDemon ? 0.088 : 0.058) * bulk,
+        (isSkeleton ? 0.036 : isBossDemon ? 0.084 : 0.058) * bulk,
+        (isSkeleton ? 0.032 : isBossDemon ? 0.064 : 0.055) * bulk,
+        (isSkeleton ? 0.032 : isBossDemon ? 0.062 : 0.055) * bulk,
         { profile: 'taper', radialSegs: 14, heightSegs: 4, hexColor: spec.skinColor }
       ),
       'm_neck',
@@ -936,9 +1436,13 @@ export function buildNwlMonster(
 
   // Head + Monster Silhouettes (sculpted cranium preserving semantic head_front eyes)
   const headScale = isGoblin ? 1.24 : bulk;
-  const rawSkull = makeBeveledBox(0.22 * headScale, 0.22 * headScale, 0.22 * headScale, 0.036 * headScale, spec.skinColor, {
-    offset: [0, 0.11 * headScale, 0],
-  });
+  const rawSkull = isBossDemon
+    ? makeBeveledBox(0.155, 0.175, 0.17, 0.032, spec.skinColor, {
+        offset: [0, 0.098, 0],
+      })
+    : makeBeveledBox(0.22 * headScale, 0.22 * headScale, 0.22 * headScale, 0.036 * headScale, spec.skinColor, {
+        offset: [0, 0.11 * headScale, 0],
+      });
   const sculptedSkull = subdivideGeometryLoop(rawSkull, 1, { defaultHex: spec.skinColor });
   rawSkull.dispose();
   const headParts: TaggedGeometryPart[] = [
@@ -1154,6 +1658,110 @@ export function buildNwlMonster(
         { lockVertical: false }
       )
     );
+  } else if (isBossDemon) {
+    // Proportional menacing demon head: angular jaw, heavy brow ridges, fangs, obsidian helm crest & swept horns
+    const demonJaw = subdivideGeometryLoop(
+      makeBeveledBox(0.125, 0.068, 0.145, 0.015, spec.skinColor, {
+        offset: [0, 0.032, 0.044],
+      }),
+      1,
+      { defaultHex: spec.skinColor }
+    );
+    const obsidianCrest = makeSplineLoftGeometry(
+      [
+        [0, 0.168, 0.068],
+        [0, 0.198, -0.015],
+        [0, 0.175, -0.105],
+      ],
+      [
+        [0.026, 0.016],
+        [0.036, 0.024],
+        [0.02, 0.016],
+      ],
+      10,
+      10,
+      { colorHex: spec.armorColor }
+    );
+    headParts.push(
+      tagPart(demonJaw, 'demon_jaw', 'demon_hide', spec.skinColor, { lockVertical: false }),
+      tagPart(obsidianCrest, 'demon_obsidian_crest', 'magma_obsidian', spec.armorColor, {
+        accentHex: spec.accentColor,
+        lockVertical: false,
+      })
+    );
+    for (const [hIdx, sx] of [-1, 1].entries()) {
+      const browRidge = makeSplineLoftGeometry(
+        [
+          [0, 0.116, 0.092],
+          [sx * 0.052, 0.132, 0.094],
+          [sx * 0.092, 0.152, 0.064],
+        ],
+        [0.014, 0.02, 0.014],
+        8,
+        8,
+        { colorHex: spec.skinColor }
+      );
+      const cheekRidge = makeSplineLoftGeometry(
+        [
+          [sx * 0.068, 0.064, 0.074],
+          [sx * 0.086, 0.095, 0.025],
+        ],
+        [0.015, 0.018],
+        7,
+        6,
+        { colorHex: spec.skinColor }
+      );
+      const fang = makeCurvedHornGeometry(6, 0.012, 0.002, 0.052, sx * 0.006, 0.012, 6, '#e8dcc0');
+      fang.rotateX(-0.18);
+      fang.translate(sx * 0.036, 0.042, 0.104);
+
+      const hornCollar = makeLatheProfile(
+        [
+          [0.052, 0],
+          [0.058, 0.025],
+          [0.046, 0.045],
+        ],
+        10,
+        spec.armorColor,
+        { smoothRadialNormals: true }
+      );
+      hornCollar.rotateZ(sx * -0.76);
+      hornCollar.rotateX(-0.54);
+      hornCollar.translate(sx * 0.07, 0.152, 0.018);
+
+      const greatHorn = makeCurvedHornGeometry(
+        12,
+        0.042,
+        0.006,
+        0.38,
+        sx * 0.15,
+        -0.22,
+        10,
+        '#d8be84'
+      );
+      greatHorn.rotateZ(sx * -0.76);
+      greatHorn.rotateX(-0.54);
+      greatHorn.translate(sx * 0.072, 0.154, 0.016);
+
+      headParts.push(
+        tagPart(browRidge, `demon_ridge_${hIdx}`, 'demon_hide', spec.skinColor, {
+          lockVertical: false,
+        }),
+        tagPart(cheekRidge, `demon_cheek_${hIdx}`, 'demon_hide', spec.skinColor, {
+          lockVertical: false,
+        }),
+        tagPart(fang, `demon_fang_${hIdx}`, 'bone_ivory', '#e8dcc0', {
+          lockVertical: false,
+        }),
+        tagPart(hornCollar, `demon_horn_collar_${hIdx}`, 'magma_obsidian', spec.armorColor, {
+          accentHex: spec.accentColor,
+          lockVertical: false,
+        }),
+        tagPart(greatHorn, `demon_great_horn_${hIdx}`, 'bone_ivory', '#d8be84', {
+          lockVertical: false,
+        })
+      );
+    }
   } else if (isBoss || id === 'monster.gargoyle') {
     headParts.push(
       tagPart(
@@ -1218,19 +1826,84 @@ export function buildNwlMonster(
     const uParts: TaggedGeometryPart[] = [
       tagPart(
         makeSculptedLimbGeometry(
-          uArm * 0.96,
-          0.068 * bulk * limbRadScale,
-          0.068 * bulk * limbRadScale,
-          0.056 * bulk * limbRadScale,
-          0.056 * bulk * limbRadScale,
-          { profile: isSkeleton ? 'taper' : 'bicep', radialSegs: 14, heightSegs: 6, hexColor: spec.skinColor }
+          uArm * (isBossDemon ? 0.98 : 0.96),
+          (isBossDemon ? 0.084 : 0.068) * bulk * limbRadScale,
+          (isBossDemon ? 0.084 : 0.068) * bulk * limbRadScale,
+          (isBossDemon ? 0.068 : 0.056) * bulk * limbRadScale,
+          (isBossDemon ? 0.068 : 0.056) * bulk * limbRadScale,
+          {
+            profile: isSkeleton ? 'taper' : 'bicep',
+            radialSegs: isBossDemon ? 16 : 14,
+            heightSegs: isBossDemon ? 7 : 6,
+            hexColor: spec.skinColor,
+          }
         ),
         `m_ua_${side}`,
         skinRecipe,
         spec.skinColor
       ),
     ];
-    if (id === 'orcs.orc_04' || id === 'orcs.goblin_06' || isBoss || id === 'monster.crystal_golem') {
+    if (isBossDemon) {
+      // Broad properly-oriented obsidian shoulder pauldrons + twin swept shoulder horns
+      const pScale = 1.24 * bulk;
+      const pauldron = makePauldronShellGeometry(
+        0.26 * pScale,
+        0.2 * pScale,
+        0.28 * pScale,
+        0.045,
+        spec.armorColor
+      );
+      if (side === 'l') {
+        pauldron.rotateZ(Math.PI * 0.5);
+        pauldron.translate(-0.045 * bulk, 0.045, 0);
+      } else {
+        pauldron.rotateY(Math.PI);
+        pauldron.rotateZ(-Math.PI * 0.5);
+        pauldron.translate(0.045 * bulk, 0.045, 0);
+      }
+      uParts.push(
+        tagPart(pauldron, `m_pauldron_${side}`, armorRecipe, spec.armorColor, {
+          accentHex: spec.accentColor,
+          lockVertical: false,
+        })
+      );
+
+      const mainHorn = makeCurvedHornGeometry(
+        8,
+        0.044,
+        0.007,
+        0.26,
+        0,
+        -0.06,
+        8,
+        '#d8be84'
+      );
+      mainHorn.rotateZ(side === 'l' ? 0.92 : -0.92);
+      mainHorn.translate(side === 'l' ? -0.095 * bulk : 0.095 * bulk, 0.06, 0);
+
+      const outerSpur = makeCurvedHornGeometry(
+        6,
+        0.028,
+        0.005,
+        0.15,
+        0,
+        -0.03,
+        7,
+        spec.accentColor
+      );
+      outerSpur.rotateZ(side === 'l' ? 0.55 : -0.55);
+      outerSpur.translate(side === 'l' ? -0.055 * bulk : 0.055 * bulk, 0.13, -0.03);
+
+      uParts.push(
+        tagPart(mainHorn, `demon_pauldron_horn_${side}`, 'bone_ivory', '#d8be84', {
+          lockVertical: false,
+        }),
+        tagPart(outerSpur, `demon_pauldron_spur_${side}`, 'magma_obsidian', spec.armorColor, {
+          accentHex: spec.accentColor,
+          lockVertical: false,
+        })
+      );
+    } else if (id === 'orcs.orc_04' || id === 'orcs.goblin_06' || isBoss || id === 'monster.crystal_golem') {
       const pScale = isBoss ? 1.05 * bulk : id === 'orcs.orc_04' ? 0.82 * bulk : id === 'monster.crystal_golem' ? 0.95 * bulk : 0.64 * bulk;
       const pauldron = makePauldronShellGeometry(
         0.24 * pScale,
@@ -1273,18 +1946,18 @@ export function buildNwlMonster(
     }
     addBakedBone(`Monster_UA_${side}`, `upperarm_${side}`, uParts);
 
-    addBakedBone(`Monster_LA_${side}`, `lowerarm_${side}`, [
+    const laParts: TaggedGeometryPart[] = [
       tagPart(
         makeSculptedLimbGeometry(
-          lArm * 0.96,
-          0.058 * bulk * limbRadScale,
-          0.058 * bulk * limbRadScale,
-          0.048 * bulk * limbRadScale,
-          0.048 * bulk * limbRadScale,
+          lArm * (isBossDemon ? 0.98 : 0.96),
+          (isBossDemon ? 0.072 : 0.058) * bulk * limbRadScale,
+          (isBossDemon ? 0.072 : 0.058) * bulk * limbRadScale,
+          (isBossDemon ? 0.056 : 0.048) * bulk * limbRadScale,
+          (isBossDemon ? 0.056 : 0.048) * bulk * limbRadScale,
           {
             profile: isBoss || isGolem ? 'armor_limb' : 'forearm',
-            radialSegs: 14,
-            heightSegs: 6,
+            radialSegs: isBossDemon ? 16 : 14,
+            heightSegs: isBossDemon ? 7 : 6,
             hexColor: spec.armorColor,
           }
         ),
@@ -1293,23 +1966,72 @@ export function buildNwlMonster(
         isSkeleton ? spec.skinColor : spec.armorColor,
         { accentHex: spec.accentColor }
       ),
-    ]);
+    ];
+    if (isBossDemon) {
+      // Flared elbow spike + clawed forearm fin
+      const elbowSpike = makeCurvedHornGeometry(
+        7,
+        0.032,
+        0.005,
+        0.18,
+        0,
+        -0.02,
+        7,
+        spec.armorColor
+      );
+      elbowSpike.rotateX(-Math.PI * 0.58);
+      elbowSpike.translate(0, 0.03, -0.062 * bulk);
+      laParts.push(
+        tagPart(elbowSpike, `demon_elbow_spike_${side}`, 'magma_obsidian', spec.armorColor, {
+          accentHex: spec.accentColor,
+          lockVertical: false,
+        })
+      );
+    }
+    addBakedBone(`Monster_LA_${side}`, `lowerarm_${side}`, laParts);
 
     const handParts: TaggedGeometryPart[] = [
       tagPart(
         makeSculptedLimbGeometry(
-          0.115,
-          0.05 * bulk * limbRadScale,
-          0.046 * bulk * limbRadScale,
-          0.044 * bulk * limbRadScale,
-          0.04 * bulk * limbRadScale,
-          { profile: 'taper', radialSegs: 12, heightSegs: 4, hexColor: spec.skinColor }
+          isBossDemon ? 0.13 : 0.115,
+          (isBossDemon ? 0.058 : 0.05) * bulk * limbRadScale,
+          (isBossDemon ? 0.052 : 0.046) * bulk * limbRadScale,
+          (isBossDemon ? 0.05 : 0.044) * bulk * limbRadScale,
+          (isBossDemon ? 0.044 : 0.04) * bulk * limbRadScale,
+          {
+            profile: isBossDemon ? 'armor_limb' : 'taper',
+            radialSegs: 12,
+            heightSegs: 4,
+            hexColor: isBossDemon ? spec.armorColor : spec.skinColor,
+          }
         ),
         `m_hand_${side}`,
-        skinRecipe,
-        spec.skinColor
+        isBossDemon ? armorRecipe : skinRecipe,
+        isBossDemon ? spec.armorColor : spec.skinColor,
+        isBossDemon ? { accentHex: spec.accentColor } : undefined
       ),
     ];
+    if (isBossDemon) {
+      // 4 curved gauntlet claws + thumb claw
+      for (const [cIdx, cz] of [-0.034, -0.011, 0.011, 0.034].entries()) {
+        const claw = makeCurvedHornGeometry(5, 0.011, 0.002, 0.088, 0, 0.02, 6, '#d8be84');
+        claw.rotateZ(side === 'l' ? -0.35 : 0.35);
+        claw.translate(side === 'l' ? 0.012 : -0.012, 0.118, cz * bulk);
+        handParts.push(
+          tagPart(claw, `demon_hand_claw_${side}_${cIdx}`, 'bone_ivory', '#d8be84', {
+            lockVertical: false,
+          })
+        );
+      }
+      const thumbClaw = makeCurvedHornGeometry(5, 0.012, 0.002, 0.075, 0, 0.015, 6, '#d8be84');
+      thumbClaw.rotateX(0.42);
+      thumbClaw.translate(side === 'l' ? 0.018 : -0.018, 0.068, 0.048 * bulk);
+      handParts.push(
+        tagPart(thumbClaw, `demon_thumb_claw_${side}`, 'bone_ivory', '#d8be84', {
+          lockVertical: false,
+        })
+      );
+    }
 
     if (side === 'r') {
       if (id === 'orcs.goblin_01' || id === 'monster.skeleton_warrior') {
@@ -1515,33 +2237,59 @@ export function buildNwlMonster(
   }
 
   for (const side of ['l', 'r'] as const) {
-    addBakedBone(`Monster_Thigh_${side}`, `thigh_${side}`, [
+    const sx = side === 'l' ? 1 : -1;
+    const thighParts: TaggedGeometryPart[] = [
       tagPart(
         makeSculptedLimbGeometry(
-          thigh * 0.96,
-          0.092 * bulk * limbRadScale,
-          0.092 * bulk * limbRadScale,
-          0.072 * bulk * limbRadScale,
-          0.072 * bulk * limbRadScale,
-          { profile: isSkeleton ? 'taper' : 'thigh', radialSegs: 14, heightSegs: 7, hexColor: spec.skinColor }
+          thigh * (isBossDemon ? 0.98 : 0.96),
+          (isBossDemon ? 0.112 : 0.092) * bulk * limbRadScale,
+          (isBossDemon ? 0.114 : 0.092) * bulk * limbRadScale,
+          (isBossDemon ? 0.082 : 0.072) * bulk * limbRadScale,
+          (isBossDemon ? 0.084 : 0.072) * bulk * limbRadScale,
+          {
+            profile: isSkeleton ? 'taper' : 'thigh',
+            radialSegs: isBossDemon ? 16 : 14,
+            heightSegs: isBossDemon ? 8 : 7,
+            hexColor: spec.skinColor,
+          }
         ),
         `m_thigh_${side}`,
         skinRecipe,
         spec.skinColor
       ),
-    ]);
-    addBakedBone(`Monster_Calf_${side}`, `calf_${side}`, [
+    ];
+    if (isBossDemon) {
+      // Sculpted outer obsidian thigh armor cuisse
+      const cuisse = makePauldronShellGeometry(
+        0.15 * bulk,
+        0.24 * bulk,
+        0.22 * bulk,
+        0.032,
+        spec.armorColor
+      );
+      if (side === 'r') cuisse.rotateY(Math.PI);
+      cuisse.translate(sx * 0.065 * bulk, thigh * 0.45, 0.01);
+      thighParts.push(
+        tagPart(cuisse, `demon_thigh_plate_${side}`, 'magma_obsidian', spec.armorColor, {
+          accentHex: spec.accentColor,
+          lockVertical: false,
+        })
+      );
+    }
+    addBakedBone(`Monster_Thigh_${side}`, `thigh_${side}`, thighParts);
+
+    const calfParts: TaggedGeometryPart[] = [
       tagPart(
         makeSculptedLimbGeometry(
-          calf * 0.96,
-          0.072 * bulk * limbRadScale,
-          0.072 * bulk * limbRadScale,
-          0.058 * bulk * limbRadScale,
-          0.058 * bulk * limbRadScale,
+          calf * (isBossDemon ? 0.98 : 0.96),
+          (isBossDemon ? 0.082 : 0.072) * bulk * limbRadScale,
+          (isBossDemon ? 0.086 : 0.072) * bulk * limbRadScale,
+          (isBossDemon ? 0.05 : 0.058) * bulk * limbRadScale,
+          (isBossDemon ? 0.054 : 0.058) * bulk * limbRadScale,
           {
             profile: isBoss || isGolem ? 'armor_limb' : isSkeleton ? 'taper' : 'calf',
-            radialSegs: 14,
-            heightSegs: 7,
+            radialSegs: isBossDemon ? 16 : 14,
+            heightSegs: isBossDemon ? 8 : 7,
             hexColor: spec.armorColor,
           }
         ),
@@ -1550,22 +2298,89 @@ export function buildNwlMonster(
         isSkeleton ? spec.skinColor : spec.armorColor,
         { accentHex: spec.accentColor }
       ),
-    ]);
-    addBakedBone(`Monster_Foot_${side}`, `foot_${side}`, [
-      tagPart(
-        makeSculptedLimbGeometry(
-          0.185,
-          0.062 * bulk,
-          0.072 * bulk,
-          0.054 * bulk,
-          0.06 * bulk,
-          { profile: 'taper', radialSegs: 12, heightSegs: 4, hexColor: '#141013' }
+    ];
+    if (isBossDemon) {
+      // Digitigrade-inspired backward hock tendon bulge + sharp knee & hock spurs
+      const hockCurve = makeSplineLoftGeometry(
+        [
+          [0, calf * 0.1, 0.036 * bulk],
+          [0, calf * 0.34, 0.088 * bulk],
+          [0, calf * 0.76, 0.028 * bulk],
+        ],
+        [0.036 * bulk, 0.044 * bulk, 0.022 * bulk],
+        8,
+        10,
+        { colorHex: spec.skinColor }
+      );
+      const kneeSpur = makeCurvedHornGeometry(6, 0.032, 0.005, 0.15, 0, -0.025, 8, '#d8be84');
+      kneeSpur.rotateX(-Math.PI * 0.44);
+      kneeSpur.translate(0, 0.045, -0.075 * bulk);
+      const hockSpur = makeCurvedHornGeometry(6, 0.024, 0.004, 0.13, 0, 0.02, 8, '#d8be84');
+      hockSpur.rotateX(Math.PI * 0.65);
+      hockSpur.translate(0, calf * 0.34, 0.098 * bulk);
+      calfParts.push(
+        tagPart(hockCurve, `demon_digitigrade_hock_${side}`, 'demon_hide', spec.skinColor, {
+          lockVertical: false,
+        }),
+        tagPart(kneeSpur, `demon_knee_spur_${side}`, 'bone_ivory', '#d8be84', {
+          lockVertical: false,
+        }),
+        tagPart(hockSpur, `demon_hock_spur_${side}`, 'bone_ivory', '#d8be84', {
+          lockVertical: false,
+        })
+      );
+    }
+    addBakedBone(`Monster_Calf_${side}`, `calf_${side}`, calfParts);
+
+    if (isBossDemon) {
+      const hoofBody = subdivideGeometryLoop(
+        makeBeveledBox(0.125 * bulk, 0.21, 0.092 * bulk, 0.022, spec.armorColor, {
+          offset: [0, 0.095, 0.01],
+        }),
+        1,
+        { defaultHex: spec.armorColor }
+      );
+      const footParts: TaggedGeometryPart[] = [
+        tagPart(hoofBody, `m_foot_${side}`, 'magma_obsidian', spec.armorColor, {
+          accentHex: spec.accentColor,
+          lockVertical: false,
+        }),
+      ];
+      for (const [tIdx, tx] of [-0.038 * bulk, 0, 0.038 * bulk].entries()) {
+        const talon = makeCurvedHornGeometry(6, 0.018, 0.003, 0.105, 0, 0.02, 6, '#d8be84');
+        talon.translate(tx, 0.175, 0.015);
+        footParts.push(
+          tagPart(talon, `demon_foot_talon_${side}_${tIdx}`, 'bone_ivory', '#d8be84', {
+            lockVertical: false,
+          })
+        );
+      }
+      const heelSpur = makeCurvedHornGeometry(5, 0.018, 0.003, 0.095, 0, 0, 6, '#d8be84');
+      heelSpur.rotateX(Math.PI * 0.85);
+      heelSpur.translate(0, 0.01, -0.02);
+      footParts.push(
+        tagPart(heelSpur, `demon_heel_spur_${side}`, 'bone_ivory', '#d8be84', {
+          lockVertical: false,
+        })
+      );
+      addBakedBone(`Monster_Foot_${side}`, `foot_${side}`, footParts);
+    } else {
+      addBakedBone(`Monster_Foot_${side}`, `foot_${side}`, [
+        tagPart(
+          makeSculptedLimbGeometry(
+            0.185,
+            0.062 * bulk,
+            0.072 * bulk,
+            0.054 * bulk,
+            0.06 * bulk,
+            { profile: 'taper', radialSegs: 12, heightSegs: 4, hexColor: '#141013' }
+          ),
+          `m_foot_${side}`,
+          'stitched_leather',
+          '#141013'
         ),
-        `m_foot_${side}`,
-        'stitched_leather',
-        '#141013'
-      ),
-    ]);
+      ]);
+    }
   }
 
   const rigidRes = attachRigidPartsToUalRig(rig, partSpecs, sharedResources, {
