@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import type { PixelizerPipeline } from './PixelizerPipeline';
 import type { SteppedAnimationController } from './steppedAnimation';
-import type { SpriteSheetExportOptions } from './types';
+import type { IsoProjectionMode, SpriteSheetExportOptions } from './types';
+import { getIsometricPitchRad } from './snapping';
 
 export interface SpriteSheetAtlasFrame {
   name: string;
@@ -205,6 +206,235 @@ export interface NwlIsometricSheetOptions {
   framesPerDirection?: number; // default 8
   alphaThreshold?: number;     // default 110 -> binary hard alpha 0 / 255
   directions?: readonly string[];
+  projection?: IsoProjectionMode; // default 'dimetric_2_1' (~26.565 deg)
+  postOutlinePx?: boolean;        // clean 1px outline on binary-alpha buffer
+  postOutlineColor?: [number, number, number, number]; // default [0, 0, 0, 255]
+  tightPack?: boolean;            // shelf-pack trimmed frames & emit Unity metadata
+  clipName?: string;              // optional animation clip label for Unity metadata
+}
+
+export interface UnitySpriteFrameMeta {
+  name: string;
+  direction: string;
+  clip: string;
+  frameIndex: number;
+  rect: { x: number; y: number; w: number; h: number };
+  sourceSize: { w: number; h: number };
+  spriteSourceSize: { x: number; y: number; w: number; h: number };
+  pivot: { x: number; y: number };
+  trimmed: boolean;
+}
+
+export interface UnitySpriteAtlasMetadata {
+  version: string;
+  projection: IsoProjectionMode;
+  pitchDeg: number;
+  pixelsPerUnit: number;
+  atlasSize: { w: number; h: number };
+  frames: UnitySpriteFrameMeta[];
+}
+
+export interface TightPackFrameInput {
+  name: string;
+  direction: string;
+  clip: string;
+  frameIndex: number;
+  width: number;
+  height: number;
+  rgba: Uint8Array | Uint8ClampedArray;
+  /** Optional anchor in source-frame top-left pixel coords; defaults to bottom-center (width * 0.5, height) */
+  anchorPx?: { x: number; y: number };
+}
+
+export interface TightPackOptions {
+  padding?: number;
+  maxWidth?: number;
+  projection?: IsoProjectionMode;
+  pixelsPerUnit?: number;
+  version?: string;
+}
+
+export interface TightPackResult {
+  atlasRgba: Uint8ClampedArray;
+  atlasWidth: number;
+  atlasHeight: number;
+  unityMeta: UnitySpriteAtlasMetadata;
+}
+
+/**
+ * Applies a crisp 1px 4-connected outline onto a binary-alpha RGBA buffer in place.
+ * Avoids WebGL mip/linear haloing by operating strictly on discrete alpha > 0 pixels.
+ */
+export function applyPostOutline1px(
+  rgba: Uint8Array | Uint8ClampedArray,
+  width: number,
+  height: number,
+  color: [number, number, number, number] = [0, 0, 0, 255]
+): void {
+  const alphaCopy = new Uint8Array(width * height);
+  for (let i = 0; i < alphaCopy.length; i++) {
+    alphaCopy[i] = rgba[i * 4 + 3];
+  }
+
+  for (let y = 0; y < height; y++) {
+    const rowOffset = y * width;
+    for (let x = 0; x < width; x++) {
+      const idx = rowOffset + x;
+      if (alphaCopy[idx] > 0) continue;
+
+      const hasNeighbor =
+        (x > 0 && alphaCopy[idx - 1] > 0) ||
+        (x < width - 1 && alphaCopy[idx + 1] > 0) ||
+        (y > 0 && alphaCopy[idx - width] > 0) ||
+        (y < height - 1 && alphaCopy[idx + width] > 0);
+
+      if (hasNeighbor) {
+        const p = idx * 4;
+        rgba[p] = color[0];
+        rgba[p + 1] = color[1];
+        rgba[p + 2] = color[2];
+        rgba[p + 3] = color[3];
+      }
+    }
+  }
+}
+
+/**
+ * Trims transparent borders and shelf-packs sprite frames with padding, preserving the
+ * exact bottom-center foot pivot in normalized [0..1] Unity SpriteRenderer coordinates.
+ * Pure Node-compatible helper (no WebGL or DOM required).
+ */
+export function packTightSpriteFrames(
+  inputs: readonly TightPackFrameInput[],
+  options: TightPackOptions = {}
+): TightPackResult {
+  const padding = Math.max(0, Math.round(options.padding ?? 2));
+  const maxWidth = Math.max(64, Math.round(options.maxWidth ?? 2048));
+  const projection: IsoProjectionMode = options.projection ?? 'dimetric_2_1';
+  const pitchDeg = Number(((getIsometricPitchRad(projection) * 180) / Math.PI).toFixed(3));
+  const pixelsPerUnit = options.pixelsPerUnit ?? 60;
+  const version = options.version ?? '1.0';
+
+  interface PreparedFrame {
+    inputIndex: number;
+    input: TightPackFrameInput;
+    trimX: number;
+    trimY: number;
+    trimW: number;
+    trimH: number;
+    trimmed: boolean;
+    pivotX: number;
+    pivotY: number;
+    rectX: number;
+    rectY: number;
+  }
+
+  const prepared: PreparedFrame[] = inputs.map((input, inputIndex) => {
+    const { width, height, rgba } = input;
+    let minX = width;
+    let minY = height;
+    let maxX = -1;
+    let maxY = -1;
+
+    for (let y = 0; y < height; y++) {
+      const row = y * width;
+      for (let x = 0; x < width; x++) {
+        if (rgba[(row + x) * 4 + 3] > 0) {
+          if (x < minX) minX = x;
+          if (x > maxX) maxX = x;
+          if (y < minY) minY = y;
+          if (y > maxY) maxY = y;
+        }
+      }
+    }
+
+    const empty = maxX < minX || maxY < minY;
+    const trimX = empty ? 0 : minX;
+    const trimY = empty ? 0 : minY;
+    const trimW = empty ? 1 : maxX - minX + 1;
+    const trimH = empty ? 1 : maxY - minY + 1;
+    const trimmed =
+      trimX !== 0 || trimY !== 0 || trimW !== width || trimH !== height;
+
+    const anchorX = input.anchorPx?.x ?? width * 0.5;
+    const anchorY = input.anchorPx?.y ?? height;
+    const pivotX = Math.round(((anchorX - trimX) / trimW) * 1e6) / 1e6;
+    const pivotY = Math.round(((trimY + trimH - anchorY) / trimH) * 1e6) / 1e6;
+
+    return {
+      inputIndex,
+      input,
+      trimX,
+      trimY,
+      trimW,
+      trimH,
+      trimmed,
+      pivotX,
+      pivotY,
+      rectX: 0,
+      rectY: 0,
+    };
+  });
+
+  // Sort tallest-first for compact shelf packing
+  const sorted = [...prepared].sort((a, b) => b.trimH - a.trimH || b.trimW - a.trimW);
+
+  let cursorX = padding;
+  let cursorY = padding;
+  let rowHeight = 0;
+  let usedWidth = padding;
+
+  for (const item of sorted) {
+    if (cursorX + item.trimW + padding > maxWidth && cursorX > padding) {
+      cursorX = padding;
+      cursorY += rowHeight + padding;
+      rowHeight = 0;
+    }
+    item.rectX = cursorX;
+    item.rectY = cursorY;
+    cursorX += item.trimW + padding;
+    rowHeight = Math.max(rowHeight, item.trimH);
+    usedWidth = Math.max(usedWidth, cursorX);
+  }
+
+  const atlasWidth = Math.max(1, usedWidth);
+  const atlasHeight = Math.max(1, cursorY + rowHeight + padding);
+  const atlasRgba = new Uint8ClampedArray(atlasWidth * atlasHeight * 4);
+
+  for (const item of prepared) {
+    const { input, trimX, trimY, trimW, trimH, rectX, rectY } = item;
+    for (let y = 0; y < trimH; y++) {
+      const srcRow = ((trimY + y) * input.width + trimX) * 4;
+      const dstRow = ((rectY + y) * atlasWidth + rectX) * 4;
+      atlasRgba.set(input.rgba.subarray(srcRow, srcRow + trimW * 4), dstRow);
+    }
+  }
+
+  const frames: UnitySpriteFrameMeta[] = prepared.map((item) => ({
+    name: item.input.name,
+    direction: item.input.direction,
+    clip: item.input.clip,
+    frameIndex: item.input.frameIndex,
+    rect: { x: item.rectX, y: item.rectY, w: item.trimW, h: item.trimH },
+    sourceSize: { w: item.input.width, h: item.input.height },
+    spriteSourceSize: { x: item.trimX, y: item.trimY, w: item.trimW, h: item.trimH },
+    pivot: { x: item.pivotX, y: item.pivotY },
+    trimmed: item.trimmed,
+  }));
+
+  return {
+    atlasRgba,
+    atlasWidth,
+    atlasHeight,
+    unityMeta: {
+      version,
+      projection,
+      pitchDeg,
+      pixelsPerUnit,
+      atlasSize: { w: atlasWidth, h: atlasHeight },
+      frames,
+    },
+  };
 }
 
 export const NWL_8_DIRECTIONS = ['S', 'SE', 'E', 'NE', 'N', 'NW', 'W', 'SW'] as const;
@@ -220,13 +450,18 @@ export function exportNwlIsometricSheet(
   targetObject: THREE.Object3D,
   options: NwlIsometricSheetOptions = {},
   animController?: SteppedAnimationController
-): SpriteSheetExportResult & { clippedFrames: number } {
+): SpriteSheetExportResult & { clippedFrames: number; unityMeta?: UnitySpriteAtlasMetadata } {
   const charH = Math.max(24, Math.min(320, Math.round(options.targetCharHeightPx ?? 108)));
   const boxPx = Math.max(96, Math.round(options.boxSizePx ?? charH * 2.4));
   const cols = Math.max(1, options.framesPerDirection ?? 8);
   const dirs = options.directions ?? NWL_8_DIRECTIONS;
   const rows = dirs.length;
   const alphaThresh = options.alphaThreshold ?? 110;
+  const projection: IsoProjectionMode = options.projection ?? 'dimetric_2_1';
+  const postOutlinePx = Boolean(options.postOutlinePx);
+  const postOutlineColor: [number, number, number, number] = options.postOutlineColor ?? [0, 0, 0, 255];
+  const tightPack = Boolean(options.tightPack);
+  const clipLabel = options.clipName || animController?.getActiveClip()?.name || 'idle';
 
   // Measure target bounds so giant creatures (e.g., Demon Boss ~2.95m) also fit cleanly inside boxPx
   targetObject.updateMatrixWorld(true);
@@ -236,14 +471,14 @@ export function exportNwlIsometricSheet(
   bounds.getSize(sizeVec);
   bounds.getCenter(centerVec);
   const actorHeightM = Math.max(1.79, sizeVec.y || 1.79);
-  const actorSpanScale = actorHeightM / 1.79;
   const focusY = Number.isFinite(centerVec.y) && sizeVec.y > 0.2 ? centerVec.y : 0.88;
 
-  // Isometric orthographic camera looking down at pitch ~35.264°
-  // Calibrated so a 1.79m UAL humanoid (~1.494m projected height at 35.264° pitch) occupies `charH` pixels
-  const orthoSpan = 1.494 * actorSpanScale * (boxPx / charH);
+  // Isometric orthographic camera looking down at pitchRad (26.565 deg for dimetric_2_1, 35.264 deg for true_iso)
+  // Calibrated so the projected vertical height of the actor occupies `charH` pixels
   const camDist = 14;
-  const pitchRad = Math.atan(1 / Math.SQRT2); // ~35.264°
+  const pitchRad = getIsometricPitchRad(projection);
+  const projectedHeightFactor = Math.cos(pitchRad) + 0.0314 * Math.sin(pitchRad);
+  const orthoSpan = actorHeightM * projectedHeightFactor * (boxPx / charH);
   const isoCam = new THREE.OrthographicCamera(
     -orthoSpan * 0.5,
     orthoSpan * 0.5,
@@ -259,6 +494,14 @@ export function exportNwlIsometricSheet(
   );
   isoCam.lookAt(0, focusY, 0);
   isoCam.updateProjectionMatrix();
+  isoCam.updateMatrixWorld();
+
+  // Project ground-plane origin (0, 0, 0) to source pixel coords for exact foot pivot preservation
+  const footNdc = new THREE.Vector3(0, 0, 0).project(isoCam);
+  const footAnchorPx = {
+    x: (footNdc.x * 0.5 + 0.5) * boxPx,
+    y: (1 - (footNdc.y * 0.5 + 0.5)) * boxPx,
+  };
 
   const sheetW = cols * boxPx;
   const sheetH = rows * boxPx;
@@ -312,7 +555,9 @@ export function exportNwlIsometricSheet(
   pipeline.cameraConfig.snapCameraPosition = false;
 
   const frames: SpriteSheetAtlasFrame[] = [];
+  const tightInputs: TightPackFrameInput[] = [];
   const pixels = new Uint8Array(boxPx * boxPx * 4);
+  const frameBuf = tightPack ? null : imgData.data;
   const clipDuration = animController?.getActiveClip()?.duration || 1.0;
   let clippedFrames = 0;
 
@@ -330,7 +575,7 @@ export function exportNwlIsometricSheet(
         pipeline.render(scene, isoCam, rt);
         pipeline.renderer.readRenderTargetPixels(rt, 0, 0, boxPx, boxPx, pixels);
 
-        let touchesEdge = false;
+        const rgba = frameBuf ?? new Uint8ClampedArray(boxPx * boxPx * 4);
         for (let y = 0; y < boxPx; y++) {
           const srcRow = (boxPx - 1 - y) * boxPx * 4;
           const dstRow = y * boxPx * 4;
@@ -338,32 +583,60 @@ export function exportNwlIsometricSheet(
             const si = srcRow + x * 4;
             const di = dstRow + x * 4;
             const a = pixels[si + 3] >= alphaThresh ? 255 : 0;
-            if (a === 255 && (x === 0 || x === boxPx - 1 || y === 0 || y === boxPx - 1)) {
+            rgba[di + 0] = pixels[si + 0];
+            rgba[di + 1] = pixels[si + 1];
+            rgba[di + 2] = pixels[si + 2];
+            rgba[di + 3] = a;
+          }
+        }
+
+        if (postOutlinePx) {
+          applyPostOutline1px(rgba, boxPx, boxPx, postOutlineColor);
+        }
+
+        let touchesEdge = false;
+        for (let y = 0; y < boxPx && !touchesEdge; y++) {
+          for (let x = 0; x < boxPx; x++) {
+            if (
+              (x === 0 || x === boxPx - 1 || y === 0 || y === boxPx - 1) &&
+              rgba[(y * boxPx + x) * 4 + 3] > 0
+            ) {
               touchesEdge = true;
+              break;
             }
-            imgData.data[di + 0] = pixels[si + 0];
-            imgData.data[di + 1] = pixels[si + 1];
-            imgData.data[di + 2] = pixels[si + 2];
-            imgData.data[di + 3] = a;
           }
         }
         if (touchesEdge) clippedFrames++;
 
-        frameCtx.putImageData(imgData, 0, 0);
-        const x = f * boxPx;
-        const y = d * boxPx;
-        sheetCtx.drawImage(frameCanvas, x, y);
+        const frameName = `${dirs[d]}_frame_${f}`;
+        if (tightPack) {
+          tightInputs.push({
+            name: frameName,
+            direction: dirs[d],
+            clip: clipLabel,
+            frameIndex: f,
+            width: boxPx,
+            height: boxPx,
+            rgba,
+            anchorPx: footAnchorPx,
+          });
+        } else {
+          frameCtx.putImageData(imgData, 0, 0);
+          const x = f * boxPx;
+          const y = d * boxPx;
+          sheetCtx.drawImage(frameCanvas, x, y);
 
-        frames.push({
-          name: `${dirs[d]}_frame_${f}`,
-          directionIndex: d,
-          yawDeg: Math.round(yawDeg % 360),
-          frameIndex: f,
-          x,
-          y,
-          w: boxPx,
-          h: boxPx,
-        });
+          frames.push({
+            name: frameName,
+            directionIndex: d,
+            yawDeg: Math.round(yawDeg % 360),
+            frameIndex: f,
+            x,
+            y,
+            w: boxPx,
+            h: boxPx,
+          });
+        }
       }
     }
   } finally {
@@ -376,15 +649,55 @@ export function exportNwlIsometricSheet(
     rt.dispose();
   }
 
-  const atlasPayload = {
+  let outWidth = sheetW;
+  let outHeight = sheetH;
+  let unityMeta: UnitySpriteAtlasMetadata | undefined;
+
+  if (tightPack) {
+    const pixelsPerUnit = Math.max(1, Math.round(charH / 1.79));
+    const packed = packTightSpriteFrames(tightInputs, {
+      padding: 2,
+      projection,
+      pixelsPerUnit,
+    });
+    outWidth = packed.atlasWidth;
+    outHeight = packed.atlasHeight;
+    unityMeta = packed.unityMeta;
+
+    sheetCanvas.width = outWidth;
+    sheetCanvas.height = outHeight;
+    const atlasImgData = sheetCtx.createImageData(outWidth, outHeight);
+    atlasImgData.data.set(packed.atlasRgba);
+    sheetCtx.putImageData(atlasImgData, 0, 0);
+
+    for (let i = 0; i < packed.unityMeta.frames.length; i++) {
+      const uf = packed.unityMeta.frames[i];
+      const d = dirs.indexOf(uf.direction);
+      const yawDeg = d >= 0 ? (d / rows) * 360 : 0;
+      frames.push({
+        name: uf.name,
+        directionIndex: d >= 0 ? d : 0,
+        yawDeg: Math.round(yawDeg % 360),
+        frameIndex: uf.frameIndex,
+        x: uf.rect.x,
+        y: uf.rect.y,
+        w: uf.rect.w,
+        h: uf.rect.h,
+      });
+    }
+  }
+
+  const atlasPayload = unityMeta ?? {
     meta: {
       generator: 'Pixelizer 3D Engine (NWL 8-Dir Non-Mirrored Isometric)',
       targetCharacterHeightPx: charH,
+      projection,
+      postOutlinePx,
       directions: dirs,
       mirrored: false,
       hardAlphaThreshold: alphaThresh,
       clippedFrames,
-      size: { w: sheetW, h: sheetH },
+      size: { w: outWidth, h: outHeight },
       frameSize: { w: boxPx, h: boxPx },
     },
     frames,
@@ -395,10 +708,11 @@ export function exportNwlIsometricSheet(
     atlasJson: JSON.stringify(atlasPayload, null, 2),
     cols,
     rows,
-    width: sheetW,
-    height: sheetH,
+    width: outWidth,
+    height: outHeight,
     frames,
     clippedFrames,
+    unityMeta,
   };
 }
 

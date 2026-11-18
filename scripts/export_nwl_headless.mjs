@@ -29,6 +29,9 @@ function parseArgs(argv) {
     ditherGlb: false,
     frames: 8,
     height: 108,
+    projection: 'dimetric_2_1',
+    tightPack: false,
+    postOutline: false,
     forceBuild: false,
   };
 
@@ -56,6 +59,13 @@ function parseArgs(argv) {
       opts.frames = Math.max(1, Math.min(16, Number(arg.slice('--frames='.length)) || 8));
     } else if (arg.startsWith('--height=')) {
       opts.height = Math.max(24, Math.min(256, Number(arg.slice('--height='.length)) || 108));
+    } else if (arg.startsWith('--projection=')) {
+      const val = arg.slice('--projection='.length).trim();
+      opts.projection = val === 'true_iso' ? 'true_iso' : 'dimetric_2_1';
+    } else if (arg === '--tight-pack') {
+      opts.tightPack = true;
+    } else if (arg === '--post-outline') {
+      opts.postOutline = true;
     } else if (arg === '--build') {
       opts.forceBuild = true;
     }
@@ -156,6 +166,9 @@ async function main() {
       ditherGlb: opts.ditherGlb,
       framesPerDirection: opts.frames,
       targetCharHeightPx: opts.height,
+      projection: opts.projection,
+      tightPack: opts.tightPack,
+      postOutlinePx: opts.postOutline,
       assets: [],
       errors: pageErrors,
     };
@@ -181,7 +194,13 @@ async function main() {
       const summary = await page.evaluate(() => window.__PIXELIZER_STUDIO__?.getStageSummary() ?? null);
       const sheet = await page.evaluate(
         (sheetOpts) => window.__PIXELIZER_STUDIO__?.exportCurrentNwlSheet(sheetOpts) ?? null,
-        { targetCharHeightPx: opts.height, framesPerDirection: opts.frames }
+        {
+          targetCharHeightPx: opts.height,
+          framesPerDirection: opts.frames,
+          projection: opts.projection,
+          tightPack: opts.tightPack,
+          postOutlinePx: opts.postOutline,
+        }
       );
       const glb = await page.evaluate(
         async (glbOpts) => (await window.__PIXELIZER_STUDIO__?.exportCurrentGlbBase64(glbOpts)) ?? null,

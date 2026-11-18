@@ -11,6 +11,14 @@ export type LowResUpscaleMode = 'nearest' | 'pixel_art_aa';
 
 export type AngleSnapMode = 'none' | 'world_space' | 'camera_space_y';
 
+export type IsoProjectionMode = 'dimetric_2_1' | 'true_iso';
+
+export interface IsoProjectionConfig {
+  mode: IsoProjectionMode;
+  yawRad: number;
+  distance: number;
+}
+
 export type ShadingWorkflow = 'specular' | 'metallic';
 
 export type DitherSpaceMode = 'screen_macropixel' | 'object_uv';

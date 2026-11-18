@@ -19,7 +19,7 @@ import {
   exportVoxelGridToVox,
   voxelizeObject3D,
 } from '../../engine/Voxelizer';
-import type { VoxelGridResult } from '../../engine/types';
+import type { IsoProjectionMode, VoxelGridResult } from '../../engine/types';
 import {
   createEventRegistry,
   disposeGroupResources,
@@ -55,6 +55,21 @@ export function mountExportPanel(
             <input id="num-nwl-h" class="input-ctrl" type="number" min="24" max="256" value="108" style="width:66px;height:26px;" title="Target Character Height (px · NWL=108)" />
             <input id="num-nwl-frames" class="input-ctrl" type="number" min="1" max="16" value="8" style="width:66px;height:26px;" title="Frames per direction" />
           </div>
+        </div>
+        <div class="field-row">
+          <label class="field-label" for="sel-nwl-projection">Projection</label>
+          <select id="sel-nwl-projection" class="select-ctrl select-ctrl-sm">
+            <option value="dimetric_2_1" selected>Dimetric 2:1 (26.565° · Unity 2.5D)</option>
+            <option value="true_iso">True Iso (35.264°)</option>
+          </select>
+        </div>
+        <div class="field-row">
+          <label class="field-label" for="chk-nwl-tight-pack">Tight Pack + Unity JSON</label>
+          <input id="chk-nwl-tight-pack" type="checkbox" />
+        </div>
+        <div class="field-row">
+          <label class="field-label" for="chk-nwl-post-outline">Post-Outline 1px</label>
+          <input id="chk-nwl-post-outline" type="checkbox" />
         </div>
         <button id="btn-generate-nwl-sheet" class="btn btn-primary" type="button">
           <span>Export NWL 8-Dir Sheet (Zero Clipping)</span>
@@ -583,6 +598,12 @@ export function mountExportPanel(
     if (!ctx.activeStage) return;
     const targetH = Number(container.querySelector<HTMLInputElement>('#num-nwl-h')!.value) || 40;
     const frames = Number(container.querySelector<HTMLInputElement>('#num-nwl-frames')!.value) || 8;
+    const projection = (container.querySelector<HTMLSelectElement>('#sel-nwl-projection')?.value ??
+      'dimetric_2_1') as IsoProjectionMode;
+    const tightPack =
+      container.querySelector<HTMLInputElement>('#chk-nwl-tight-pack')?.checked ?? false;
+    const postOutlinePx =
+      container.querySelector<HTMLInputElement>('#chk-nwl-post-outline')?.checked ?? false;
     const target =
       ctx.isVoxelMode && ctx.activeVoxel ? ctx.activeVoxel.group : ctx.activeStage.subjectRoot;
 
@@ -594,13 +615,26 @@ export function mountExportPanel(
         {
           targetCharHeightPx: targetH,
           framesPerDirection: frames,
+          projection,
+          tightPack,
+          postOutlinePx,
         },
         !ctx.isVoxelMode && ctx.animCtrl.getClips().length > 0 ? ctx.animCtrl : undefined
       )
     );
 
     const tile = res.frames[0]?.w ?? 96;
-    nwlStatsEl.textContent = `${res.width}×${res.height}px (${tile}×${tile} box, 8 non-mirrored dirs) · clippedFrames=${res.clippedFrames}`;
+    if (res.unityMeta) {
+      const slug = ctx.actions.getExportSlug();
+      ctx.actions.triggerDownload(res.imageDataUrl, `${slug}_sheet_8dir.png`);
+      ctx.actions.downloadBlob(
+        new Blob([res.atlasJson], { type: 'application/json' }),
+        `${slug}_atlas.json`
+      );
+      nwlStatsEl.textContent = `${res.width}×${res.height}px (${res.unityMeta.frames.length} tight frames · ${res.unityMeta.projection} ${res.unityMeta.pitchDeg.toFixed(2)}°) · clippedFrames=${res.clippedFrames}`;
+    } else {
+      nwlStatsEl.textContent = `${res.width}×${res.height}px (${tile}×${tile} box, 8 non-mirrored dirs · ${projection}) · clippedFrames=${res.clippedFrames}`;
+    }
     showSheetPreview(res, tile, `NWL ${targetH}px (${res.rows}×${res.cols} · clip=${res.clippedFrames})`);
   });
 

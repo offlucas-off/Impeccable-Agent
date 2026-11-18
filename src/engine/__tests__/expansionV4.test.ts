@@ -109,11 +109,11 @@ describe('Expansion v4 — Waves 1-5', () => {
     expect(player.root.children.length).toBeGreaterThan(0);
     player.setStyleLoadout({
       ...paladin.loadout,
-      back: 'dragon_wings',
-      materialTheme: 'obsidian_flame',
+      back: 'wings_valkyrie',
+      materialTheme: 'obsidian',
     });
-    expect(player.styleLoadout.back).toBe('dragon_wings');
-    expect(player.styleLoadout.materialTheme).toBe('obsidian_flame');
+    expect(player.styleLoadout.back).toBe('wings_valkyrie');
+    expect(player.styleLoadout.materialTheme).toBe('obsidian');
     player.dispose();
   });
 
@@ -146,7 +146,7 @@ describe('Expansion v4 — Waves 1-5', () => {
       expect(NWL_MONSTER_SPECS[id]).toBeDefined();
       const m = buildNwlMonster(id, { finishMode: 'classic_flat' });
       expect(m.root.children.length).toBeGreaterThan(0);
-      m.dispose();
+      m.dispose?.();
     }
   });
 
@@ -154,7 +154,7 @@ describe('Expansion v4 — Waves 1-5', () => {
     for (const kind of ['well', 'market_stall', 'crystal_cluster', 'brazier'] as const) {
       const prop = buildProceduralProp({ kind, finishMode: 'classic_flat' });
       expect(prop.root.children.length).toBeGreaterThan(0);
-      prop.dispose();
+      prop.dispose?.();
     }
 
     expect(Object.keys(DUNGEON_BIOME_THEMES).length).toBe(5);

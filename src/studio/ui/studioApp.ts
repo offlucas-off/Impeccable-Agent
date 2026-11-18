@@ -4,14 +4,17 @@ import {
   PixelizerPipeline,
   type VisualStylePresetId,
 } from '../../engine/PixelizerPipeline';
-import { exportNwlIsometricSheet } from '../../engine/SpriteSheetExporter';
+import {
+  exportNwlIsometricSheet,
+  type UnitySpriteAtlasMetadata,
+} from '../../engine/SpriteSheetExporter';
 import { voxelizeObject3DRigged } from '../../engine/Voxelizer';
 import { exportRiggedAssetToGlb } from '../../engine/rigging/RiggedExporter';
 import { autoRigStaticHumanoidToUal } from '../../engine/rigging/AutoRigBinder';
 import { detectUalSkeletonCompatibility } from '../../engine/rigging/UalRigSpec';
 import type { UnwrapMetricsSummary } from '../../engine/procedural/PixelMaterialSynth';
 import { SteppedAnimationController } from '../../engine/steppedAnimation';
-import type { DebugViewMode } from '../../engine/types';
+import type { DebugViewMode, IsoProjectionMode } from '../../engine/types';
 import type { PlaySandboxHandle } from '../../sandbox/NwlPlaySandbox';
 import {
   createEventRegistry,
@@ -31,7 +34,13 @@ export interface PixelizerStudioBridge {
   loadPreset: (presetId: string) => Promise<void>;
   setStylePreset: (style: VisualStylePresetId) => void;
   getRenderStats: () => ReturnType<PixelizerPipeline['getRenderStats']>;
-  exportCurrentNwlSheet: (opts?: { targetCharHeightPx?: number; framesPerDirection?: number }) => {
+  exportCurrentNwlSheet: (opts?: {
+    targetCharHeightPx?: number;
+    framesPerDirection?: number;
+    projection?: IsoProjectionMode;
+    tightPack?: boolean;
+    postOutlinePx?: boolean;
+  }) => {
     width: number;
     height: number;
     rows: number;
@@ -39,6 +48,7 @@ export interface PixelizerStudioBridge {
     clippedFrames: number;
     imageDataUrl: string;
     atlasJson: string;
+    unityMeta?: UnitySpriteAtlasMetadata;
   } | null;
   exportCurrentGlbBase64: (opts?: { quantizeAlbedo?: boolean; quantizeDither?: boolean }) => Promise<{
     base64: string;
@@ -844,6 +854,9 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
           {
             targetCharHeightPx: opts?.targetCharHeightPx ?? 108,
             framesPerDirection: opts?.framesPerDirection ?? 8,
+            projection: opts?.projection ?? 'dimetric_2_1',
+            tightPack: opts?.tightPack ?? false,
+            postOutlinePx: opts?.postOutlinePx ?? false,
           },
           !ctx.isVoxelMode && animCtrl.getClips().length > 0 ? animCtrl : undefined
         )
@@ -856,6 +869,7 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
         clippedFrames: res.clippedFrames,
         imageDataUrl: res.imageDataUrl,
         atlasJson: res.atlasJson,
+        unityMeta: res.unityMeta,
       };
     },
     exportCurrentGlbBase64: (opts) => {

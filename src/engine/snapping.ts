@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { AngleSnapMode, CameraSnapConfig, SnapOptions } from './types';
+import type { AngleSnapMode, CameraSnapConfig, IsoProjectionMode, SnapOptions } from './types';
 
 export interface SavedTransform {
   position: THREE.Vector3;
@@ -255,4 +255,69 @@ export function projectWorldToBufferPixel(
   const px = (ndc.x * 0.5 + 0.5) * bufferWidth;
   const py = (ndc.y * 0.5 + 0.5) * bufferHeight;
   return new THREE.Vector2(Math.round(px), Math.round(py));
+}
+
+/** 2:1 Dimetric ("Pixel-art iso") pitch angle: atan(0.5) ~= 26.565 deg */
+export const DIMETRIC_2_1_PITCH_RAD = Math.atan(0.5);
+
+/** True Isometric pitch angle: atan(1 / sqrt(2)) ~= 35.264 deg */
+export const TRUE_ISOMETRIC_PITCH_RAD = Math.atan(1 / Math.SQRT2);
+
+/** Standard 8-direction isometric yaw step: PI / 4 (45 deg) */
+export const ISO_YAW_STEP_RAD = Math.PI / 4;
+
+/**
+ * Returns the camera elevation pitch in radians for the given isometric projection mode.
+ */
+export function getIsometricPitchRad(mode: IsoProjectionMode): number {
+  return mode === 'true_iso' ? TRUE_ISOMETRIC_PITCH_RAD : DIMETRIC_2_1_PITCH_RAD;
+}
+
+/**
+ * Returns the vertical-to-horizontal projection ratio tan(pitch) for the given mode.
+ * Returns exact 0.5 for 'dimetric_2_1' (2:1 pixel-art iso).
+ */
+export function getDimetricVerticalRatio(mode: IsoProjectionMode): number {
+  return mode === 'true_iso' ? 1 / Math.SQRT2 : 0.5;
+}
+
+/**
+ * Computes an orthographic camera world position orbiting `target` at `distance`,
+ * azimuth `yawRad`, and elevation pitch determined by `mode`.
+ */
+export function computeIsometricCameraPosition(
+  target: THREE.Vector3,
+  distance: number,
+  yawRad: number,
+  mode: IsoProjectionMode
+): THREE.Vector3 {
+  const pitchRad = getIsometricPitchRad(mode);
+  const horizDist = distance * Math.cos(pitchRad);
+  return new THREE.Vector3(
+    target.x + Math.sin(yawRad) * horizDist,
+    target.y + distance * Math.sin(pitchRad),
+    target.z + Math.cos(yawRad) * horizDist
+  );
+}
+
+/**
+ * Snaps a world-space position onto the dimetric/isometric pixel grid so that
+ * horizontal and vertical projections align cleanly to multiples of `worldPixelSize`
+ * without subpixel creep.
+ */
+export function snapToDimetricWorldGrid(
+  pos: THREE.Vector3,
+  worldPixelSize: number,
+  mode: IsoProjectionMode = 'dimetric_2_1'
+): THREE.Vector3 {
+  const step = Math.max(1e-5, Number.isFinite(worldPixelSize) ? worldPixelSize : 1e-5);
+  const pitchRad = getIsometricPitchRad(mode);
+  const yStep = step / Math.cos(pitchRad);
+  const zStep = step / Math.sin(pitchRad);
+
+  return new THREE.Vector3(
+    Math.round(pos.x / step) * step,
+    Math.round(pos.y / yStep) * yStep,
+    Math.round(pos.z / zStep) * zStep
+  );
 }
