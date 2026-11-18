@@ -33,7 +33,25 @@ export type PropKind =
   | 'table'
   | 'pillar'
   | 'crate'
-  | 'tree';
+  | 'tree'
+  | 'well'
+  | 'market_stall'
+  | 'anvil'
+  | 'cart'
+  | 'signpost'
+  | 'bench'
+  | 'fountain'
+  | 'hay_bale'
+  | 'sack'
+  | 'banner_stand'
+  | 'crystal_cluster'
+  | 'statue_knight'
+  | 'tombstone'
+  | 'cage'
+  | 'alchemist_table'
+  | 'bookshelf'
+  | 'brazier'
+  | 'weapon_rack';
 
 export interface PropBuildOptions {
   kind: PropKind;
@@ -71,6 +89,24 @@ const DEFAULT_PROP_COLORS: Record<PropKind, [string, string, string]> = {
   pillar: ['#737c8e', '#4c5363', '#a6b0c4'],
   crate: ['#8c5b32', '#613c21', '#4a311e'],
   tree: ['#5a3921', '#387d44', '#55a654'],
+  well: ['#6d758d', '#7c5338', '#38bdf8'],
+  market_stall: ['#805230', '#b4202a', '#f5e9d3'],
+  anvil: ['#3f4552', '#5e3c22', '#94a3b8'],
+  cart: ['#7d502d', '#4a311e', '#64748b'],
+  signpost: ['#7c5338', '#9c6e4b', '#d4a359'],
+  bench: ['#7a4d2b', '#3b3e47', '#94a3b8'],
+  fountain: ['#737c8e', '#94a3b8', '#38bdf8'],
+  hay_bale: ['#d4a343', '#a47128', '#5e3c22'],
+  sack: ['#b89b72', '#8c7250', '#4f3428'],
+  banner_stand: ['#475569', '#991b1b', '#facc15'],
+  crystal_cluster: ['#1e3a8a', '#38bdf8', '#67e8f9'],
+  statue_knight: ['#64748b', '#475569', '#94a3b8'],
+  tombstone: ['#64748b', '#334155', '#94a3b8'],
+  cage: ['#334155', '#1e293b', '#64748b'],
+  alchemist_table: ['#7a4d2b', '#22c55e', '#a855f7'],
+  bookshelf: ['#6d4b36', '#7f1d1d', '#2563eb'],
+  brazier: ['#3f4552', '#7c2d12', '#fb923c'],
+  weapon_rack: ['#7c5338', '#94a3b8', '#d4a359'],
 };
 
 /**
@@ -472,6 +508,443 @@ export function buildProceduralProp(
           accentHex: cAccent,
           lockVertical: true,
         })
+      );
+      break;
+    }
+
+    case 'well': {
+      const base = makeLatheProfile(
+        [
+          [0.62, 0],
+          [0.64, 0.72],
+          [0.52, 0.75],
+          [0.5, 0.2],
+        ],
+        10,
+        cPrimary
+      );
+      const water = makeLatheProfile(
+        [
+          [0, 0.45],
+          [0.48, 0.45],
+        ],
+        10,
+        cAccent
+      );
+      const postL = makeBeveledBox(0.11, 1.5, 0.11, 0.015, cSecondary, { offset: [-0.54, 1.4, 0] });
+      const postR = makeBeveledBox(0.11, 1.5, 0.11, 0.015, cSecondary, { offset: [0.54, 1.4, 0] });
+      const roofA = makeBeveledBox(1.45, 0.12, 0.9, 0.02, cSecondary);
+      roofA.rotateX(0.45);
+      roofA.translate(0, 2.25, 0.25);
+      const roofB = makeBeveledBox(1.45, 0.12, 0.9, 0.02, cSecondary);
+      roofB.rotateX(-0.45);
+      roofB.translate(0, 2.25, -0.25);
+      taggedParts.push(
+        tagPart(base, 'well_stone', 'stone_masonry', cPrimary),
+        tagPart(water, 'well_water', 'runic_glow', cAccent),
+        tagPart(postL, 'well_post_l', 'wood_planks', cSecondary),
+        tagPart(postR, 'well_post_r', 'wood_planks', cSecondary),
+        tagPart(roofA, 'well_roof_a', 'wood_planks', cSecondary),
+        tagPart(roofB, 'well_roof_b', 'wood_planks', cSecondary)
+      );
+      break;
+    }
+
+    case 'market_stall': {
+      const counter = makeBeveledBox(1.9, 0.88, 0.85, 0.02, cPrimary, { offset: [0, 0.44, 0] });
+      for (const sx of [-0.88, 0.88]) {
+        for (const sz of [-0.36, 0.36]) {
+          taggedParts.push(
+            tagPart(
+              makeBeveledBox(0.09, 2.1, 0.09, 0.012, cPrimary, { offset: [sx, 1.05, sz] }),
+              `stall_post_${sx}_${sz}`,
+              'wood_planks',
+              cPrimary
+            )
+          );
+        }
+      }
+      const awning = makeBeveledBox(2.15, 0.1, 1.25, 0.02, cSecondary);
+      awning.rotateX(0.22);
+      awning.translate(0, 2.15, 0.08);
+      const trim = makeBeveledBox(2.16, 0.18, 0.06, 0.01, cAccent, { offset: [0, 1.98, 0.68] });
+      taggedParts.push(
+        tagPart(counter, 'stall_counter', 'wood_planks', cPrimary),
+        tagPart(awning, 'stall_awning', 'woven_cloth', cSecondary, { accentHex: cAccent }),
+        tagPart(trim, 'stall_trim', 'woven_cloth', cAccent)
+      );
+      break;
+    }
+
+    case 'anvil': {
+      const stump = makeLatheProfile(
+        [
+          [0.32, 0],
+          [0.28, 0.54],
+        ],
+        8,
+        cSecondary
+      );
+      const foot = makeBeveledBox(0.46, 0.12, 0.32, 0.015, cPrimary, { offset: [0, 0.6, 0] });
+      const waist = makeBeveledBox(0.28, 0.16, 0.2, 0.012, cPrimary, { offset: [0, 0.72, 0] });
+      const top = makeBeveledBox(0.62, 0.14, 0.24, 0.015, cAccent, { offset: [0.05, 0.86, 0] });
+      taggedParts.push(
+        tagPart(stump, 'anvil_stump', 'timber_frame', cSecondary),
+        tagPart(foot, 'anvil_foot', 'forged_steel', cPrimary),
+        tagPart(waist, 'anvil_waist', 'forged_steel', cPrimary),
+        tagPart(top, 'anvil_top', 'forged_steel', cAccent)
+      );
+      isMetallic = true;
+      break;
+    }
+
+    case 'cart': {
+      const bed = makeBeveledBox(1.15, 0.14, 1.7, 0.02, cPrimary, { offset: [0, 0.56, 0] });
+      const sideL = makeBeveledBox(0.08, 0.45, 1.7, 0.015, cSecondary, { offset: [-0.54, 0.82, 0] });
+      const sideR = makeBeveledBox(0.08, 0.45, 1.7, 0.015, cSecondary, { offset: [0.54, 0.82, 0] });
+      const back = makeBeveledBox(1.15, 0.45, 0.08, 0.015, cSecondary, { offset: [0, 0.82, -0.81] });
+      taggedParts.push(
+        tagPart(bed, 'cart_bed', 'wood_planks', cPrimary),
+        tagPart(sideL, 'cart_side_l', 'wood_planks', cSecondary),
+        tagPart(sideR, 'cart_side_r', 'wood_planks', cSecondary),
+        tagPart(back, 'cart_back', 'wood_planks', cSecondary)
+      );
+      for (const [wIdx, sx] of [-0.66, 0.66].entries()) {
+        const wheel = makeLatheProfile(
+          [
+            [0.42, -0.05],
+            [0.42, 0.05],
+          ],
+          10,
+          cAccent
+        );
+        wheel.rotateZ(Math.PI * 0.5);
+        wheel.translate(sx, 0.42, 0);
+        taggedParts.push(tagPart(wheel, `cart_wheel_${wIdx}`, 'forged_steel', cAccent));
+      }
+      break;
+    }
+
+    case 'signpost': {
+      const post = makeBeveledBox(0.14, 1.95, 0.14, 0.018, cPrimary, { offset: [0, 0.975, 0] });
+      const boardA = makeBeveledBox(0.85, 0.22, 0.06, 0.012, cSecondary, { offset: [0.18, 1.65, 0.08] });
+      const boardB = makeBeveledBox(0.75, 0.2, 0.06, 0.012, cAccent, { offset: [-0.15, 1.32, -0.08] });
+      taggedParts.push(
+        tagPart(post, 'sign_post', 'timber_frame', cPrimary),
+        tagPart(boardA, 'sign_board_a', 'wood_planks', cSecondary),
+        tagPart(boardB, 'sign_board_b', 'wood_planks', cAccent)
+      );
+      break;
+    }
+
+    case 'bench': {
+      const seat = makeBeveledBox(1.5, 0.09, 0.48, 0.015, cPrimary, { offset: [0, 0.46, 0] });
+      const back = makeBeveledBox(1.5, 0.42, 0.08, 0.015, cPrimary, { offset: [0, 0.74, -0.2] });
+      for (const [lIdx, sx] of [-0.62, 0.62].entries()) {
+        taggedParts.push(
+          tagPart(
+            makeBeveledBox(0.08, 0.46, 0.44, 0.012, cSecondary, { offset: [sx, 0.23, 0] }),
+            `bench_leg_${lIdx}`,
+            'forged_steel',
+            cSecondary
+          )
+        );
+      }
+      taggedParts.push(
+        tagPart(seat, 'bench_seat', 'wood_planks', cPrimary),
+        tagPart(back, 'bench_back', 'wood_planks', cPrimary)
+      );
+      break;
+    }
+
+    case 'fountain': {
+      const basin = makeLatheProfile(
+        [
+          [1.05, 0],
+          [1.1, 0.45],
+          [0.95, 0.48],
+          [0.9, 0.2],
+        ],
+        12,
+        cPrimary
+      );
+      const water = makeLatheProfile(
+        [
+          [0, 0.36],
+          [0.92, 0.36],
+        ],
+        12,
+        cAccent
+      );
+      const spire = makeLatheProfile(
+        [
+          [0.24, 0.2],
+          [0.18, 1.45],
+          [0.52, 1.55],
+          [0.14, 1.75],
+          [0.08, 2.2],
+        ],
+        10,
+        cSecondary
+      );
+      taggedParts.push(
+        tagPart(basin, 'fountain_basin', 'stone_masonry', cPrimary),
+        tagPart(water, 'fountain_water', 'runic_glow', cAccent),
+        tagPart(spire, 'fountain_spire', 'stone_masonry', cSecondary)
+      );
+      hasRunicGlow = true;
+      break;
+    }
+
+    case 'hay_bale': {
+      const bale = makeBeveledBox(0.95, 0.62, 0.65, 0.06, cPrimary, { offset: [0, 0.31, 0] });
+      const tieA = makeBeveledBox(0.05, 0.65, 0.68, 0.01, cAccent, { offset: [-0.24, 0.31, 0] });
+      const tieB = makeBeveledBox(0.05, 0.65, 0.68, 0.01, cAccent, { offset: [0.24, 0.31, 0] });
+      taggedParts.push(
+        tagPart(bale, 'hay_body', 'woven_cloth', cPrimary),
+        tagPart(tieA, 'hay_tie_a', 'stitched_leather', cAccent),
+        tagPart(tieB, 'hay_tie_b', 'stitched_leather', cAccent)
+      );
+      break;
+    }
+
+    case 'sack': {
+      const body = makeLatheProfile(
+        [
+          [0.26, 0],
+          [0.32, 0.28],
+          [0.14, 0.58],
+          [0.2, 0.72],
+        ],
+        8,
+        cPrimary
+      );
+      const tie = makeLatheProfile(
+        [
+          [0.16, 0.56],
+          [0.16, 0.61],
+        ],
+        8,
+        cAccent
+      );
+      taggedParts.push(
+        tagPart(body, 'sack_body', 'woven_cloth', cPrimary),
+        tagPart(tie, 'sack_tie', 'stitched_leather', cAccent)
+      );
+      break;
+    }
+
+    case 'banner_stand': {
+      const base = makeLatheProfile(
+        [
+          [0.28, 0],
+          [0.18, 0.14],
+        ],
+        8,
+        cPrimary
+      );
+      const pole = makeBeveledBox(0.07, 2.5, 0.07, 0.01, cPrimary, { offset: [0, 1.3, 0] });
+      const bar = makeBeveledBox(0.82, 0.06, 0.06, 0.01, cAccent, { offset: [0, 2.45, 0] });
+      const cloth = makeBeveledBox(0.72, 1.35, 0.04, 0.008, cSecondary, { offset: [0, 1.72, 0.04] });
+      taggedParts.push(
+        tagPart(base, 'banner_base', 'forged_steel', cPrimary),
+        tagPart(pole, 'banner_pole', 'forged_steel', cPrimary),
+        tagPart(bar, 'banner_bar', 'brushed_gold', cAccent),
+        tagPart(cloth, 'banner_cloth', 'woven_cloth', cSecondary, { accentHex: cAccent })
+      );
+      break;
+    }
+
+    case 'crystal_cluster': {
+      const rock = makeBeveledBox(0.78, 0.28, 0.72, 0.06, cPrimary, { offset: [0, 0.14, 0] });
+      taggedParts.push(tagPart(rock, 'crystal_base', 'stone_masonry', cPrimary));
+      const offsets: Array<[number, number, number, number, number]> = [
+        [0, 0.78, 0, 0.18, 1.35],
+        [-0.22, 0.56, 0.14, 0.14, 0.92],
+        [0.24, 0.52, -0.1, 0.13, 0.85],
+        [0.08, 0.45, 0.22, 0.11, 0.72],
+      ];
+      offsets.forEach(([ox, oy, oz, rad, h], idx) => {
+        const shard = new THREE.ConeGeometry(rad, h, 5);
+        const pos = shard.attributes.position;
+        const col = new Float32Array(pos.count * 3);
+        const c = new THREE.Color(idx % 2 === 0 ? cSecondary : cAccent);
+        for (let i = 0; i < pos.count; i++) {
+          col[i * 3] = c.r;
+          col[i * 3 + 1] = c.g;
+          col[i * 3 + 2] = c.b;
+        }
+        shard.setAttribute('color', new THREE.BufferAttribute(col, 3));
+        shard.rotateZ(ox * -0.9);
+        shard.rotateX(oz * 0.9);
+        shard.translate(ox, oy, oz);
+        taggedParts.push(tagPart(shard, `crystal_shard_${idx}`, 'runic_glow', cAccent));
+      });
+      hasRunicGlow = true;
+      break;
+    }
+
+    case 'statue_knight': {
+      const ped = makeBeveledBox(0.95, 0.72, 0.95, 0.03, cSecondary, { offset: [0, 0.36, 0] });
+      const legs = makeBeveledBox(0.44, 0.78, 0.32, 0.025, cPrimary, { offset: [0, 1.11, 0] });
+      const torso = makeBeveledBox(0.56, 0.65, 0.36, 0.03, cPrimary, { offset: [0, 1.82, 0] });
+      const head = makeBeveledBox(0.28, 0.32, 0.28, 0.025, cPrimary, { offset: [0, 2.34, 0] });
+      const sword = makeBeveledBox(0.12, 1.25, 0.06, 0.01, cAccent, { offset: [0, 1.55, 0.28] });
+      taggedParts.push(
+        tagPart(ped, 'statue_ped', 'stone_masonry', cSecondary),
+        tagPart(legs, 'statue_legs', 'stone_masonry', cPrimary),
+        tagPart(torso, 'statue_torso', 'stone_masonry', cPrimary),
+        tagPart(head, 'statue_head', 'stone_masonry', cPrimary),
+        tagPart(sword, 'statue_sword', 'forged_steel', cAccent)
+      );
+      break;
+    }
+
+    case 'tombstone': {
+      const plinth = makeBeveledBox(0.75, 0.18, 0.42, 0.02, cSecondary, { offset: [0, 0.09, 0] });
+      const slab = makeBeveledBox(0.58, 0.96, 0.2, 0.03, cPrimary, { offset: [0, 0.66, 0] });
+      const crossV = makeBeveledBox(0.1, 0.48, 0.06, 0.01, cAccent, { offset: [0, 0.76, 0.11] });
+      const crossH = makeBeveledBox(0.32, 0.1, 0.06, 0.01, cAccent, { offset: [0, 0.84, 0.11] });
+      taggedParts.push(
+        tagPart(plinth, 'tomb_plinth', 'stone_masonry', cSecondary),
+        tagPart(slab, 'tomb_slab', 'stone_masonry', cPrimary),
+        tagPart(crossV, 'tomb_cross_v', 'stone_masonry', cAccent),
+        tagPart(crossH, 'tomb_cross_h', 'stone_masonry', cAccent)
+      );
+      break;
+    }
+
+    case 'cage': {
+      const floor = makeBeveledBox(1.15, 0.08, 1.15, 0.015, cSecondary, { offset: [0, 0.04, 0] });
+      const roof = makeBeveledBox(1.15, 0.08, 1.15, 0.015, cSecondary, { offset: [0, 2.02, 0] });
+      taggedParts.push(
+        tagPart(floor, 'cage_floor', 'forged_steel', cSecondary),
+        tagPart(roof, 'cage_roof', 'forged_steel', cSecondary)
+      );
+      for (const [bIdx, pos] of [
+        [-0.5, -0.5],
+        [0.5, -0.5],
+        [-0.5, 0.5],
+        [0.5, 0.5],
+        [0, -0.5],
+        [-0.5, 0],
+        [0.5, 0],
+      ].entries()) {
+        taggedParts.push(
+          tagPart(
+            makeBeveledBox(0.055, 1.96, 0.055, 0.01, cPrimary, { offset: [pos[0], 1.02, pos[1]] }),
+            `cage_bar_${bIdx}`,
+            'forged_steel',
+            cPrimary
+          )
+        );
+      }
+      isMetallic = true;
+      break;
+    }
+
+    case 'alchemist_table': {
+      const top = makeBeveledBox(1.45, 0.09, 0.78, 0.015, cPrimary, { offset: [0, 0.78, 0] });
+      for (const [lIdx, [lx, lz]] of [
+        [-0.62, -0.3],
+        [0.62, -0.3],
+        [-0.62, 0.3],
+        [0.62, 0.3],
+      ].entries()) {
+        taggedParts.push(
+          tagPart(
+            makeBeveledBox(0.09, 0.76, 0.09, 0.012, cPrimary, { offset: [lx, 0.38, lz] }),
+            `alch_leg_${lIdx}`,
+            'wood_planks',
+            cPrimary
+          )
+        );
+      }
+      const potionA = makeLatheProfile(
+        [
+          [0.08, 0.82],
+          [0.09, 0.94],
+          [0.03, 1.04],
+          [0.05, 1.1],
+        ],
+        8,
+        cSecondary
+      );
+      potionA.translate(-0.32, 0, 0.08);
+      const potionB = makeLatheProfile(
+        [
+          [0.07, 0.82],
+          [0.07, 1.0],
+          [0.04, 1.08],
+        ],
+        8,
+        cAccent
+      );
+      potionB.translate(0.28, 0, -0.05);
+      taggedParts.push(
+        tagPart(top, 'alch_top', 'wood_planks', cPrimary),
+        tagPart(potionA, 'alch_potion_a', 'runic_glow', cSecondary),
+        tagPart(potionB, 'alch_potion_b', 'runic_glow', cAccent)
+      );
+      hasRunicGlow = true;
+      break;
+    }
+
+    case 'bookshelf': {
+      const frame = makeBeveledBox(1.35, 2.2, 0.42, 0.02, cPrimary, { offset: [0, 1.1, 0] });
+      taggedParts.push(tagPart(frame, 'shelf_frame', 'wood_planks', cPrimary));
+      for (const [rIdx, ry] of [0.55, 1.1, 1.65].entries()) {
+        const booksA = makeBeveledBox(0.54, 0.28, 0.28, 0.01, cSecondary, { offset: [-0.28, ry, 0.08] });
+        const booksB = makeBeveledBox(0.48, 0.26, 0.28, 0.01, cAccent, { offset: [0.28, ry, 0.08] });
+        taggedParts.push(
+          tagPart(booksA, `shelf_books_a_${rIdx}`, 'woven_cloth', cSecondary),
+          tagPart(booksB, `shelf_books_b_${rIdx}`, 'woven_cloth', cAccent)
+        );
+      }
+      break;
+    }
+
+    case 'brazier': {
+      const bowl = makeLatheProfile(
+        [
+          [0.14, 0.65],
+          [0.44, 0.88],
+          [0.42, 0.96],
+          [0.2, 0.82],
+        ],
+        8,
+        cPrimary
+      );
+      const flame = makeBeveledBox(0.32, 0.38, 0.32, 0.04, cAccent, { offset: [0, 1.08, 0] });
+      taggedParts.push(
+        tagPart(bowl, 'brazier_bowl', 'forged_steel', cPrimary),
+        tagPart(flame, 'brazier_flame', 'runic_glow', cAccent)
+      );
+      for (const [lIdx, ang] of [0, 2.09, 4.18].entries()) {
+        const leg = makeBeveledBox(0.07, 0.72, 0.07, 0.01, cPrimary, {
+          offset: [Math.cos(ang) * 0.28, 0.36, Math.sin(ang) * 0.28],
+        });
+        taggedParts.push(tagPart(leg, `brazier_leg_${lIdx}`, 'forged_steel', cPrimary));
+      }
+      hasRunicGlow = true;
+      isMetallic = true;
+      break;
+    }
+
+    case 'weapon_rack': {
+      const baseL = makeBeveledBox(0.1, 1.45, 0.45, 0.015, cPrimary, { offset: [-0.55, 0.725, 0] });
+      const baseR = makeBeveledBox(0.1, 1.45, 0.45, 0.015, cPrimary, { offset: [0.55, 0.725, 0] });
+      const bar = makeBeveledBox(1.22, 0.08, 0.08, 0.01, cPrimary, { offset: [0, 1.25, 0] });
+      const swordA = makeBeveledBox(0.08, 1.05, 0.04, 0.008, cSecondary, { offset: [-0.25, 0.78, 0.06] });
+      const swordB = makeBeveledBox(0.08, 1.05, 0.04, 0.008, cSecondary, { offset: [0.22, 0.78, 0.06] });
+      const shield = makeBeveledBox(0.42, 0.48, 0.06, 0.015, cAccent, { offset: [0, 0.72, -0.06] });
+      taggedParts.push(
+        tagPart(baseL, 'rack_l', 'wood_planks', cPrimary),
+        tagPart(baseR, 'rack_r', 'wood_planks', cPrimary),
+        tagPart(bar, 'rack_bar', 'wood_planks', cPrimary),
+        tagPart(swordA, 'rack_sw_a', 'forged_steel', cSecondary),
+        tagPart(swordB, 'rack_sw_b', 'forged_steel', cSecondary),
+        tagPart(shield, 'rack_shield', 'brushed_gold', cAccent)
       );
       break;
     }

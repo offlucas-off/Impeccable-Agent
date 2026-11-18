@@ -5,6 +5,13 @@ import {
   exportTurntableSpriteSheet,
   type SpriteSheetExportResult,
 } from '../../engine/SpriteSheetExporter';
+import { runBatchExport } from '../../engine/BatchExporter';
+import {
+  getAllPresets,
+  PRESET_CATEGORY_LABELS,
+  type PresetCategory,
+  type PresetEntry,
+} from '../../engine/PresetRegistry';
 import {
   buildVoxelMeshGroup,
   exportVoxelGridToGlb,
@@ -74,6 +81,42 @@ export function mountExportPanel(
         </button>
         <div id="asset-glb-status" class="voxel-stats-box">
           <span>Default: original sRGB textures (or check Quantizado)</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="ctrl-section">
+      <div class="ctrl-section-head"><span>Batch Export (Todos os Presets Configurados)</span></div>
+      <div class="ctrl-section-body">
+        <div class="field-row">
+          <label class="field-label" for="sel-batch-category">Categoria</label>
+          <select id="sel-batch-category" class="select-ctrl select-ctrl-sm">
+            <option value="all">Todos os Presets (${getAllPresets().length})</option>
+            ${(Object.keys(PRESET_CATEGORY_LABELS) as PresetCategory[])
+              .map(
+                (cat) =>
+                  `<option value="${cat}">${PRESET_CATEGORY_LABELS[cat]}</option>`
+              )
+              .join('')}
+          </select>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;">
+          <label style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--text-secondary);">
+            <input id="chk-batch-glb" type="checkbox" checked /> .GLB
+          </label>
+          <label style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--text-secondary);">
+            <input id="chk-batch-png" type="checkbox" checked /> .PNG
+          </label>
+          <label style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--text-secondary);">
+            <input id="chk-batch-sheet" type="checkbox" /> 8-Dir
+          </label>
+        </div>
+        <button id="btn-batch-export" class="btn btn-primary" type="button">
+          ${ICONS.download}
+          <span>Exportar Pacote .ZIP (Estilo Atual)</span>
+        </button>
+        <div id="batch-export-status" class="voxel-stats-box">
+          <span>Gera .ZIP único com manifest.json no estilo ativo do Studio</span>
         </div>
       </div>
     </div>
@@ -384,6 +427,110 @@ export function mountExportPanel(
         assetGlbStatus.textContent = `${fname} (${(buffer.byteLength / 1024).toFixed(1)} KB · ${validation.meshCount} meshes · ${validation.clipCount} clips)`;
       } catch (err) {
         assetGlbStatus.textContent = `Error: ${err instanceof Error ? err.message : String(err)}`;
+      }
+    })();
+  });
+
+  const batchStatusEl = container.querySelector<HTMLElement>('#batch-export-status')!;
+  events.listen(container.querySelector('#btn-batch-export')!, 'click', () => {
+    void (async () => {
+      const catVal = container.querySelector<HTMLSelectElement>('#sel-batch-category')!.value;
+      const includeGlb = container.querySelector<HTMLInputElement>('#chk-batch-glb')!.checked;
+      const includePng = container.querySelector<HTMLInputElement>('#chk-batch-png')!.checked;
+      const include8DirSheet = container.querySelector<HTMLInputElement>('#chk-batch-sheet')!.checked;
+      const quantizeGlb = chkQuantizeGlb.checked;
+      const ditherGlb = chkQuantizeDither.checked;
+
+      const presets = getAllPresets();
+      const categories: PresetCategory[] | 'all' =
+        catVal === 'all' ? 'all' : [catVal as PresetCategory];
+
+      batchStatusEl.textContent = 'Iniciando Batch Export...';
+      try {
+        const { zipBlob, manifest } = await runBatchExport(
+          presets,
+          {
+            loadPreset: async (entry: PresetEntry) => {
+              if (entry.stagePresetKey) {
+                await ctx.actions.loadPresetSelection(entry.stagePresetKey);
+              } else if (
+                ctx.generatorHandle &&
+                'spawnRegistryPreset' in ctx.generatorHandle &&
+                typeof (ctx.generatorHandle as { spawnRegistryPreset?: (e: PresetEntry) => Promise<void> }).spawnRegistryPreset === 'function'
+              ) {
+                await (ctx.generatorHandle as { spawnRegistryPreset: (e: PresetEntry) => Promise<void> }).spawnRegistryPreset(entry);
+              }
+              await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+            },
+            capturePngDataUrl: (size) =>
+              ctx.actions.withIsolatedSubject(() =>
+                captureSingleFrameDataUrl(ctx.pipeline, ctx.scene, ctx.activeCamera, size, size, true)
+              ),
+            exportSheet: (targetHeightPx, framesPerDirection) => {
+              if (!ctx.activeStage) return null;
+              return ctx.actions.withIsolatedSubject(() =>
+                exportNwlIsometricSheet(
+                  ctx.pipeline,
+                  ctx.scene,
+                  ctx.activeStage!.subjectRoot,
+                  {
+                    targetCharHeightPx: targetHeightPx,
+                    framesPerDirection,
+                    alphaThreshold: 110,
+                  },
+                  !ctx.isVoxelMode && ctx.animCtrl.getClips().length > 0
+                    ? ctx.animCtrl
+                    : undefined
+                )
+              );
+            },
+            exportGlbBytes: async (quantize, dither) => {
+              if (!ctx.activeStage) return null;
+              const { buffer, validation } = await exportRiggedAssetToGlb(
+                ctx.activeStage.subjectRoot,
+                ctx.animCtrl.getClips(),
+                {
+                  name: ctx.actions.getExportSlug(),
+                  quantizeAlbedo: quantize,
+                  quantizePalette: ctx.pipeline.getActivePaletteEntry().config,
+                  quantizeDither: dither,
+                }
+              );
+              let tris = 0;
+              ctx.activeStage.subjectRoot.traverse((o) => {
+                if ('isMesh' in o && (o as { isMesh?: boolean }).isMesh) {
+                  const geo = (o as { geometry?: { index?: { count: number }; attributes?: { position?: { count: number } } } }).geometry;
+                  if (geo?.index) tris += Math.floor(geo.index.count / 3);
+                  else if (geo?.attributes?.position) tris += Math.floor(geo.attributes.position.count / 3);
+                }
+              });
+              void validation;
+              return { bytes: new Uint8Array(buffer), triangles: tris };
+            },
+            getStyleInfo: () => ({
+              stylePreset: ctx.pipeline.activeStylePreset,
+              paletteId: ctx.pipeline.activePaletteId,
+              rampId: ctx.pipeline.activeRampId,
+            }),
+          },
+          {
+            categories,
+            includeGlb,
+            includePng,
+            include8DirSheet,
+            quantizeGlb,
+            ditherGlb,
+            onProgress: (done, total, currentName) => {
+              batchStatusEl.textContent = `Exportando ${done}/${total}: ${currentName}`;
+            },
+          }
+        );
+
+        const fname = `pixelizer_batch_${catVal}_${ctx.pipeline.activeStylePreset}.zip`;
+        ctx.actions.downloadBlob(zipBlob, fname);
+        batchStatusEl.textContent = `Concluído! ${manifest.totalAssets} assets -> ${fname} (${(zipBlob.size / 1024).toFixed(1)} KB)`;
+      } catch (err) {
+        batchStatusEl.textContent = `Erro no Batch: ${err instanceof Error ? err.message : String(err)}`;
       }
     })();
   });

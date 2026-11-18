@@ -23,7 +23,7 @@ const TARGET_TO_PRESET = {
 function parseArgs(argv) {
   const opts = {
     targets: ['knight', 'archer', 'mage', 'boss_demon'],
-    preset: 'nwl_snes',
+    preset: 'stylized_crisp',
     outDir: path.resolve(ROOT_DIR, 'exports/nwl'),
     quantizeGlb: false,
     ditherGlb: false,
@@ -44,7 +44,7 @@ function parseArgs(argv) {
           .filter(Boolean);
       }
     } else if (arg.startsWith('--preset=')) {
-      opts.preset = arg.slice('--preset='.length).trim() || 'nwl_snes';
+      opts.preset = arg.slice('--preset='.length).trim() || 'stylized_crisp';
     } else if (arg.startsWith('--out=')) {
       const outRaw = arg.slice('--out='.length).trim();
       opts.outDir = path.isAbsolute(outRaw) ? outRaw : path.resolve(ROOT_DIR, outRaw);

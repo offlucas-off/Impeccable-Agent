@@ -151,7 +151,7 @@ describe('NWL Production Pipeline (Presets, Modular Gear, City, Bestiary, Dungeo
   });
 
   it('enforces Bestiary scale hierarchy across 5 enemies and Giant Boss Demon (~2.95m)', () => {
-    expect(NWL_MONSTER_IDS.length).toBe(6);
+    expect(NWL_MONSTER_IDS.length).toBeGreaterThanOrEqual(15);
     const heights: Record<string, number> = {};
 
     for (const id of NWL_MONSTER_IDS) {
@@ -184,9 +184,17 @@ describe('NWL Production Pipeline (Presets, Modular Gear, City, Bestiary, Dungeo
     expect(dung.destructibles.length).toBeGreaterThanOrEqual(4);
     expect(dung.traps.length).toBeGreaterThanOrEqual(2);
 
-    // Every bestiary enemy + boss demon spawned in Floor 1
+    // Every Green Ruins Floor 1 enemy + boss demon spawned in Floor 1
+    const floor1Ids = [
+      'orcs.goblin_01',
+      'orcs.goblin_03',
+      'orcs.goblin_06',
+      'orcs.goblin_02',
+      'orcs.orc_04',
+      'demons.boss_demon',
+    ] as const;
     const spawnedIds = new Set(dung.enemySpawns.map((s) => s.id));
-    for (const reqId of NWL_MONSTER_IDS) {
+    for (const reqId of floor1Ids) {
       expect(spawnedIds.has(reqId)).toBe(true);
     }
 

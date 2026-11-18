@@ -225,10 +225,75 @@ export function mountPipelinePanel(
           <span class="field-label">Background</span>
           <div class="field-control">
             <input id="col-bg" type="color" value="#13161f" />
-            <label style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--text-secondary);">
-              <input id="chk-bg-trans" type="checkbox" /> Clear Alpha
-            </label>
           </div>
+        </div>
+        <div class="field-row">
+          <label class="field-label" for="chk-bg-trans">Clear Alpha</label>
+          <input id="chk-bg-trans" type="checkbox" />
+        </div>
+      </div>
+    </div>
+
+    <div class="ctrl-section">
+      <div class="ctrl-section-head"><span>Post-Grade &amp; Preview ao Vivo</span></div>
+      <div class="ctrl-section-body">
+        <div class="slider-row">
+          <div class="slider-head">
+            <span>Exposure</span>
+            <span id="val-exposure" class="slider-val">1.00</span>
+          </div>
+          <input id="rng-exposure" type="range" min="0.50" max="1.80" step="0.05" value="1.00" />
+        </div>
+        <div class="slider-row">
+          <div class="slider-head">
+            <span>Contrast</span>
+            <span id="val-contrast" class="slider-val">1.00</span>
+          </div>
+          <input id="rng-contrast" type="range" min="0.60" max="1.60" step="0.05" value="1.00" />
+        </div>
+        <div class="slider-row">
+          <div class="slider-head">
+            <span>Vignette</span>
+            <span id="val-vignette" class="slider-val">0.00</span>
+          </div>
+          <input id="rng-vignette" type="range" min="0" max="0.80" step="0.05" value="0" />
+        </div>
+        <div class="field-row">
+          <label class="field-label" for="chk-turntable">Auto Turntable 360°</label>
+          <input id="chk-turntable" type="checkbox" />
+        </div>
+        <div class="slider-row">
+          <div class="slider-head">
+            <span>Turntable Speed</span>
+            <span id="val-turntable-spd" class="slider-val">35°/s</span>
+          </div>
+          <input id="rng-turntable-spd" type="range" min="5" max="120" step="5" value="35" />
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
+          <label style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--text-secondary);">
+            <input id="chk-wireframe" type="checkbox" /> Wireframe
+          </label>
+          <label style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--text-secondary);">
+            <input id="chk-bounds-box" type="checkbox" /> Bounds + Metros
+          </label>
+        </div>
+        <div id="val-bounds-info" class="voxel-stats-box" style="display:none;">
+          <span>Bounds: —</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="ctrl-section">
+      <div class="ctrl-section-head"><span>Presets Customizados (Local)</span></div>
+      <div class="ctrl-section-body">
+        <div style="display:grid;grid-template-columns:1fr auto;gap:5px;">
+          <input id="inp-custom-preset-name" class="input-ctrl" type="text" placeholder="Nome do preset..." style="height:26px;" />
+          <button id="btn-save-custom-preset" class="btn btn-sm btn-primary" type="button">Salvar</button>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr auto auto;gap:5px;margin-top:4px;">
+          <select id="sel-custom-presets" class="select-ctrl select-ctrl-sm"></select>
+          <button id="btn-load-custom-preset" class="btn btn-sm" type="button">Aplicar</button>
+          <button id="btn-del-custom-preset" class="btn btn-sm" type="button">×</button>
         </div>
       </div>
     </div>
@@ -393,6 +458,160 @@ export function mountPipelinePanel(
   });
   bindCheck('#chk-bg-trans', (v) => (ctx.pipeline.pipelineConfig.backgroundTransparent = v));
 
+  // Wave 1: Post-Grade & Preview ao Vivo
+  const rngExposure = container.querySelector<HTMLInputElement>('#rng-exposure')!;
+  const valExposure = container.querySelector<HTMLElement>('#val-exposure')!;
+  const rngContrast = container.querySelector<HTMLInputElement>('#rng-contrast')!;
+  const valContrast = container.querySelector<HTMLElement>('#val-contrast')!;
+  const rngVignette = container.querySelector<HTMLInputElement>('#rng-vignette')!;
+  const valVignette = container.querySelector<HTMLElement>('#val-vignette')!;
+  const chkTurntable = container.querySelector<HTMLInputElement>('#chk-turntable')!;
+  const rngTurntableSpd = container.querySelector<HTMLInputElement>('#rng-turntable-spd')!;
+  const valTurntableSpd = container.querySelector<HTMLElement>('#val-turntable-spd')!;
+  const chkWireframe = container.querySelector<HTMLInputElement>('#chk-wireframe')!;
+  const chkBoundsBox = container.querySelector<HTMLInputElement>('#chk-bounds-box')!;
+  const valBoundsInfo = container.querySelector<HTMLElement>('#val-bounds-info')!;
+
+  bindRange('#rng-exposure', '#val-exposure', (v) => v.toFixed(2), (v) => {
+    ctx.pipeline.pipelineConfig.exposure = v;
+  });
+  bindRange('#rng-contrast', '#val-contrast', (v) => v.toFixed(2), (v) => {
+    ctx.pipeline.pipelineConfig.contrast = v;
+  });
+  bindRange('#rng-vignette', '#val-vignette', (v) => v.toFixed(2), (v) => {
+    ctx.pipeline.pipelineConfig.vignetteStrength = v;
+  });
+  bindCheck('#chk-turntable', (v) => {
+    ctx.turntableEnabled = v;
+  });
+  bindRange('#rng-turntable-spd', '#val-turntable-spd', (v) => `${v}°/s`, (v) => {
+    ctx.turntableSpeedDeg = v;
+  });
+
+  bindCheck('#chk-wireframe', (v) => {
+    ctx.wireframeOverlay = v;
+    ctx.scene.traverse((obj) => {
+      if (obj instanceof THREE.Mesh) {
+        const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+        for (const m of mats) {
+          if ('wireframe' in m) {
+            (m as THREE.Material & { wireframe: boolean }).wireframe = v;
+          }
+        }
+      }
+    });
+  });
+
+  const refreshBoundsOverlay = (enabled: boolean) => {
+    ctx.boundsOverlayEnabled = enabled;
+    if (ctx.boundsHelper) {
+      ctx.overlayScene.remove(ctx.boundsHelper);
+      ctx.boundsHelper.dispose();
+      ctx.boundsHelper = null;
+    }
+    if (enabled && ctx.activeStage?.subjectRoot) {
+      const box = new THREE.Box3().setFromObject(ctx.activeStage.subjectRoot);
+      if (!box.isEmpty()) {
+        ctx.boundsHelper = new THREE.Box3Helper(box, new THREE.Color('#38bdf8'));
+        ctx.overlayScene.add(ctx.boundsHelper);
+        const size = box.getSize(new THREE.Vector3());
+        valBoundsInfo.style.display = 'block';
+        valBoundsInfo.textContent = `Dimensões: ${size.x.toFixed(2)}m × ${size.y.toFixed(2)}m × ${size.z.toFixed(2)}m`;
+      } else {
+        valBoundsInfo.style.display = 'none';
+      }
+    } else {
+      valBoundsInfo.style.display = 'none';
+    }
+  };
+  bindCheck('#chk-bounds-box', refreshBoundsOverlay);
+
+  // Wave 1: Custom Presets (localStorage)
+  const CUSTOM_PRESETS_KEY = 'pixelizer_custom_presets_v1';
+  const inpPresetName = container.querySelector<HTMLInputElement>('#inp-custom-preset-name')!;
+  const btnSavePreset = container.querySelector<HTMLButtonElement>('#btn-save-custom-preset')!;
+  const selCustomPresets = container.querySelector<HTMLSelectElement>('#sel-custom-presets')!;
+  const btnLoadPreset = container.querySelector<HTMLButtonElement>('#btn-load-custom-preset')!;
+  const btnDelPreset = container.querySelector<HTMLButtonElement>('#btn-del-custom-preset')!;
+
+  interface SavedCustomPreset {
+    name: string;
+    stylePreset: string;
+    paletteId: string;
+    rampId: string;
+    lightAzimuthDeg: number;
+    lightElevationDeg: number;
+    pipelineConfig: Record<string, unknown>;
+  }
+
+  const readCustomPresets = (): SavedCustomPreset[] => {
+    try {
+      const raw = window.localStorage.getItem(CUSTOM_PRESETS_KEY);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  };
+
+  const writeCustomPresets = (list: SavedCustomPreset[]) => {
+    try {
+      window.localStorage.setItem(CUSTOM_PRESETS_KEY, JSON.stringify(list));
+    } catch {
+      // ignore storage quota errors
+    }
+  };
+
+  const refreshCustomPresetsSelect = () => {
+    const list = readCustomPresets();
+    selCustomPresets.innerHTML = list.length
+      ? list.map((p) => `<option value="${p.name.replace(/"/g, '&quot;')}">${p.name}</option>`).join('')
+      : '<option value="">(Nenhum preset salvo)</option>';
+  };
+  refreshCustomPresetsSelect();
+
+  events.listen(btnSavePreset, 'click', () => {
+    const name = inpPresetName.value.trim() || `Custom_${new Date().toLocaleTimeString().replace(/:/g, '-')}`;
+    const list = readCustomPresets().filter((p) => p.name !== name);
+    list.unshift({
+      name,
+      stylePreset: ctx.pipeline.activeStylePreset,
+      paletteId: ctx.pipeline.activePaletteId,
+      rampId: ctx.pipeline.activeRampId,
+      lightAzimuthDeg: ctx.lightAzimuthDeg,
+      lightElevationDeg: ctx.lightElevationDeg,
+      pipelineConfig: { ...ctx.pipeline.pipelineConfig },
+    });
+    writeCustomPresets(list.slice(0, 24));
+    inpPresetName.value = '';
+    refreshCustomPresetsSelect();
+    selCustomPresets.value = name;
+  });
+
+  events.listen(btnLoadPreset, 'click', () => {
+    const name = selCustomPresets.value;
+    if (!name) return;
+    const found = readCustomPresets().find((p) => p.name === name);
+    if (!found) return;
+    Object.assign(ctx.pipeline.pipelineConfig, found.pipelineConfig);
+    ctx.lightAzimuthDeg = found.lightAzimuthDeg ?? ctx.lightAzimuthDeg;
+    ctx.lightElevationDeg = found.lightElevationDeg ?? ctx.lightElevationDeg;
+    ctx.actions.updateSunDirection();
+    ctx.dirLight.intensity = ctx.pipeline.pipelineConfig.lightIntensity;
+    ctx.dirLight.color.set(ctx.pipeline.pipelineConfig.lightColor);
+    ctx.hemiLight.color.set(ctx.pipeline.pipelineConfig.ambientSkyColor);
+    ctx.ambientLight.color.set(ctx.pipeline.pipelineConfig.ambientSkyColor);
+    syncFromPipeline();
+  });
+
+  events.listen(btnDelPreset, 'click', () => {
+    const name = selCustomPresets.value;
+    if (!name) return;
+    writeCustomPresets(readCustomPresets().filter((p) => p.name !== name));
+    refreshCustomPresetsSelect();
+  });
+
   const syncFromPipeline = () => {
     const cfg = ctx.pipeline.pipelineConfig;
     const mode = cfg.filterMode;
@@ -427,6 +646,22 @@ export function mountPipelinePanel(
     colBg.value = cfg.backgroundColor;
     rngLightInt.value = String(cfg.lightIntensity);
     valLightInt.textContent = cfg.lightIntensity.toFixed(2);
+
+    const exp = cfg.exposure ?? 1.0;
+    const con = cfg.contrast ?? 1.0;
+    const vig = cfg.vignetteStrength ?? 0.0;
+    rngExposure.value = String(exp);
+    valExposure.textContent = exp.toFixed(2);
+    rngContrast.value = String(con);
+    valContrast.textContent = con.toFixed(2);
+    rngVignette.value = String(vig);
+    valVignette.textContent = vig.toFixed(2);
+    chkTurntable.checked = ctx.turntableEnabled;
+    rngTurntableSpd.value = String(ctx.turntableSpeedDeg);
+    valTurntableSpd.textContent = `${ctx.turntableSpeedDeg}°/s`;
+    chkWireframe.checked = ctx.wireframeOverlay;
+    chkBoundsBox.checked = ctx.boundsOverlayEnabled;
+    refreshBoundsOverlay(ctx.boundsOverlayEnabled);
 
     const isHades = ctx.pipeline.activeStylePreset === 'hades_lab';
     selGlobalOutlineSteps.value = isHades ? '2' : '1';

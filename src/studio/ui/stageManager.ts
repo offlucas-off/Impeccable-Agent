@@ -509,11 +509,12 @@ export function createStageManager(
     root: THREE.Group;
     materials: PixelizerMaterial[];
     isLargeStructure?: boolean;
+    clips?: THREE.AnimationClip[];
     onUpdate?: (t: number) => void;
     onCleanup?: () => void;
   }): void {
     ctx.activeStructureRoot = opts.isLargeStructure ? opts.root : null;
-    ctx.nativeModelClips = [];
+    ctx.nativeModelClips = opts.clips ?? [];
     ctx.animCtrl.dispose();
     ctx.actions.syncAnimClipSelector([], 0);
     const floorR = opts.isLargeStructure ? 18 : 6;
@@ -536,6 +537,13 @@ export function createStageManager(
       },
       onCleanup: opts.onCleanup,
     });
+
+    if (opts.clips && opts.clips.length > 0) {
+      ctx.animCtrl.bindModel(opts.root, opts.clips);
+      ctx.animCtrl.playClip(0);
+      ctx.actions.syncAnimClipSelector(opts.clips, 0);
+      ctx.animViewerHandle?.refreshFromActiveStage();
+    }
   }
 
   function mountGeneratedCharacter(

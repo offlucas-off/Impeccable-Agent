@@ -124,6 +124,11 @@ export interface StudioContext {
   loadRequestToken: number;
   selectedItemId: string;
   motionCreepTest: boolean;
+  turntableEnabled: boolean;
+  turntableSpeedDeg: number;
+  wireframeOverlay: boolean;
+  boundsOverlayEnabled: boolean;
+  boundsHelper: THREE.Box3Helper | null;
 
   actions: StudioPanelCallbacks;
   onCleanup: (fn: () => void) => void;

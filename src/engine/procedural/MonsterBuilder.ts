@@ -44,7 +44,16 @@ export type NwlMonsterId =
   | 'orcs.goblin_06'
   | 'orcs.goblin_02'
   | 'orcs.orc_04'
-  | 'demons.boss_demon';
+  | 'demons.boss_demon'
+  | 'monster.skeleton_warrior'
+  | 'monster.skeleton_archer'
+  | 'monster.dark_cultist'
+  | 'monster.gargoyle'
+  | 'monster.lizardman'
+  | 'monster.crystal_golem'
+  | 'boss.colossus_golem'
+  | 'boss.minotaur_warlord'
+  | 'boss.dread_knight';
 
 export const NWL_MONSTER_IDS: readonly NwlMonsterId[] = [
   'orcs.goblin_01',
@@ -53,6 +62,15 @@ export const NWL_MONSTER_IDS: readonly NwlMonsterId[] = [
   'orcs.goblin_02',
   'orcs.orc_04',
   'demons.boss_demon',
+  'monster.skeleton_warrior',
+  'monster.skeleton_archer',
+  'monster.dark_cultist',
+  'monster.gargoyle',
+  'monster.lizardman',
+  'monster.crystal_golem',
+  'boss.colossus_golem',
+  'boss.minotaur_warlord',
+  'boss.dread_knight',
 ];
 
 export interface MonsterSpecMeta {
@@ -183,6 +201,168 @@ export const NWL_MONSTER_SPECS: Record<NwlMonsterId, MonsterSpecMeta> = {
     accentColor: '#fa6a0a',
     bulk: 1.32,
   },
+  'monster.skeleton_warrior': {
+    id: 'monster.skeleton_warrior',
+    namePt: 'Esqueleto Guerreiro',
+    role: 'common',
+    targetHeightM: 1.75,
+    targetHeightPx: 105,
+    maxHp: 55,
+    damage: 12,
+    moveSpeed: 2.5,
+    windupSec: 0.45,
+    attackRangeM: 1.7,
+    isRanged: false,
+    skinColor: '#d8cfb8',
+    armorColor: '#475569',
+    trimColor: '#94a3b8',
+    accentColor: '#38bdf8',
+    bulk: 0.78,
+  },
+  'monster.skeleton_archer': {
+    id: 'monster.skeleton_archer',
+    namePt: 'Esqueleto Arqueiro',
+    role: 'ranged',
+    targetHeightM: 1.74,
+    targetHeightPx: 104,
+    maxHp: 44,
+    damage: 13,
+    moveSpeed: 2.3,
+    windupSec: 0.5,
+    attackRangeM: 8.0,
+    isRanged: true,
+    skinColor: '#d8cfb8',
+    armorColor: '#334155',
+    trimColor: '#64748b',
+    accentColor: '#22d3ee',
+    bulk: 0.76,
+  },
+  'monster.dark_cultist': {
+    id: 'monster.dark_cultist',
+    namePt: 'Cultista Sombrio',
+    role: 'ranged',
+    targetHeightM: 1.8,
+    targetHeightPx: 108,
+    maxHp: 62,
+    damage: 16,
+    moveSpeed: 2.4,
+    windupSec: 0.52,
+    attackRangeM: 7.5,
+    isRanged: true,
+    skinColor: '#9f8ea8',
+    armorColor: '#2e1065',
+    trimColor: '#a855f7',
+    accentColor: '#e879f9',
+    bulk: 0.94,
+  },
+  'monster.gargoyle': {
+    id: 'monster.gargoyle',
+    namePt: 'Gárgula de Pedra',
+    role: 'heavy',
+    targetHeightM: 1.95,
+    targetHeightPx: 117,
+    maxHp: 110,
+    damage: 19,
+    moveSpeed: 2.6,
+    windupSec: 0.55,
+    attackRangeM: 2.0,
+    isRanged: false,
+    skinColor: '#64748b',
+    armorColor: '#475569',
+    trimColor: '#94a3b8',
+    accentColor: '#f59e0b',
+    bulk: 1.15,
+  },
+  'monster.lizardman': {
+    id: 'monster.lizardman',
+    namePt: 'Homem-Lagarto',
+    role: 'common',
+    targetHeightM: 1.88,
+    targetHeightPx: 112,
+    maxHp: 85,
+    damage: 15,
+    moveSpeed: 2.8,
+    windupSec: 0.44,
+    attackRangeM: 2.1,
+    isRanged: false,
+    skinColor: '#2d6a4f',
+    armorColor: '#7c5338',
+    trimColor: '#d4a359',
+    accentColor: '#facc15',
+    bulk: 1.05,
+  },
+  'monster.crystal_golem': {
+    id: 'monster.crystal_golem',
+    namePt: 'Golem de Cristal',
+    role: 'heavy',
+    targetHeightM: 2.25,
+    targetHeightPx: 135,
+    maxHp: 165,
+    damage: 24,
+    moveSpeed: 1.85,
+    windupSec: 0.68,
+    attackRangeM: 2.3,
+    isRanged: false,
+    skinColor: '#3b4252',
+    armorColor: '#1e3a8a',
+    trimColor: '#38bdf8',
+    accentColor: '#67e8f9',
+    bulk: 1.32,
+  },
+  'boss.colossus_golem': {
+    id: 'boss.colossus_golem',
+    namePt: 'Colosso Rúnico (Boss 3.6m)',
+    role: 'boss',
+    targetHeightM: 3.6,
+    targetHeightPx: 216,
+    maxHp: 520,
+    damage: 42,
+    moveSpeed: 1.75,
+    windupSec: 0.85,
+    attackRangeM: 3.6,
+    isRanged: false,
+    skinColor: '#475569',
+    armorColor: '#1e293b',
+    trimColor: '#38bdf8',
+    accentColor: '#7dd3fc',
+    bulk: 1.48,
+  },
+  'boss.minotaur_warlord': {
+    id: 'boss.minotaur_warlord',
+    namePt: 'Senhor Minotauro (Boss 3.2m)',
+    role: 'boss',
+    targetHeightM: 3.2,
+    targetHeightPx: 192,
+    maxHp: 460,
+    damage: 38,
+    moveSpeed: 2.2,
+    windupSec: 0.72,
+    attackRangeM: 3.2,
+    isRanged: false,
+    skinColor: '#5c3a28',
+    armorColor: '#3f271e',
+    trimColor: '#d4a359',
+    accentColor: '#ef4444',
+    bulk: 1.38,
+  },
+  'boss.dread_knight': {
+    id: 'boss.dread_knight',
+    namePt: 'Cavaleiro do Pavor (Boss 3.0m)',
+    role: 'boss',
+    targetHeightM: 3.0,
+    targetHeightPx: 180,
+    maxHp: 430,
+    damage: 36,
+    moveSpeed: 2.4,
+    windupSec: 0.65,
+    attackRangeM: 3.1,
+    isRanged: false,
+    skinColor: '#1e1b24',
+    armorColor: '#18181b',
+    trimColor: '#9333ea',
+    accentColor: '#c084fc',
+    bulk: 1.3,
+  },
 };
 
 export interface MonsterBuildOptions {
@@ -268,18 +448,30 @@ export function buildNwlMonster(
   const bulk = spec.bulk;
 
   const isGoblin = id.startsWith('orcs.goblin');
-  const isBoss = id === 'demons.boss_demon';
+  const isBoss = spec.role === 'boss';
+  const isSkeleton = id.startsWith('monster.skeleton');
+  const isGolem = id === 'monster.crystal_golem' || id === 'boss.colossus_golem';
   const skinRecipe: MaterialRecipeId = isGoblin
     ? 'goblin_skin'
-    : id === 'orcs.orc_04'
+    : id === 'orcs.orc_04' || id === 'monster.lizardman'
       ? 'orc_hide'
-      : 'demon_hide';
+      : isSkeleton
+        ? 'bone_ivory'
+        : isGolem || id === 'monster.gargoyle'
+          ? 'stone_masonry'
+          : 'demon_hide';
   const armorRecipe: MaterialRecipeId = isBoss
     ? 'magma_obsidian'
     : isGoblin && (id === 'orcs.goblin_03' || id === 'orcs.goblin_02')
       ? 'woven_cloth'
-      : 'forged_steel';
-  const emitHex = isBoss ? '#fa6a0a' : id === 'orcs.goblin_02' ? '#249fde' : null;
+      : id === 'monster.dark_cultist'
+        ? 'woven_cloth'
+        : 'forged_steel';
+  const emitHex = isBoss
+    ? spec.accentColor
+    : id === 'orcs.goblin_02' || id === 'monster.crystal_golem' || id === 'monster.dark_cultist'
+      ? spec.accentColor
+      : null;
 
   const rig = createCanonicalUalRig('male', rigScale);
   const pelvisLen = getBoneSpanY(rig, 'pelvis', 0.138);
@@ -690,7 +882,48 @@ export function buildNwlMonster(
         tagPart(tusk, `orc_tusk_${tIdx}`, 'bone_ivory', '#dae0ea', { lockVertical: false })
       );
     }
-  } else if (isBoss) {
+  } else if (isGolem) {
+    for (const [cIdx, sx] of [-0.07, 0, 0.07].entries()) {
+      const spire = prepareColoredPart(
+        new THREE.ConeGeometry(0.045 * bulk, (cIdx === 1 ? 0.22 : 0.15) * bulk, 5),
+        spec.accentColor
+      );
+      spire.rotateZ(-sx * 2.2);
+      spire.translate(sx * bulk, 0.26 * bulk, -0.02);
+      headParts.push(tagPart(spire, `golem_crystal_${cIdx}`, 'runic_glow', spec.accentColor));
+    }
+  } else if (id === 'monster.dark_cultist') {
+    headParts.push(
+      tagPart(
+        makeBeveledBox(0.25 * bulk, 0.24 * bulk, 0.26 * bulk, 0.025, spec.armorColor, {
+          offset: [0, 0.13 * bulk, -0.02],
+        }),
+        'cultist_hood',
+        'woven_cloth',
+        spec.armorColor,
+        { accentHex: spec.accentColor }
+      )
+    );
+  } else if (id === 'monster.lizardman') {
+    headParts.push(
+      tagPart(
+        makeBeveledBox(0.15 * bulk, 0.1 * bulk, 0.18 * bulk, 0.016, spec.skinColor, {
+          offset: [0, 0.08 * bulk, 0.14 * bulk],
+        }),
+        'lizard_snout',
+        'orc_hide',
+        spec.skinColor
+      ),
+      tagPart(
+        makeBeveledBox(0.04 * bulk, 0.1 * bulk, 0.24 * bulk, 0.01, spec.trimColor, {
+          offset: [0, 0.22 * bulk, -0.02],
+        }),
+        'lizard_crest',
+        'bone_ivory',
+        spec.trimColor
+      )
+    );
+  } else if (isBoss || id === 'monster.gargoyle') {
     headParts.push(
       tagPart(
         makeBeveledBox(0.28 * bulk, 0.09, 0.27 * bulk, 0.02, spec.armorColor, {
@@ -702,6 +935,7 @@ export function buildNwlMonster(
         { accentHex: spec.accentColor }
       )
     );
+    const hornHex = id === 'boss.dread_knight' ? spec.trimColor : id === 'monster.gargoyle' ? spec.skinColor : '#ffd541';
     for (const [hIdx, sx] of [-1, 1].entries()) {
       const horn = makeCurvedHornGeometry(
         6,
@@ -711,12 +945,12 @@ export function buildNwlMonster(
         sx * 0.13,
         -0.08,
         6,
-        '#ffd541'
+        hornHex
       );
       horn.rotateZ(sx * -0.18);
       horn.translate(sx * 0.105 * bulk, 0.2 * bulk, 0);
       headParts.push(
-        tagPart(horn, `demon_great_horn_${hIdx}`, 'bone_ivory', '#ffd541', {
+        tagPart(horn, `demon_great_horn_${hIdx}`, 'bone_ivory', hornHex, {
           lockVertical: false,
         })
       );

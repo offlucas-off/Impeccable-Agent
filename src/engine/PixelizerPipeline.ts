@@ -164,6 +164,9 @@ export class PixelizerPipeline {
       bloomEnabled: false,
       bloomThreshold: 0.38,
       bloomIntensity: 0.45,
+      exposure: 1.0,
+      contrast: 1.0,
+      vignetteStrength: 0.0,
       ...pipelineConfig,
     };
 
@@ -285,6 +288,9 @@ export class PixelizerPipeline {
         uBgColorSrgb: { value: new THREE.Vector3(0.07, 0.08, 0.12) },
         uBloomEnabled: { value: 0.0 },
         uBloomIntensity: { value: 0.45 },
+        uExposure: { value: 1.0 },
+        uContrast: { value: 1.0 },
+        uVignetteStrength: { value: 0.0 },
       },
       depthTest: false,
       depthWrite: false,
@@ -1002,6 +1008,9 @@ export class PixelizerPipeline {
     );
     this.upscaleMat.uniforms.uBloomEnabled.value = runBloom ? 1 : 0;
     this.upscaleMat.uniforms.uBloomIntensity.value = cfg.bloomIntensity;
+    this.upscaleMat.uniforms.uExposure.value = cfg.exposure ?? 1.0;
+    this.upscaleMat.uniforms.uContrast.value = cfg.contrast ?? 1.0;
+    this.upscaleMat.uniforms.uVignetteStrength.value = cfg.vignetteStrength ?? 0.0;
 
     this.fsQuad.material = this.upscaleMat;
     this.renderer.setRenderTarget(outputTarget);

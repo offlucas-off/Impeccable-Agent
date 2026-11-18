@@ -181,6 +181,9 @@ export interface PipelineConfig {
   bloomEnabled: boolean;
   bloomThreshold: number;
   bloomIntensity: number;
+  exposure?: number;
+  contrast?: number;
+  vignetteStrength?: number;
 }
 
 export interface SteppedAnimationConfig {

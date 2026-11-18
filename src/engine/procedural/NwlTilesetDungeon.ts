@@ -1499,3 +1499,241 @@ export function buildGreenRuinsFloor1(
   };
 }
 
+export type DungeonBiomeId =
+  | 'classic_ruins'
+  | 'gothic_crypt'
+  | 'magma_cavern'
+  | 'frost_temple'
+  | 'shadow_forest';
+
+export interface DungeonBiomeTheme {
+  id: DungeonBiomeId;
+  labelPt: string;
+  tintHex: string;
+  accentHex: string;
+  lightHex: string;
+}
+
+export const DUNGEON_BIOME_THEMES: Record<DungeonBiomeId, DungeonBiomeTheme> = {
+  classic_ruins: {
+    id: 'classic_ruins',
+    labelPt: 'Ruínas Clássicas',
+    tintHex: '#ffffff',
+    accentHex: '#249fde',
+    lightHex: '#fa6a0a',
+  },
+  gothic_crypt: {
+    id: 'gothic_crypt',
+    labelPt: 'Cripta Gótica',
+    tintHex: '#8b8fa8',
+    accentHex: '#a855f7',
+    lightHex: '#c084fc',
+  },
+  magma_cavern: {
+    id: 'magma_cavern',
+    labelPt: 'Caverna Vulcânica',
+    tintHex: '#7f4f44',
+    accentHex: '#f97316',
+    lightHex: '#fb923c',
+  },
+  frost_temple: {
+    id: 'frost_temple',
+    labelPt: 'Templo Congelado',
+    tintHex: '#93c5fd',
+    accentHex: '#38bdf8',
+    lightHex: '#7dd3fc',
+  },
+  shadow_forest: {
+    id: 'shadow_forest',
+    labelPt: 'Floresta Sombria',
+    tintHex: '#4d7c5d',
+    accentHex: '#22c55e',
+    lightHex: '#4ade80',
+  },
+};
+
+export function buildDungeonByBiome(
+  biomeId: DungeonBiomeId,
+  seed = 101,
+  options: NwlTilesetBuildOptions = {},
+  sharedResources?: PixelizerMaterialResources
+): GeneratedGreenRuinsFloor1 {
+  const result = buildGreenRuinsFloor1(seed, sharedResources, options);
+  const theme = DUNGEON_BIOME_THEMES[biomeId] ?? DUNGEON_BIOME_THEMES.classic_ruins;
+  result.root.name = `NWL_Dungeon_${biomeId}`;
+
+  if (biomeId !== 'classic_ruins') {
+    const tint = new THREE.Color(theme.tintHex);
+    for (const mat of result.materials) {
+      if (mat.options.emissionIntensity && mat.options.emissionIntensity > 0.2) {
+        mat.updateOptions({ emissionColor: theme.accentHex });
+      } else if (mat.options.baseColor) {
+        const cur = new THREE.Color(mat.options.baseColor);
+        cur.multiply(tint);
+        mat.updateOptions({ baseColor: `#${cur.getHexString()}` });
+      }
+    }
+    result.root.traverse((obj: THREE.Object3D) => {
+      if (obj instanceof THREE.PointLight) {
+        obj.color.set(theme.lightHex);
+      }
+    });
+  }
+
+  return result;
+}
+
+export type ArchitecturalStructureId =
+  | 'watchtower'
+  | 'gatehouse'
+  | 'stone_bridge'
+  | 'tavern_2story';
+
+export interface NwlArchitecturalStructureResult {
+  id: ArchitecturalStructureId;
+  name: string;
+  root: THREE.Group;
+  materials: PixelizerMaterial[];
+  dispose: () => void;
+}
+
+export function buildArchitecturalStructure(
+  id: ArchitecturalStructureId,
+  options: NwlTilesetBuildOptions = {},
+  sharedResources?: PixelizerMaterialResources
+): NwlArchitecturalStructureResult {
+  const finishMode: FinishMode = options.finishMode ?? 'textured_ao';
+  const seed = Math.floor(options.seed ?? 707);
+  const parts: TaggedGeometryPart[] = [];
+
+  if (id === 'watchtower') {
+    const plinth = makeBeveledBox(3.4, 0.9, 3.4, 0.06, '#475569', { offset: [0, 0.45, 0] });
+    const shaft = makeBeveledBox(2.7, 4.4, 2.7, 0.06, '#64748b', { offset: [0, 3.1, 0] });
+    const deck = makeBeveledBox(3.3, 0.35, 3.3, 0.05, '#7c5338', { offset: [0, 5.45, 0] });
+    const roof = prepareColoredPart(new THREE.ConeGeometry(2.45, 2.1, 4), '#7f1d1d');
+    roof.rotateY(Math.PI * 0.25);
+    roof.translate(0, 6.65, 0);
+    const door = makeBeveledBox(0.95, 1.55, 0.2, 0.02, '#4f3428', { offset: [0, 1.25, 1.35] });
+    parts.push(
+      tagPart(plinth, 'tower_plinth', 'stone_masonry', '#475569'),
+      tagPart(shaft, 'tower_shaft', 'stone_masonry', '#64748b'),
+      tagPart(deck, 'tower_deck', 'wood_planks', '#7c5338'),
+      tagPart(roof, 'tower_roof', 'woven_cloth', '#7f1d1d'),
+      tagPart(door, 'tower_door', 'wood_planks', '#4f3428')
+    );
+    for (const [bIdx, [bx, bz]] of [
+      [-1.35, -1.35],
+      [1.35, -1.35],
+      [-1.35, 1.35],
+      [1.35, 1.35],
+    ].entries()) {
+      parts.push(
+        tagPart(
+          makeBeveledBox(0.45, 0.65, 0.45, 0.03, '#475569', { offset: [bx, 5.95, bz] }),
+          `tower_merlon_${bIdx}`,
+          'stone_masonry',
+          '#475569'
+        )
+      );
+    }
+  } else if (id === 'gatehouse') {
+    const towerL = makeBeveledBox(1.8, 4.6, 2.2, 0.05, '#64748b', { offset: [-1.9, 2.3, 0] });
+    const towerR = makeBeveledBox(1.8, 4.6, 2.2, 0.05, '#64748b', { offset: [1.9, 2.3, 0] });
+    const bridge = makeBeveledBox(2.2, 1.4, 1.8, 0.05, '#475569', { offset: [0, 3.8, 0] });
+    const roofL = makeBeveledBox(2.0, 0.9, 2.4, 0.04, '#7f1d1d', { offset: [-1.9, 5.05, 0] });
+    const roofR = makeBeveledBox(2.0, 0.9, 2.4, 0.04, '#7f1d1d', { offset: [1.9, 5.05, 0] });
+    const gate = makeBeveledBox(1.9, 2.4, 0.16, 0.02, '#334155', { offset: [0, 1.8, 0] });
+    parts.push(
+      tagPart(towerL, 'gate_tower_l', 'stone_masonry', '#64748b'),
+      tagPart(towerR, 'gate_tower_r', 'stone_masonry', '#64748b'),
+      tagPart(bridge, 'gate_bridge', 'stone_masonry', '#475569'),
+      tagPart(roofL, 'gate_roof_l', 'woven_cloth', '#7f1d1d'),
+      tagPart(roofR, 'gate_roof_r', 'woven_cloth', '#7f1d1d'),
+      tagPart(gate, 'gate_portcullis', 'forged_steel', '#334155')
+    );
+  } else if (id === 'stone_bridge') {
+    const pierL = makeBeveledBox(1.4, 1.4, 2.8, 0.05, '#475569', { offset: [-2.4, 0.7, 0] });
+    const pierR = makeBeveledBox(1.4, 1.4, 2.8, 0.05, '#475569', { offset: [2.4, 0.7, 0] });
+    const deck = makeBeveledBox(6.2, 0.45, 2.6, 0.05, '#64748b', { offset: [0, 1.55, 0] });
+    const railF = makeBeveledBox(6.2, 0.65, 0.24, 0.03, '#94a3b8', { offset: [0, 2.05, 1.15] });
+    const railB = makeBeveledBox(6.2, 0.65, 0.24, 0.03, '#94a3b8', { offset: [0, 2.05, -1.15] });
+    parts.push(
+      tagPart(pierL, 'bridge_pier_l', 'stone_masonry', '#475569'),
+      tagPart(pierR, 'bridge_pier_r', 'stone_masonry', '#475569'),
+      tagPart(deck, 'bridge_deck', 'stone_masonry', '#64748b'),
+      tagPart(railF, 'bridge_rail_f', 'stone_masonry', '#94a3b8'),
+      tagPart(railB, 'bridge_rail_b', 'stone_masonry', '#94a3b8')
+    );
+  } else {
+    // tavern_2story
+    const floor1 = makeBeveledBox(4.8, 2.5, 4.0, 0.05, '#64748b', { offset: [0, 1.25, 0] });
+    const floor2 = makeBeveledBox(5.2, 2.2, 4.4, 0.05, '#d6cbb8', { offset: [0, 3.6, 0] });
+    const roofA = makeBeveledBox(5.6, 0.24, 3.2, 0.04, '#991b1b');
+    roofA.rotateX(0.52);
+    roofA.translate(0, 5.45, 1.1);
+    const roofB = makeBeveledBox(5.6, 0.24, 3.2, 0.04, '#991b1b');
+    roofB.rotateX(-0.52);
+    roofB.translate(0, 5.45, -1.1);
+    const chimney = makeBeveledBox(0.7, 2.4, 0.7, 0.04, '#475569', { offset: [1.8, 5.2, -0.8] });
+    const door = makeBeveledBox(1.05, 1.85, 0.16, 0.02, '#4f3428', { offset: [0, 0.95, 2.0] });
+    const sign = makeBeveledBox(0.85, 0.55, 0.08, 0.015, '#d4a359', { offset: [1.3, 2.5, 2.25] });
+    parts.push(
+      tagPart(floor1, 'tavern_f1', 'stone_masonry', '#64748b'),
+      tagPart(floor2, 'tavern_f2', 'woven_cloth', '#d6cbb8'),
+      tagPart(roofA, 'tavern_roof_a', 'woven_cloth', '#991b1b'),
+      tagPart(roofB, 'tavern_roof_b', 'woven_cloth', '#991b1b'),
+      tagPart(chimney, 'tavern_chimney', 'stone_masonry', '#475569'),
+      tagPart(door, 'tavern_door', 'wood_planks', '#4f3428'),
+      tagPart(sign, 'tavern_sign', 'brushed_gold', '#d4a359')
+    );
+  }
+
+  const baked = bakeTaggedPartsAsset(parts, {
+    finishMode,
+    texelsPerMeter: 24,
+    seed,
+    aoRays: 10,
+    aoMaxDist: 0.9,
+    aoStrength: options.aoStrength ?? 0.3,
+    normalStrength: options.normalStrength ?? 0.14,
+    usePool: true,
+    cacheKey: `nwl_struct:${id}:${finishMode}`,
+  });
+  for (const p of parts) p.geometry.dispose();
+
+  const mat = createPixelizerMaterialFromBaked(
+    baked,
+    {
+      pixelated: true,
+      pixelSize: 2,
+      objectId: 75,
+      smoothness: 0.22,
+    },
+    sharedResources
+  );
+  const mesh = new THREE.Mesh(baked.geometry, mat);
+  mesh.name = `Struct_${id}`;
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+
+  const root = new THREE.Group();
+  root.name = `NWL_Structure_${id}`;
+  root.add(mesh);
+
+  return {
+    id,
+    name: root.name,
+    root,
+    materials: [mat],
+    dispose: () => {
+      mesh.geometry.dispose();
+      const opts = mat.options;
+      for (const tex of [opts.albedoMap, opts.normalMap, opts.emissionMap]) {
+        if (tex && tex.userData?.pooled !== true) tex.dispose();
+      }
+      mat.dispose();
+    },
+  };
+}
+
+

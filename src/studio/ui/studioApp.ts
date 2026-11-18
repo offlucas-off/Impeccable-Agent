@@ -336,6 +336,11 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
     loadRequestToken: 0,
     selectedItemId: '',
     motionCreepTest: false,
+    turntableEnabled: false,
+    turntableSpeedDeg: 35,
+    wireframeOverlay: false,
+    boundsOverlayEnabled: false,
+    boundsHelper: null,
 
     actions: {} as StudioContext['actions'],
     onCleanup: (fn) => cleanupHandlers.push(fn),
@@ -936,8 +941,25 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
       ctx.activeCamera.updateMatrixWorld();
     }
 
+    if (!ctx.activeSandbox && ctx.turntableEnabled && ctx.activeStage) {
+      ctx.activeStage.subjectRoot.rotation.y += THREE.MathUtils.degToRad(
+        ctx.turntableSpeedDeg * dt
+      );
+      if (ctx.activeVoxel) {
+        ctx.activeVoxel.group.rotation.y = ctx.activeStage.subjectRoot.rotation.y;
+      }
+    }
+
+    if (ctx.boundsOverlayEnabled && ctx.boundsHelper && ctx.activeStage) {
+      ctx.activeStage.subjectRoot.updateMatrixWorld(true);
+      ctx.boundsHelper.box.setFromObject(ctx.activeStage.subjectRoot);
+    }
+
     pipeline.render(scene, ctx.activeCamera);
-    if (ctx.skeletonOverlayEnabled && ctx.skeletonHelper) {
+    if (
+      (ctx.skeletonOverlayEnabled && ctx.skeletonHelper) ||
+      (ctx.boundsOverlayEnabled && ctx.boundsHelper)
+    ) {
       renderer.setRenderTarget(null);
       renderer.autoClear = false;
       renderer.clearDepth();

@@ -21,26 +21,47 @@ import {
 import {
   buildGreenRuinsFloor1,
   buildNwlTilesetCatalog,
+  buildDungeonByBiome,
+  buildArchitecturalStructure,
+  DUNGEON_BIOME_THEMES,
+  type ArchitecturalStructureId,
+  type DungeonBiomeId,
   type NwlTilesetBiome,
 } from '../../engine/procedural/NwlTilesetDungeon';
+import {
+  QUADRUPED_CREATURE_SPECS,
+  buildQuadrupedCreature,
+  type QuadrupedCreatureId,
+} from '../../engine/procedural/CreatureBuilder';
+import {
+  PRESET_CATEGORY_LABELS,
+  searchPresets,
+  type PresetCategory,
+  type PresetEntry,
+} from '../../engine/PresetRegistry';
 import type { UnwrapMetricsSummary } from '../../engine/procedural/PixelMaterialSynth';
 import {
+  BACK_STYLES,
   BOOTS_STYLES,
   CHEST_STYLES,
   CLASS_DEFAULT_STYLE_LOADOUT,
+  EQUIPMENT_ARCHETYPE_PRESETS,
   GLOVES_STYLES,
   HELMET_STYLES,
   LEGS_STYLES,
+  MATERIAL_THEMES,
   SHOULDER_STYLES,
   WEAPON_MAIN_STYLES,
   WEAPON_OFFHAND_STYLES,
   createRandomStyleLoadout,
+  type BackStyleId,
   type BootsStyleId,
   type ChestStyleId,
   type EquipmentStyleLoadout,
   type GlovesStyleId,
   type HelmetStyleId,
   type LegsStyleId,
+  type MaterialThemeId,
   type ShoulderStyleId,
   type WeaponMainStyleId,
   type WeaponOffhandStyleId,
@@ -82,6 +103,7 @@ export interface GeneratorPanelHandle {
   getFinishOptions: () => GeneratorFinishOptions;
   updateQualityStats: (metrics?: UnwrapMetricsSummary | null) => void;
   rebuildLastGenerated: () => boolean;
+  spawnRegistryPreset?: (entry: PresetEntry) => Promise<void>;
 }
 
 export interface GeneratorHostContext {
@@ -98,6 +120,7 @@ export interface GeneratorHostContext {
     root: THREE.Group;
     materials: PixelizerMaterial[];
     isLargeStructure?: boolean;
+    clips?: THREE.AnimationClip[];
     onUpdate?: (t: number) => void;
     onCleanup?: () => void;
   }) => void;
@@ -214,13 +237,30 @@ export function mountGeneratorPanel(
             <select id="gen-style-weapon-offhand" class="select-ctrl select-ctrl-sm" title="Mão Secundária">
               ${WEAPON_OFFHAND_STYLES.map((s) => `<option value="${s.id}">${s.labelPt}</option>`).join('')}
             </select>
+            <select id="gen-style-back" class="select-ctrl select-ctrl-sm" title="Acessório Dorsal (Costas)">
+              ${BACK_STYLES.map((s) => `<option value="${s.id}">${s.labelPt}</option>`).join('')}
+            </select>
+            <select id="gen-style-material" class="select-ctrl select-ctrl-sm" title="Material / Acabamento">
+              ${Object.values(MATERIAL_THEMES)
+                .map((m) => `<option value="${m.id}">${m.labelPt}</option>`)
+                .join('')}
+            </select>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr auto;gap:5px;margin-top:5px;">
+            <select id="gen-style-archetype" class="select-ctrl select-ctrl-sm" title="Arquétipos Prontos">
+              <option value="">Arquétipo (1-Clique)...</option>
+              ${EQUIPMENT_ARCHETYPE_PRESETS.map(
+                (a) => `<option value="${a.id}">${a.labelPt}</option>`
+              ).join('')}
+            </select>
+            <button id="gen-btn-archetype" class="btn btn-sm" type="button">Equipar</button>
           </div>
         </div>
       </div>
     </div>
 
     <div class="ctrl-section">
-      <div class="ctrl-section-head"><span>NWL NPCs, Bestiário &amp; Boss Demônio</span></div>
+      <div class="ctrl-section-head"><span>NWL NPCs, Bestiário, Quadrúpedes &amp; Bosses</span></div>
       <div class="ctrl-section-body">
         <div class="field-row">
           <label class="field-label" for="gen-nwl-npc">NPC / Baú (1.70m)</label>
@@ -244,11 +284,22 @@ export function mountGeneratorPanel(
             <button id="gen-btn-monster" class="btn btn-sm" type="button">Gerar</button>
           </div>
         </div>
+        <div class="field-row">
+          <label class="field-label" for="gen-quad-id">Quadrúpede / Wyvern</label>
+          <div class="field-control">
+            <select id="gen-quad-id" class="select-ctrl select-ctrl-sm" style="width:130px;">
+              ${Object.values(QUADRUPED_CREATURE_SPECS)
+                .map((q) => `<option value="${q.id}">${q.labelPt}</option>`)
+                .join('')}
+            </select>
+            <button id="gen-btn-quad" class="btn btn-sm" type="button">Gerar</button>
+          </div>
+        </div>
       </div>
     </div>
 
     <div class="ctrl-section">
-      <div class="ctrl-section-head"><span>NWL Tilesets 1.5m, Dungeon 1 &amp; Magias 3D</span></div>
+      <div class="ctrl-section-head"><span>Dungeons Multi-Bioma, Estruturas &amp; VFX 3D</span></div>
       <div class="ctrl-section-body">
         <div class="field-row">
           <label class="field-label" for="gen-nwl-tileset">Tileset Modular</label>
@@ -261,8 +312,31 @@ export function mountGeneratorPanel(
             <button id="gen-btn-tileset" class="btn btn-sm" type="button">Kit</button>
           </div>
         </div>
+        <div class="field-row">
+          <label class="field-label" for="gen-dungeon-biome">Bioma Dungeon 1.5m</label>
+          <div class="field-control">
+            <select id="gen-dungeon-biome" class="select-ctrl select-ctrl-sm" style="width:128px;">
+              ${Object.values(DUNGEON_BIOME_THEMES)
+                .map((b) => `<option value="${b.id}">${b.labelPt}</option>`)
+                .join('')}
+            </select>
+            <button id="gen-btn-dungeon-biome" class="btn btn-primary btn-sm" type="button">Gerar</button>
+          </div>
+        </div>
+        <div class="field-row">
+          <label class="field-label" for="gen-arch-struct">Estrutura Cidade</label>
+          <div class="field-control">
+            <select id="gen-arch-struct" class="select-ctrl select-ctrl-sm" style="width:128px;">
+              <option value="watchtower">Torre de Vigia</option>
+              <option value="gatehouse">Muralha + Portão</option>
+              <option value="stone_bridge">Ponte de Pedra</option>
+              <option value="tavern_2story">Taverna 2 Andares</option>
+            </select>
+            <button id="gen-btn-arch-struct" class="btn btn-sm" type="button">Gerar</button>
+          </div>
+        </div>
         <div style="display:grid;grid-template-columns:1fr auto;gap:6px;">
-          <button id="gen-btn-dungeon1" class="btn btn-primary btn-sm" type="button">Gerar Ruínas Verdes · Andar 1</button>
+          <button id="gen-btn-dungeon1" class="btn btn-sm" type="button">Gerar Ruínas Verdes · Andar 1</button>
           <button id="gen-btn-struct-glb" class="btn btn-sm" type="button" title="Exportar estrutura/tileset para .GLB">.GLB</button>
         </div>
         <div class="field-row">
@@ -316,11 +390,34 @@ export function mountGeneratorPanel(
         <div style="display:grid;grid-template-columns:1fr auto;gap:6px;">
           <select id="gen-prop-kind" class="select-ctrl select-ctrl-sm">
             <option value="sword">Sword</option>
+            <option value="axe">Axe</option>
             <option value="shield">Shield</option>
             <option value="staff">Staff</option>
+            <option value="torch">Torch</option>
             <option value="chest">Chest</option>
             <option value="barrel">Barrel</option>
+            <option value="table">Table</option>
+            <option value="pillar">Pillar</option>
+            <option value="crate">Crate</option>
             <option value="tree">Tree</option>
+            <option value="well">Poço (Well)</option>
+            <option value="market_stall">Banca Mercado</option>
+            <option value="anvil">Bigorna (Anvil)</option>
+            <option value="cart">Carroça (Cart)</option>
+            <option value="signpost">Placa (Signpost)</option>
+            <option value="bench">Banco (Bench)</option>
+            <option value="fountain">Fonte (Fountain)</option>
+            <option value="hay_bale">Fardo de Feno</option>
+            <option value="sack">Saco de Grãos</option>
+            <option value="banner_stand">Estandarte Real</option>
+            <option value="crystal_cluster">Cristais Místicos</option>
+            <option value="statue_knight">Estátua Cavaleiro</option>
+            <option value="tombstone">Lápide Gótica</option>
+            <option value="cage">Jaula de Ferro</option>
+            <option value="alchemist_table">Mesa Alquimista</option>
+            <option value="bookshelf">Estante Livros</option>
+            <option value="brazier">Braseiro Aceso</option>
+            <option value="weapon_rack">Suporte Armas</option>
           </select>
           <select id="gen-struct-biome" class="select-ctrl select-ctrl-sm" style="width:98px;">
             <option value="dungeon">WFC Dungeon</option>
@@ -337,6 +434,22 @@ export function mountGeneratorPanel(
         <input id="gen-struct-floors" type="hidden" value="1" />
         <input id="gen-struct-style" type="hidden" value="lowpoly" />
         <input id="gen-struct-seed" type="hidden" value="77" />
+      </div>
+    </div>
+
+    <div class="ctrl-section">
+      <div class="ctrl-section-head"><span>Asset Repository (Catálogo Unificado)</span></div>
+      <div class="ctrl-section-body">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px;">
+          <input id="repo-search" class="input-ctrl" type="text" placeholder="Buscar asset/tag..." style="height:26px;" />
+          <select id="repo-category" class="select-ctrl select-ctrl-sm">
+            <option value="all">Todas Categorias</option>
+            ${(Object.keys(PRESET_CATEGORY_LABELS) as PresetCategory[])
+              .map((c) => `<option value="${c}">${PRESET_CATEGORY_LABELS[c]}</option>`)
+              .join('')}
+          </select>
+        </div>
+        <div id="repo-list" style="max-height:190px;overflow-y:auto;display:flex;flex-direction:column;gap:4px;margin-top:6px;"></div>
       </div>
     </div>
   `;
@@ -402,6 +515,9 @@ export function mountGeneratorPanel(
   const selBoots = container.querySelector<HTMLSelectElement>('#gen-style-boots')!;
   const selWeaponMain = container.querySelector<HTMLSelectElement>('#gen-style-weapon-main')!;
   const selWeaponOffhand = container.querySelector<HTMLSelectElement>('#gen-style-weapon-offhand')!;
+  const selBack = container.querySelector<HTMLSelectElement>('#gen-style-back')!;
+  const selMaterial = container.querySelector<HTMLSelectElement>('#gen-style-material')!;
+  const selArchetype = container.querySelector<HTMLSelectElement>('#gen-style-archetype')!;
 
   const getStyleLoadout = (): EquipmentStyleLoadout => ({
     helmet: selHelmet.value as HelmetStyleId,
@@ -412,6 +528,8 @@ export function mountGeneratorPanel(
     boots: selBoots.value as BootsStyleId,
     weaponMain: selWeaponMain.value as WeaponMainStyleId,
     weaponOffhand: selWeaponOffhand.value as WeaponOffhandStyleId,
+    back: (selBack.value as BackStyleId) || 'none',
+    materialTheme: (selMaterial.value as MaterialThemeId) || 'default',
   });
 
   const applyStyleLoadoutToUi = (loadout: EquipmentStyleLoadout) => {
@@ -423,6 +541,8 @@ export function mountGeneratorPanel(
     selBoots.value = loadout.boots;
     selWeaponMain.value = loadout.weaponMain;
     selWeaponOffhand.value = loadout.weaponOffhand;
+    selBack.value = loadout.back ?? 'none';
+    selMaterial.value = loadout.materialTheme ?? 'default';
   };
 
   selClass.addEventListener('change', () => {
@@ -439,6 +559,8 @@ export function mountGeneratorPanel(
     selBoots,
     selWeaponMain,
     selWeaponOffhand,
+    selBack,
+    selMaterial,
   ];
   for (const sel of styleSelects) {
     sel.addEventListener('change', () => {
@@ -447,7 +569,7 @@ export function mountGeneratorPanel(
       const next = getStyleLoadout();
       player.setStyleLoadout(next);
       updateQualityStats(player.root.userData.unwrapMetrics as UnwrapMetricsSummary | undefined);
-      statusEl.textContent = `Mix & Match ao vivo: ${next.weaponMain} + ${next.weaponOffhand} (${next.helmet})`;
+      statusEl.textContent = `Mix & Match ao vivo: ${next.weaponMain} + ${next.weaponOffhand} (${next.helmet}, ${next.back ?? 'none'})`;
     });
   }
 
@@ -476,6 +598,20 @@ export function mountGeneratorPanel(
   container.querySelector('#gen-btn-nwl-hero')!.addEventListener('click', () => {
     lastGeneratedAction = runNwlHero;
     runNwlHero();
+  });
+
+  container.querySelector('#gen-btn-archetype')!.addEventListener('click', () => {
+    const archId = selArchetype.value;
+    const arch = EQUIPMENT_ARCHETYPE_PRESETS.find((a) => a.id === archId);
+    if (!arch) {
+      statusEl.textContent = 'Selecione um Arquétipo na lista para equipar.';
+      return;
+    }
+    selClass.value = arch.baseClass;
+    applyStyleLoadoutToUi(arch.loadout);
+    lastGeneratedAction = runNwlHero;
+    runNwlHero();
+    statusEl.textContent = `Arquétipo equipado: ${arch.labelPt}`;
   });
 
   container.querySelector('#gen-btn-randomize-gear')!.addEventListener('click', () => {
@@ -552,6 +688,37 @@ export function mountGeneratorPanel(
     runNwlMonster();
   });
 
+  const runQuadruped = (overrideId?: QuadrupedCreatureId) => {
+    const qId =
+      overrideId ??
+      (container.querySelector<HTMLSelectElement>('#gen-quad-id')!.value as QuadrupedCreatureId);
+    const finish = getFinishOptions();
+    const q = buildQuadrupedCreature(
+      qId,
+      {
+        finishMode: finish.finishMode,
+        materialSeed: finish.seed,
+      },
+      ctx.getSharedMaterialResources()
+    );
+    const estH = (q.spec.bodyH * q.spec.scale * 2.2).toFixed(2);
+    const estL = (q.spec.bodyL * q.spec.scale).toFixed(2);
+    ctx.mountNwlCustomScene({
+      name: `${q.spec.labelPt} (${q.spec.id})`,
+      description: `Rig Quadrúpede 24 Bones (${estH}m alt × ${estL}m comp · ${q.clips.length} animações).`,
+      root: q.root,
+      materials: q.materials,
+      clips: q.clips,
+      onCleanup: () => q.dispose(),
+    });
+    statusEl.textContent = `${q.spec.labelPt} · ~${estH}m · ${q.clips.length} clips`;
+  };
+
+  container.querySelector('#gen-btn-quad')!.addEventListener('click', () => {
+    lastGeneratedAction = () => runQuadruped();
+    runQuadruped();
+  });
+
   const runNwlTileset = () => {
     const biome = container.querySelector<HTMLSelectElement>('#gen-nwl-tileset')!
       .value as NwlTilesetBiome;
@@ -571,6 +738,73 @@ export function mountGeneratorPanel(
   container.querySelector('#gen-btn-tileset')!.addEventListener('click', () => {
     lastGeneratedAction = runNwlTileset;
     runNwlTileset();
+  });
+
+  const runDungeonBiome = (overrideBiome?: DungeonBiomeId) => {
+    const biomeId =
+      overrideBiome ??
+      (container.querySelector<HTMLSelectElement>('#gen-dungeon-biome')!.value as DungeonBiomeId);
+    const finish = getFinishOptions();
+    const dung = buildDungeonByBiome(
+      biomeId,
+      lastDungeonSeed,
+      {
+        finishMode: finish.finishMode,
+        seed: finish.seed,
+        aoStrength: finish.aoStrength,
+        normalStrength: finish.normalStrength,
+      },
+      ctx.getSharedMaterialResources()
+    );
+    const theme = DUNGEON_BIOME_THEMES[biomeId];
+    ctx.mountNwlCustomScene({
+      name: `${theme.labelPt} (Seed ${lastDungeonSeed})`,
+      description: `${dung.rooms.length} salas conectadas (1.5m/tile) · Bioma ${theme.labelPt} · ${dung.enemySpawns.length} monstros.`,
+      root: dung.root,
+      materials: dung.materials,
+      isLargeStructure: true,
+      onUpdate: (t) => dung.update(t),
+      onCleanup: () => dung.dispose(),
+    });
+    statusEl.textContent = `${theme.labelPt} gerado (Seed ${lastDungeonSeed} · ${dung.enemySpawns.length} monstros)`;
+  };
+
+  container.querySelector('#gen-btn-dungeon-biome')!.addEventListener('click', () => {
+    lastDungeonSeed = Math.floor(Math.random() * 900 + 100);
+    lastGeneratedAction = () => runDungeonBiome();
+    runDungeonBiome();
+  });
+
+  const runArchStructure = (overrideStruct?: ArchitecturalStructureId) => {
+    const structId =
+      overrideStruct ??
+      (container.querySelector<HTMLSelectElement>('#gen-arch-struct')!
+        .value as ArchitecturalStructureId);
+    const finish = getFinishOptions();
+    const st = buildArchitecturalStructure(
+      structId,
+      {
+        finishMode: finish.finishMode,
+        seed: finish.seed,
+        aoStrength: finish.aoStrength,
+        normalStrength: finish.normalStrength,
+      },
+      ctx.getSharedMaterialResources()
+    );
+    ctx.mountNwlCustomScene({
+      name: `Estrutura: ${structId}`,
+      description: `Estrutura arquitetônica modular para cidade medieval / fortaleza.`,
+      root: st.root,
+      materials: st.materials,
+      isLargeStructure: true,
+      onCleanup: () => st.dispose(),
+    });
+    statusEl.textContent = `Estrutura ${structId} gerada (${finish.finishMode})`;
+  };
+
+  container.querySelector('#gen-btn-arch-struct')!.addEventListener('click', () => {
+    lastGeneratedAction = () => runArchStructure();
+    runArchStructure();
   });
 
   const runDungeon1 = () => {
@@ -735,6 +969,190 @@ export function mountGeneratorPanel(
     })();
   });
 
+  const NPC_ALIAS_MAP: Record<string, NwlNpcId> = {
+    blacksmith: 'npc.ferreiro',
+    merchant: 'npc.mercador',
+    guard: 'npc.guarda',
+    villager: 'npc.escriba',
+  };
+
+  const MONSTER_ALIAS_MAP: Record<string, NwlMonsterId> = {
+    goblin_scout: 'orcs.goblin_01',
+    goblin_raider: 'orcs.goblin_03',
+    goblin_archer: 'orcs.goblin_06',
+    goblin_shaman: 'orcs.goblin_02',
+    orc_brute: 'orcs.orc_04',
+    boss_demon: 'demons.boss_demon',
+    skeleton_warrior: 'monster.skeleton_warrior',
+    skeleton_archer: 'monster.skeleton_archer',
+    dark_cultist: 'monster.dark_cultist',
+    gargoyle: 'monster.gargoyle',
+    lizardman: 'monster.lizardman',
+    crystal_golem: 'monster.crystal_golem',
+    colossus_golem: 'boss.colossus_golem',
+    minotaur_warlord: 'boss.minotaur_warlord',
+    dread_knight: 'boss.dread_knight',
+  };
+
+  const VFX_ALIAS_MAP: Record<string, NwlSpellVfxId> = {
+    fire_nova: 'seta_fogo',
+    ice_shatter: 'armadilha_de_gelo',
+    arcane_sigil: 'nova_arcana',
+  };
+
+  const spawnRegistryPreset = async (entry: PresetEntry): Promise<void> => {
+    const spec = entry.generatorSpec;
+    const finish = getFinishOptions();
+    if (!spec) return;
+
+    if (spec.kind === 'player') {
+      const classId = spec.subId as PlayerClassId;
+      selClass.value = classId;
+      applyStyleLoadoutToUi(CLASS_DEFAULT_STYLE_LOADOUT[classId]);
+      lastGeneratedAction = runNwlHero;
+      runNwlHero();
+      return;
+    }
+
+    if (spec.kind === 'npc') {
+      const npcId = (NPC_ALIAS_MAP[spec.subId] ?? spec.subId) as NwlNpcId;
+      const res = buildNwlNpc(
+        npcId,
+        {
+          pixelSize: 1,
+          finishMode: finish.finishMode,
+          seed: finish.seed,
+          aoStrength: finish.aoStrength,
+          normalStrength: finish.normalStrength,
+        },
+        ctx.getSharedMaterialResources()
+      );
+      ctx.mountNwlNpc(res);
+      statusEl.textContent = `${entry.name} (${res.id})`;
+      return;
+    }
+
+    if (spec.kind === 'monster') {
+      const mId = (MONSTER_ALIAS_MAP[spec.subId] ?? spec.subId) as NwlMonsterId;
+      const res = buildNwlMonster(
+        mId,
+        {
+          pixelSize: 1,
+          finishMode: finish.finishMode,
+          seed: finish.seed,
+          aoStrength: finish.aoStrength,
+          normalStrength: finish.normalStrength,
+        },
+        ctx.getSharedMaterialResources()
+      );
+      ctx.mountNwlMonster(res);
+      statusEl.textContent = `${entry.name} · ${res.spec.targetHeightM}m`;
+      return;
+    }
+
+    if (spec.kind === 'quadruped') {
+      const qId = spec.subId as QuadrupedCreatureId;
+      lastGeneratedAction = () => runQuadruped(qId);
+      runQuadruped(qId);
+      return;
+    }
+
+    if (spec.kind === 'prop') {
+      const kind = spec.subId as PropKind;
+      const res = buildProceduralProp(
+        {
+          kind,
+          visualStyle: 'lowpoly',
+          seed: finish.seed,
+          finishMode: finish.finishMode,
+          aoStrength: finish.aoStrength,
+          normalStrength: finish.normalStrength,
+        },
+        ctx.getSharedMaterialResources()
+      );
+      ctx.mountGeneratedProp(res);
+      statusEl.textContent = `Prop: ${entry.name}`;
+      return;
+    }
+
+    if (spec.kind === 'structure') {
+      if (spec.subId === 'medieval_town') {
+        const res = buildProceduralStructure(
+          {
+            biome: 'medieval',
+            cols: 4,
+            rows: 4,
+            floors: 1,
+            visualStyle: 'lowpoly',
+            seed: finish.seed,
+            finishMode: finish.finishMode,
+            aoStrength: finish.aoStrength,
+            normalStrength: finish.normalStrength,
+          },
+          ctx.getSharedMaterialResources()
+        );
+        ctx.mountGeneratedStructure(res);
+        statusEl.textContent = `Estrutura: ${entry.name}`;
+        return;
+      }
+      const structId = spec.subId as ArchitecturalStructureId;
+      lastGeneratedAction = () => runArchStructure(structId);
+      runArchStructure(structId);
+      return;
+    }
+
+    if (spec.kind === 'dungeon') {
+      const biomeId = spec.subId as DungeonBiomeId;
+      lastGeneratedAction = () => runDungeonBiome(biomeId);
+      runDungeonBiome(biomeId);
+      return;
+    }
+
+    if (spec.kind === 'vfx') {
+      const vfxId = (VFX_ALIAS_MAP[spec.subId] ?? spec.subId) as NwlSpellVfxId;
+      const vfx = buildNwlSpellVfx(vfxId, ctx.getSharedMaterialResources());
+      ctx.mountNwlSpellVfx(vfx);
+      statusEl.textContent = `VFX 3D: ${entry.name}`;
+    }
+  };
+
+  const inpRepoSearch = container.querySelector<HTMLInputElement>('#repo-search')!;
+  const selRepoCategory = container.querySelector<HTMLSelectElement>('#repo-category')!;
+  const repoListEl = container.querySelector<HTMLElement>('#repo-list')!;
+
+  const renderRepoList = () => {
+    const query = inpRepoSearch.value;
+    const category = (selRepoCategory.value as PresetCategory | 'all') || 'all';
+    const matches = searchPresets(query, category);
+    if (matches.length === 0) {
+      repoListEl.innerHTML =
+        '<div style="font-size:11px;color:var(--text-muted);padding:6px;">Nenhum asset encontrado.</div>';
+      return;
+    }
+    repoListEl.innerHTML = '';
+    for (const entry of matches) {
+      const row = document.createElement('div');
+      row.style.cssText =
+        'display:flex;align-items:center;justify-content:space-between;gap:6px;padding:4px 6px;border-radius:4px;background:var(--bg-elevated,rgba(255,255,255,0.03));border:1px solid var(--border-subtle);';
+      const info = document.createElement('div');
+      info.style.cssText = 'min-width:0;flex:1;';
+      info.innerHTML = `<div style="font-size:11px;font-weight:600;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${entry.name}</div><div style="font-size:10px;color:var(--text-muted);">${PRESET_CATEGORY_LABELS[entry.category]} · ${entry.approxHeightM}m</div>`;
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'btn btn-sm';
+      btn.textContent = 'Spawn';
+      btn.addEventListener('click', () => {
+        void spawnRegistryPreset(entry);
+      });
+      row.append(info, btn);
+      repoListEl.appendChild(row);
+    }
+  };
+
+  inpRepoSearch.addEventListener('input', renderRepoList);
+  selRepoCategory.addEventListener('change', renderRepoList);
+  renderRepoList();
+
   return {
     getFinishOptions,
     updateQualityStats,
@@ -743,5 +1161,6 @@ export function mountGeneratorPanel(
       lastGeneratedAction();
       return true;
     },
+    spawnRegistryPreset,
   };
 }

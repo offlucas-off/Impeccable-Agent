@@ -15,6 +15,7 @@ import {
 import type { PixelizerMaterialOptions } from '../types';
 import {
   CLASS_DEFAULT_STYLE_LOADOUT,
+  MATERIAL_THEMES,
   SHELL_CLEARANCE,
   WEAPON_MOUNT_SPEC,
   type EquipmentStyleLoadout,
@@ -557,7 +558,18 @@ function buildSlotAttachments(
   cfg: InternalFinishConfig,
   styleLoadout: EquipmentStyleLoadout
 ): ModularAttachmentSpec[] {
-  const pal = RARITY_COLOR_TABLE[rarity];
+  const basePal = RARITY_COLOR_TABLE[rarity];
+  const themeId = styleLoadout.materialTheme ?? 'rarity_auto';
+  const theme = themeId !== 'rarity_auto' ? MATERIAL_THEMES[themeId] : null;
+  const pal = theme
+    ? {
+        ...basePal,
+        primary: theme.metalHex,
+        secondary: theme.clothHex,
+        trim: theme.trimHex,
+        glow: theme.accentHex,
+      }
+    : basePal;
   const tier = pal.tierLevel;
   const out: ModularAttachmentSpec[] = [];
 
@@ -588,7 +600,7 @@ function buildSlotAttachments(
       emblemHex: pal.trim,
       emissiveRuneHex: tier >= 3 ? pal.glow : null,
       usePool: true,
-      cacheKey: `nwl_equip:${slot}:${styleKey}:${rarity}:${boneName}`,
+      cacheKey: `nwl_equip:${slot}:${styleKey}:${rarity}:${themeId}:${boneName}`,
       inspectUvs: Boolean(opts.inspectUvs),
     });
     disposePartsArray(parts);
@@ -691,6 +703,118 @@ function buildSlotAttachments(
         }
       }
       bakeBoneParts('Head', parts, hStyle, { isMetal: true, inspectUvs: true });
+    } else if (hStyle === 'horned_viking') {
+      const dome = makeBeveledBox(hw, hh * 0.72, hw, 0.025, pal.primary, { offset: [0, 0.175, 0] });
+      const noseGuard = makeBeveledBox(0.036, 0.11, 0.036, 0.008, pal.trim, {
+        offset: [0, 0.115, hw * 0.48],
+      });
+      const brow = makeBeveledBox(hw + 0.015, 0.044, hw + 0.015, 0.01, pal.trim, {
+        offset: [0, 0.155, 0],
+      });
+      parts.push(
+        tagPart(dome, 'viking_dome', 'rarity_armor', pal.primary, { accentHex: pal.trim }),
+        tagPart(noseGuard, 'viking_nose', 'brushed_gold', pal.trim),
+        tagPart(brow, 'viking_brow', 'brushed_gold', pal.trim)
+      );
+      for (const [hIdx, sx] of [-1, 1].entries()) {
+        const hornBase = prepareColoredPart(new THREE.ConeGeometry(0.045, 0.22, 6), '#e5dcc5');
+        hornBase.rotateZ(sx * -0.95);
+        hornBase.rotateY(sx * 0.25);
+        hornBase.translate(sx * (hw * 0.62), 0.24, 0.01);
+        parts.push(tagPart(hornBase, `viking_horn_${hIdx}`, 'bone_ivory', '#e5dcc5', { lockVertical: false }));
+      }
+      bakeBoneParts('Head', parts, hStyle, { isMetal: true, inspectUvs: true });
+    } else if (hStyle === 'plumed_knight') {
+      const dome = makeBeveledBox(hw, hh, hw, 0.025, pal.primary, { offset: [0, 0.135, 0] });
+      const visor = makeBeveledBox(hw * 0.86, 0.064, 0.075, 0.012, '#141013', {
+        offset: [0, 0.11, hw * 0.44],
+      });
+      const plumeHolder = makeBeveledBox(0.048, 0.06, 0.08, 0.01, pal.trim, {
+        offset: [0, 0.275, -0.02],
+      });
+      const plume = makeBeveledBox(0.056, 0.16, 0.24, 0.022, pal.secondary, {
+        offset: [0, 0.34, -0.07],
+      });
+      parts.push(
+        tagPart(dome, 'plumed_dome', 'rarity_armor', pal.primary, { accentHex: pal.trim }),
+        tagPart(visor, 'plumed_visor', 'forged_steel', '#141013'),
+        tagPart(plumeHolder, 'plumed_holder', 'brushed_gold', pal.trim),
+        tagPart(plume, 'plumed_crest', 'woven_cloth', pal.secondary, { accentHex: pal.trim })
+      );
+      bakeBoneParts('Head', parts, hStyle, { isMetal: true, inspectUvs: true });
+    } else if (hStyle === 'plague_mask') {
+      const hood = makeBeveledBox(hw, hh * 0.9, hw + 0.02, 0.024, pal.secondary, {
+        offset: [0, 0.14, -0.015],
+      });
+      const brim = makeLatheProfile(
+        [
+          [0.14, 0.22],
+          [0.27, 0.23],
+          [0.26, 0.25],
+          [0.14, 0.255],
+        ],
+        8,
+        pal.secondary
+      );
+      const beak = prepareColoredPart(new THREE.ConeGeometry(0.052, 0.18, 6), '#d8cfb8');
+      beak.rotateX(Math.PI * 0.56);
+      beak.translate(0, 0.095, hw * 0.62);
+      parts.push(
+        tagPart(hood, 'plague_hood', 'stitched_leather', pal.secondary),
+        tagPart(brim, 'plague_brim', 'stitched_leather', pal.secondary),
+        tagPart(beak, 'plague_beak', 'bone_ivory', '#d8cfb8', { lockVertical: false })
+      );
+      bakeBoneParts('Head', parts, hStyle, { isMetal: false, inspectUvs: true });
+    } else if (hStyle === 'assassin_cowl') {
+      const cowl = makeBeveledBox(hw, hh * 0.92, hw + 0.02, 0.024, pal.secondary, {
+        offset: [0, 0.14, -0.018],
+      });
+      const mask = makeBeveledBox(hw * 0.88, 0.095, 0.08, 0.014, '#18181b', {
+        offset: [0, 0.075, hw * 0.41],
+      });
+      const scarf = makeBeveledBox(hw * 0.96, 0.06, hw * 0.96, 0.012, pal.primary, {
+        offset: [0, 0.025, 0],
+      });
+      parts.push(
+        tagPart(cowl, 'assassin_cowl', 'woven_cloth', pal.secondary, { accentHex: pal.trim }),
+        tagPart(mask, 'assassin_mask', 'stitched_leather', '#18181b'),
+        tagPart(scarf, 'assassin_scarf', 'woven_cloth', pal.primary)
+      );
+      bakeBoneParts('Head', parts, hStyle, { isMetal: false, inspectUvs: true });
+    } else if (hStyle === 'samurai_kabuto') {
+      const bowl = makeBeveledBox(hw, hh * 0.62, hw, 0.025, pal.primary, { offset: [0, 0.185, 0] });
+      const shikoro = makeBeveledBox(hw + 0.055, 0.11, hw + 0.03, 0.014, pal.secondary, {
+        offset: [0, 0.105, -0.03],
+      });
+      const crestL = makeBeveledBox(0.036, 0.16, 0.03, 0.008, pal.trim);
+      crestL.rotateZ(0.45);
+      crestL.translate(-0.065, 0.27, hw * 0.5);
+      const crestR = makeBeveledBox(0.036, 0.16, 0.03, 0.008, pal.trim);
+      crestR.rotateZ(-0.45);
+      crestR.translate(0.065, 0.27, hw * 0.5);
+      parts.push(
+        tagPart(bowl, 'kabuto_bowl', 'rarity_armor', pal.primary, { accentHex: pal.trim }),
+        tagPart(shikoro, 'kabuto_shikoro', 'rarity_armor', pal.secondary),
+        tagPart(crestL, 'kabuto_crest_l', 'brushed_gold', pal.trim),
+        tagPart(crestR, 'kabuto_crest_r', 'brushed_gold', pal.trim)
+      );
+      bakeBoneParts('Head', parts, hStyle, { isMetal: true, inspectUvs: true });
+    } else if (hStyle === 'crown_king') {
+      const band = makeBeveledBox(hw * 0.96, 0.052, hw * 0.96, 0.008, pal.trim, {
+        offset: [0, 0.205, 0],
+      });
+      parts.push(tagPart(band, 'crown_band', 'brushed_gold', pal.trim));
+      for (const [pIdx, angle] of [0, 1, 2, 3, 4, 5].entries()) {
+        const rad = (angle / 6) * Math.PI * 2;
+        const spire = makeBeveledBox(0.032, pIdx % 2 === 0 ? 0.095 : 0.065, 0.032, 0.006, pal.trim, {
+          offset: [Math.sin(rad) * (hw * 0.43), 0.255, Math.cos(rad) * (hw * 0.43)],
+        });
+        parts.push(tagPart(spire, `crown_spire_${pIdx}`, 'brushed_gold', pal.trim));
+      }
+      const gem = prepareColoredPart(new THREE.OctahedronGeometry(0.038, 0), pal.glow);
+      gem.translate(0, 0.215, hw * 0.49);
+      parts.push(tagPart(gem, 'crown_gem', 'runic_glow', pal.glow, { lockVertical: false }));
+      bakeBoneParts('Head', parts, hStyle, { isMetal: true, inspectUvs: true });
     } else {
       // wizard_hat
       const brim = makeLatheProfile(
@@ -737,11 +861,16 @@ function buildSlotAttachments(
   } else if (slot === 'chest') {
     const cStyle = styleLoadout.chest;
     const sStyle = styleLoadout.shoulders;
-    const isChestMetal = cStyle === 'plate_cuirass' || cStyle === 'royal_tabard';
+    const isChestMetal =
+      cStyle === 'plate_cuirass' ||
+      cStyle === 'royal_tabard' ||
+      cStyle === 'scale_mail' ||
+      cStyle === 'samurai_do' ||
+      cStyle === 'paladin_breastplate';
     const margin = isChestMetal ? SHELL_CLEARANCE.plateMargin : SHELL_CLEARANCE.clothMargin;
     const chestRecipe = isChestMetal
       ? 'rarity_armor'
-      : cStyle === 'arcane_robe'
+      : cStyle === 'arcane_robe' || cStyle === 'necromancer_vest'
         ? 'woven_cloth'
         : 'stitched_leather';
 
@@ -947,7 +1076,7 @@ function buildSlotAttachments(
         tagPart(quiver, 'archer_quiver', 'stitched_leather', pal.secondary, { accentHex: pal.trim }),
         tagPart(arrows, 'archer_fletching', 'woven_cloth', pal.trim)
       );
-    } else if (cStyle === 'arcane_robe') {
+    } else if (cStyle === 'arcane_robe' || cStyle === 'necromancer_vest') {
       const mantle = makeBeveledBox(upW + 0.03, 0.072, upD, 0.015, pal.trim, {
         offset: [0, spine3Len * 0.78, -0.01],
       });
@@ -957,8 +1086,120 @@ function buildSlotAttachments(
         tagPart(mantle, 'mage_mantle', 'brushed_gold', pal.trim),
         tagPart(rune, 'mage_chest_rune', 'runic_glow', pal.glow, { lockVertical: false })
       );
+      if (cStyle === 'necromancer_vest') {
+        const collar = makeBeveledBox(upW + 0.04, 0.09, upD * 0.65, 0.014, pal.secondary, {
+          offset: [0, spine3Len * 0.92, -upD * 0.25],
+        });
+        topParts.push(tagPart(collar, 'necro_collar', 'woven_cloth', pal.secondary));
+      }
+    } else if (cStyle === 'paladin_breastplate' || cStyle === 'scale_mail' || cStyle === 'samurai_do') {
+      const crest = makeBeveledBox(0.11, 0.12, 0.04, 0.01, pal.trim, {
+        offset: [0, spine3Len * 0.5, upD * 0.52],
+      });
+      topParts.push(tagPart(crest, `${cStyle}_crest`, 'brushed_gold', pal.trim));
+      if (cStyle === 'samurai_do') {
+        for (const rIdx of [0, 1]) {
+          const lame = makeBeveledBox(upW + 0.02, 0.036, upD + 0.02, 0.008, pal.secondary, {
+            offset: [0, spine3Len * (0.28 + rIdx * 0.36), 0],
+          });
+          topParts.push(tagPart(lame, `samurai_lame_${rIdx}`, 'rarity_armor', pal.secondary));
+        }
+      }
     }
-    bakeBoneParts('spine_03', topParts, `${cStyle}`, { isMetal: isChestMetal });
+
+    // Back slot dorsal attachments (mounted cleanly behind spine_03)
+    const bStyle = styleLoadout.back ?? 'none';
+    if (bStyle === 'short_cloak') {
+      const cloak = makePleatedTabardGeometry(0.28, 0.56, 0.36, 0.034, 4, pal.secondary, {
+        offset: [0, spine3Len * 0.72, -(upD * 0.54)],
+        flareZ: -0.09,
+      });
+      const clasp = makeBeveledBox(0.26, 0.048, 0.045, 0.01, pal.trim, {
+        offset: [0, spine3Len * 0.88, -(upD * 0.45)],
+      });
+      topParts.push(
+        tagPart(cloak, 'back_cloak', 'woven_cloth', pal.secondary, { accentHex: pal.trim }),
+        tagPart(clasp, 'back_cloak_clasp', 'brushed_gold', pal.trim)
+      );
+    } else if (bStyle === 'quiver_pack') {
+      const quiver = makeLatheProfile(
+        [
+          [0.042, -0.18],
+          [0.058, 0.2],
+        ],
+        7,
+        '#5c3a28'
+      );
+      quiver.rotateZ(-0.4);
+      quiver.translate(-0.07, 0.09, -(upD * 0.58));
+      const arrows = makeBeveledBox(0.09, 0.08, 0.09, 0.012, pal.trim);
+      arrows.rotateZ(-0.4);
+      arrows.translate(-0.15, 0.28, -(upD * 0.58));
+      topParts.push(
+        tagPart(quiver, 'back_quiver', 'stitched_leather', '#5c3a28', { accentHex: pal.trim }),
+        tagPart(arrows, 'back_quiver_arrows', 'woven_cloth', pal.trim)
+      );
+    } else if (bStyle === 'adventurer_backpack') {
+      const pack = makeBeveledBox(0.26, 0.3, 0.16, 0.02, '#6d4b36', {
+        offset: [0, spine3Len * 0.45, -(upD * 0.5 + 0.085)],
+      });
+      const bedroll = makeLatheProfile(
+        [
+          [0.055, -0.14],
+          [0.055, 0.14],
+        ],
+        7,
+        pal.secondary
+      );
+      bedroll.rotateZ(Math.PI * 0.5);
+      bedroll.translate(0, spine3Len * 0.92, -(upD * 0.5 + 0.08));
+      const buckle = makeBeveledBox(0.18, 0.045, 0.04, 0.008, pal.trim, {
+        offset: [0, spine3Len * 0.48, -(upD * 0.5 + 0.165)],
+      });
+      topParts.push(
+        tagPart(pack, 'back_pack', 'stitched_leather', '#6d4b36'),
+        tagPart(bedroll, 'back_bedroll', 'woven_cloth', pal.secondary, { lockVertical: false }),
+        tagPart(buckle, 'back_pack_buckle', 'brushed_gold', pal.trim)
+      );
+    } else if (bStyle === 'wings_valkyrie') {
+      for (const [wIdx, sx] of [-1, 1].entries()) {
+        const wingMain = makeBeveledBox(0.32, 0.46, 0.036, 0.01, pal.trim);
+        wingMain.rotateZ(sx * -0.42);
+        wingMain.rotateY(sx * 0.28);
+        wingMain.translate(sx * 0.22, spine3Len * 0.82, -(upD * 0.58));
+        const wingInner = makeBeveledBox(0.22, 0.32, 0.03, 0.008, pal.glow);
+        wingInner.rotateZ(sx * -0.35);
+        wingInner.rotateY(sx * 0.28);
+        wingInner.translate(sx * 0.16, spine3Len * 0.65, -(upD * 0.56));
+        topParts.push(
+          tagPart(wingMain, `back_wing_main_${wIdx}`, 'brushed_gold', pal.trim),
+          tagPart(wingInner, `back_wing_inner_${wIdx}`, 'runic_glow', pal.glow)
+        );
+      }
+    } else if (bStyle === 'banner_crest') {
+      const pole = makeLatheProfile(
+        [
+          [0.016, -0.05],
+          [0.016, 0.72],
+        ],
+        6,
+        '#4f3428'
+      );
+      pole.translate(0, spine3Len * 0.5, -(upD * 0.58));
+      const crossbar = makeBeveledBox(0.26, 0.028, 0.028, 0.006, pal.trim, {
+        offset: [0, spine3Len * 0.5 + 0.68, -(upD * 0.58)],
+      });
+      const cloth = makeBeveledBox(0.22, 0.46, 0.018, 0.005, pal.primary, {
+        offset: [0, spine3Len * 0.5 + 0.44, -(upD * 0.6)],
+      });
+      topParts.push(
+        tagPart(pole, 'back_banner_pole', 'wood_planks', '#4f3428'),
+        tagPart(crossbar, 'back_banner_bar', 'brushed_gold', pal.trim),
+        tagPart(cloth, 'back_banner_cloth', 'woven_cloth', pal.primary, { accentHex: pal.trim })
+      );
+    }
+
+    bakeBoneParts('spine_03', topParts, `${cStyle}_${bStyle}`, { isMetal: isChestMetal });
 
     // Upper arms + decoupled Shoulder Pauldron style
     for (const side of ['l', 'r'] as const) {
@@ -1364,6 +1605,209 @@ function buildSlotAttachments(
         mainStyle,
         { isMetal: false }
       );
+    } else if (mainStyle === 'halberd') {
+      const pole = makeLatheProfile(
+        [
+          [0.024, -0.45],
+          [0.028, 0.98],
+        ],
+        7,
+        '#4f3428'
+      );
+      pole.rotateX(Math.PI * 0.5);
+      pole.translate(0, gY, gZ + 0.08);
+      const axeBlade = makeBeveledBox(0.24, 0.036, 0.28, 0.01, pal.primary, {
+        offset: [0.12, gY, gZ + 0.88],
+      });
+      const spike = makeSwordBladeGeometry(0.085, 0.036, 0.22, 0.16, pal.primary);
+      spike.rotateX(Math.PI * 0.5);
+      spike.translate(0, gY, gZ + 1.04);
+      const hook = makeBeveledBox(0.11, 0.036, 0.06, 0.008, pal.trim, {
+        offset: [-0.07, gY, gZ + 0.92],
+      });
+      bakeBoneParts(
+        'hand_r',
+        [
+          tagPart(pole, 'halberd_pole', 'wood_planks', '#4f3428', { lockVertical: false }),
+          tagPart(axeBlade, 'halberd_axe', 'rarity_armor', pal.primary, { accentHex: pal.glow, lockVertical: false }),
+          tagPart(spike, 'halberd_spike', 'forged_steel', pal.primary, { lockVertical: false }),
+          tagPart(hook, 'halberd_hook', 'brushed_gold', pal.trim, { lockVertical: false }),
+        ],
+        mainStyle,
+        { isMetal: true }
+      );
+    } else if (mainStyle === 'scythe') {
+      const pole = makeLatheProfile(
+        [
+          [0.024, -0.42],
+          [0.028, 0.96],
+        ],
+        7,
+        '#3b2820'
+      );
+      pole.rotateX(Math.PI * 0.5);
+      pole.translate(0, gY, gZ + 0.08);
+      const collar = makeBeveledBox(0.08, 0.08, 0.12, 0.012, pal.trim, {
+        offset: [0, gY, gZ + 0.98],
+      });
+      const bladeA = makeBeveledBox(0.38, 0.032, 0.12, 0.01, pal.primary, {
+        offset: [0.18, gY, gZ + 0.98],
+      });
+      const bladeB = makeSwordBladeGeometry(0.09, 0.028, 0.24, 0.14, pal.primary);
+      bladeB.rotateZ(Math.PI * 0.5);
+      bladeB.rotateY(-0.35);
+      bladeB.translate(0.36, gY, gZ + 0.9);
+      bakeBoneParts(
+        'hand_r',
+        [
+          tagPart(pole, 'scythe_pole', 'wood_planks', '#3b2820', { lockVertical: false }),
+          tagPart(collar, 'scythe_collar', 'brushed_gold', pal.trim, { lockVertical: false }),
+          tagPart(bladeA, 'scythe_blade_a', 'forged_steel', pal.primary, { accentHex: pal.glow, lockVertical: false }),
+          tagPart(bladeB, 'scythe_blade_b', 'forged_steel', pal.primary, { accentHex: pal.glow, lockVertical: false }),
+        ],
+        mainStyle,
+        { isMetal: true }
+      );
+    } else if (mainStyle === 'flail') {
+      const haft = makeLatheProfile(
+        [
+          [0.024, -0.18],
+          [0.026, 0.36],
+        ],
+        7,
+        '#4f3428'
+      );
+      haft.rotateX(Math.PI * 0.5);
+      haft.translate(0, gY, gZ + 0.05);
+      const chain = makeBeveledBox(0.036, 0.036, 0.24, 0.008, pal.trim, {
+        offset: [0, gY - 0.04, gZ + 0.52],
+      });
+      const ball = prepareColoredPart(new THREE.OctahedronGeometry(0.115, 1), pal.primary);
+      ball.translate(0, gY - 0.06, gZ + 0.68);
+      bakeBoneParts(
+        'hand_r',
+        [
+          tagPart(haft, 'flail_haft', 'wood_planks', '#4f3428', { lockVertical: false }),
+          tagPart(chain, 'flail_chain', 'forged_steel', pal.trim, { lockVertical: false }),
+          tagPart(ball, 'flail_ball', 'rarity_armor', pal.primary, { accentHex: pal.glow, lockVertical: false }),
+        ],
+        mainStyle,
+        { isMetal: true }
+      );
+    } else if (mainStyle === 'katana') {
+      const grip = makeLatheProfile(
+        [
+          [0.022, -0.16],
+          [0.022, 0.14],
+        ],
+        7,
+        '#1f2937'
+      );
+      grip.rotateX(Math.PI * 0.5);
+      grip.translate(0, gY, gZ);
+      const tsuba = makeLatheProfile(
+        [
+          [0.065, -0.012],
+          [0.065, 0.012],
+        ],
+        8,
+        pal.trim
+      );
+      tsuba.rotateX(Math.PI * 0.5);
+      tsuba.translate(0, gY, gZ + 0.14);
+      const blade = makeSwordBladeGeometry(0.056, 0.024, 0.72, 0.18, pal.primary);
+      blade.rotateX(Math.PI * 0.5 - 0.05);
+      blade.translate(0, gY + 0.02, gZ + 0.16);
+      bakeBoneParts(
+        'hand_r',
+        [
+          tagPart(grip, 'katana_grip', 'stitched_leather', '#1f2937', { lockVertical: false }),
+          tagPart(tsuba, 'katana_tsuba', 'brushed_gold', pal.trim, { lockVertical: false }),
+          tagPart(blade, 'katana_blade', 'forged_steel', pal.primary, { accentHex: pal.glow, lockVertical: false }),
+        ],
+        mainStyle,
+        { isMetal: true }
+      );
+    } else if (mainStyle === 'twin_blade') {
+      const grip = makeLatheProfile(
+        [
+          [0.024, -0.16],
+          [0.024, 0.16],
+        ],
+        7,
+        '#3b1725'
+      );
+      grip.rotateX(Math.PI * 0.5);
+      grip.translate(0, gY, gZ);
+      const bladeF = makeSwordBladeGeometry(0.08, 0.032, 0.48, 0.16, pal.primary);
+      bladeF.rotateX(Math.PI * 0.5);
+      bladeF.translate(0, gY, gZ + 0.16);
+      const bladeB = makeSwordBladeGeometry(0.08, 0.032, 0.48, 0.16, pal.primary);
+      bladeB.rotateX(-Math.PI * 0.5);
+      bladeB.translate(0, gY, gZ - 0.16);
+      bakeBoneParts(
+        'hand_r',
+        [
+          tagPart(grip, 'twin_grip', 'stitched_leather', '#3b1725', { lockVertical: false }),
+          tagPart(bladeF, 'twin_blade_f', 'rarity_armor', pal.primary, { accentHex: pal.glow, lockVertical: false }),
+          tagPart(bladeB, 'twin_blade_b', 'rarity_armor', pal.primary, { accentHex: pal.glow, lockVertical: false }),
+        ],
+        mainStyle,
+        { isMetal: true }
+      );
+    } else if (mainStyle === 'great_hammer') {
+      const haft = makeLatheProfile(
+        [
+          [0.028, -0.32],
+          [0.032, 0.72],
+        ],
+        7,
+        '#4f3428'
+      );
+      haft.rotateX(Math.PI * 0.5);
+      haft.translate(0, gY, gZ + 0.08);
+      const head = makeBeveledBox(0.42 + tier * 0.02, 0.22, 0.22, 0.025, pal.primary, {
+        offset: [0, gY, gZ + 0.68],
+      });
+      const bands = makeBeveledBox(0.44 + tier * 0.02, 0.24, 0.075, 0.012, pal.trim, {
+        offset: [0, gY, gZ + 0.68],
+      });
+      bakeBoneParts(
+        'hand_r',
+        [
+          tagPart(haft, 'ghammer_haft', 'wood_planks', '#4f3428', { lockVertical: false }),
+          tagPart(head, 'ghammer_head', 'rarity_armor', pal.primary, { accentHex: pal.glow, lockVertical: false }),
+          tagPart(bands, 'ghammer_bands', 'brushed_gold', pal.trim, { lockVertical: false }),
+        ],
+        mainStyle,
+        { isMetal: true }
+      );
+    } else if (mainStyle === 'scepter_orb') {
+      const shaft = makeLatheProfile(
+        [
+          [0.022, -0.14],
+          [0.028, 0.48],
+        ],
+        7,
+        pal.secondary
+      );
+      shaft.rotateX(Math.PI * 0.5);
+      shaft.translate(0, gY, gZ);
+      const cradle = makeBeveledBox(0.14, 0.14, 0.05, 0.012, pal.trim);
+      cradle.rotateZ(Math.PI * 0.25);
+      cradle.translate(0, gY, gZ + 0.52);
+      const orb = prepareColoredPart(new THREE.OctahedronGeometry(0.088, 1), pal.glow);
+      orb.translate(0, gY, gZ + 0.62);
+      bakeBoneParts(
+        'hand_r',
+        [
+          tagPart(shaft, 'scepter_shaft', 'brushed_gold', pal.secondary, { lockVertical: false }),
+          tagPart(cradle, 'scepter_cradle', 'brushed_gold', pal.trim, { lockVertical: false }),
+          tagPart(orb, 'scepter_orb', 'runic_glow', pal.glow, { lockVertical: false }),
+        ],
+        mainStyle,
+        { isMetal: true }
+      );
     } else {
       // arcane_staff or wand
       const isWand = mainStyle === 'wand';
@@ -1441,16 +1885,41 @@ function buildSlotAttachments(
       offStyle !== 'none' &&
       offStyle !== 'quiver_arrow'
     ) {
-      if (offStyle === 'kite_shield' || offStyle === 'round_shield' || offStyle === 'tower_shield') {
+      if (
+        offStyle === 'kite_shield' ||
+        offStyle === 'round_shield' ||
+        offStyle === 'tower_shield' ||
+        offStyle === 'spiked_buckler'
+      ) {
         const shieldW =
-          offStyle === 'tower_shield' ? 0.54 + tier * 0.015 : offStyle === 'round_shield' ? 0.44 : 0.44 + tier * 0.015;
+          offStyle === 'tower_shield'
+            ? 0.54 + tier * 0.015
+            : offStyle === 'round_shield'
+              ? 0.44
+              : offStyle === 'spiked_buckler'
+                ? 0.36
+                : 0.44 + tier * 0.015;
         const shieldH =
-          offStyle === 'tower_shield' ? 0.82 + tier * 0.02 : offStyle === 'round_shield' ? 0.44 : 0.58 + tier * 0.02;
+          offStyle === 'tower_shield'
+            ? 0.82 + tier * 0.02
+            : offStyle === 'round_shield'
+              ? 0.44
+              : offStyle === 'spiked_buckler'
+                ? 0.36
+                : 0.58 + tier * 0.02;
         const dome = makeDomeShieldGeometry(shieldW, shieldH, 0.065, pal.secondary);
         const boss = makeBeveledBox(0.11, 0.12, 0.055, 0.016, pal.trim, {
           offset: [0, 0.03, 0.095],
         });
-        for (const g of [dome, boss]) {
+        const shieldGeos: THREE.BufferGeometry[] = [dome, boss];
+        let spikeGeo: THREE.BufferGeometry | null = null;
+        if (offStyle === 'spiked_buckler') {
+          spikeGeo = prepareColoredPart(new THREE.ConeGeometry(0.042, 0.14, 5), pal.trim);
+          spikeGeo.rotateX(Math.PI * 0.5);
+          spikeGeo.translate(0, 0.03, 0.16);
+          shieldGeos.push(spikeGeo);
+        }
+        for (const g of shieldGeos) {
           g.rotateY(-Math.PI * 0.5);
           g.translate(
             WEAPON_MOUNT_SPEC.shieldBraceOffsetX,
@@ -1458,19 +1927,20 @@ function buildSlotAttachments(
             WEAPON_MOUNT_SPEC.shieldBraceOffsetZ
           );
         }
-        bakeBoneParts(
-          'lowerarm_l',
-          [
-            tagPart(dome, 'shield_body', 'rarity_armor', pal.secondary, {
-              landmarkKind: 'shield_face',
-              accentHex: pal.trim,
-              lockVertical: false,
-            }),
-            tagPart(boss, 'shield_boss', 'brushed_gold', pal.trim, { lockVertical: false }),
-          ],
-          offStyle,
-          { isMetal: true }
-        );
+        const shieldParts: TaggedGeometryPart[] = [
+          tagPart(dome, 'shield_body', 'rarity_armor', pal.secondary, {
+            landmarkKind: 'shield_face',
+            accentHex: pal.trim,
+            lockVertical: false,
+          }),
+          tagPart(boss, 'shield_boss', 'brushed_gold', pal.trim, { lockVertical: false }),
+        ];
+        if (spikeGeo) {
+          shieldParts.push(
+            tagPart(spikeGeo, 'buckler_spike', 'forged_steel', pal.trim, { lockVertical: false })
+          );
+        }
+        bakeBoneParts('lowerarm_l', shieldParts, offStyle, { isMetal: true });
       } else if (offStyle === 'tome') {
         const tome = makeBeveledBox(0.18, 0.24, 0.072, 0.014, pal.primary, {
           offset: [
@@ -1539,6 +2009,68 @@ function buildSlotAttachments(
               accentHex: pal.glow,
               lockVertical: false,
             }),
+          ],
+          offStyle,
+          { isMetal: true }
+        );
+      } else if (offStyle === 'lantern_offhand') {
+        const handle = makeBeveledBox(0.036, 0.08, 0.036, 0.008, pal.trim, {
+          offset: [0, gY + 0.02, gZ + 0.06],
+        });
+        const cage = makeBeveledBox(0.11, 0.14, 0.11, 0.014, pal.primary, {
+          offset: [0, gY - 0.08, gZ + 0.08],
+        });
+        const flame = prepareColoredPart(new THREE.OctahedronGeometry(0.055, 0), pal.glow);
+        flame.translate(0, gY - 0.08, gZ + 0.08);
+        bakeBoneParts(
+          'hand_l',
+          [
+            tagPart(handle, 'lantern_handle', 'brushed_gold', pal.trim, { lockVertical: false }),
+            tagPart(cage, 'lantern_cage', 'forged_steel', pal.primary, { lockVertical: false }),
+            tagPart(flame, 'lantern_flame', 'runic_glow', pal.glow, { lockVertical: false }),
+          ],
+          offStyle,
+          { isMetal: true }
+        );
+      } else if (offStyle === 'crystal_focus') {
+        const shard = prepareColoredPart(new THREE.OctahedronGeometry(0.095, 0), pal.glow);
+        shard.scale(0.75, 1.4, 0.75);
+        shard.translate(0.02, 0.09, 0.09);
+        const orbit = makeBeveledBox(0.16, 0.028, 0.16, 0.006, pal.trim);
+        orbit.rotateZ(0.45);
+        orbit.translate(0.02, 0.09, 0.09);
+        bakeBoneParts(
+          'hand_l',
+          [
+            tagPart(shard, 'focus_shard', 'runic_glow', pal.glow, { lockVertical: false }),
+            tagPart(orbit, 'focus_orbit', 'brushed_gold', pal.trim, { lockVertical: false }),
+          ],
+          offStyle,
+          { isMetal: false }
+        );
+      } else if (offStyle === 'parrying_dagger') {
+        const grip = makeLatheProfile(
+          [
+            [0.02, -0.09],
+            [0.018, 0.08],
+          ],
+          6,
+          '#1f2937'
+        );
+        grip.rotateX(Math.PI * 0.5);
+        grip.translate(0, gY, gZ);
+        const basket = makeBeveledBox(0.22, 0.06, 0.055, 0.012, pal.trim, {
+          offset: [0, gY, gZ + 0.08],
+        });
+        const blade = makeSwordBladeGeometry(0.052, 0.028, 0.34, 0.12, pal.primary);
+        blade.rotateX(Math.PI * 0.5);
+        blade.translate(0, gY, gZ + 0.1);
+        bakeBoneParts(
+          'hand_l',
+          [
+            tagPart(grip, 'parry_grip', 'stitched_leather', '#1f2937', { lockVertical: false }),
+            tagPart(basket, 'parry_basket', 'brushed_gold', pal.trim, { lockVertical: false }),
+            tagPart(blade, 'parry_blade', 'forged_steel', pal.primary, { accentHex: pal.glow, lockVertical: false }),
           ],
           offStyle,
           { isMetal: true }
@@ -1722,6 +2254,10 @@ export function buildNwlPlayerCharacter(
       styleLoadout.gloves = patch.gloves;
       affected.add('gloves');
     }
+    if (patch.back !== undefined) {
+      styleLoadout.back = patch.back;
+      affected.add('chest');
+    }
     if (patch.weaponMain !== undefined) {
       styleLoadout.weaponMain = patch.weaponMain;
       affected.add('weapon');
@@ -1729,6 +2265,10 @@ export function buildNwlPlayerCharacter(
     if (patch.weaponOffhand !== undefined) {
       styleLoadout.weaponOffhand = patch.weaponOffhand;
       affected.add('weapon');
+    }
+    if (patch.materialTheme !== undefined) {
+      styleLoadout.materialTheme = patch.materialTheme;
+      for (const s of EQUIP_SLOTS) affected.add(s);
     }
     for (const s of affected) {
       mountSlot(s, rarityOverride ?? loadout[s]);
@@ -1741,17 +2281,24 @@ export function buildNwlPlayerCharacter(
     rarityOverride?: ItemRarity
   ) => {
     styleLoadout[key] = style;
-    const slotMap: Record<keyof EquipmentStyleLoadout, EquipSlot> = {
+    if (key === 'materialTheme') {
+      for (const s of EQUIP_SLOTS) {
+        mountSlot(s, rarityOverride ?? loadout[s]);
+      }
+      return;
+    }
+    const slotMap: Record<Exclude<keyof EquipmentStyleLoadout, 'materialTheme'>, EquipSlot> = {
       helmet: 'helmet',
       chest: 'chest',
       shoulders: 'chest',
       legs: 'legs',
       boots: 'boots',
       gloves: 'gloves',
+      back: 'chest',
       weaponMain: 'weapon',
       weaponOffhand: 'weapon',
     };
-    const targetSlot = slotMap[key];
+    const targetSlot = slotMap[key as Exclude<keyof EquipmentStyleLoadout, 'materialTheme'>];
     mountSlot(targetSlot, rarityOverride ?? loadout[targetSlot]);
   };
 

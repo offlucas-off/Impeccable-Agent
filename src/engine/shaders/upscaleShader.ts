@@ -75,6 +75,9 @@ uniform float uTransparentBg;
 uniform vec3 uBgColorSrgb;
 uniform float uBloomEnabled;
 uniform float uBloomIntensity;
+uniform float uExposure;
+uniform float uContrast;
+uniform float uVignetteStrength;
 
 // Cole Cecil / aa-pixel-art crisp texel-interior + 1px AA boundary shader
 vec4 samplePixelArtAA(sampler2D tex, vec2 uv, vec2 texSize) {
@@ -87,6 +90,18 @@ vec4 samplePixelArtAA(sampler2D tex, vec2 uv, vec2 texSize) {
   vec2 sampleUv = (i - 0.5 + aa) / texSize;
   vec2 halfTexel = 0.5 / max(texSize, vec2(1.0));
   return texture(tex, clamp(sampleUv, halfTexel, vec2(1.0) - halfTexel));
+}
+
+vec3 applyPostGrade(vec3 col) {
+  vec3 graded = col * max(0.1, uExposure);
+  graded = (graded - 0.5) * max(0.2, uContrast) + 0.5;
+  if (uVignetteStrength > 0.001) {
+    vec2 centered = vUv - 0.5;
+    float dist = dot(centered, centered) * 2.4;
+    float vig = clamp(1.0 - dist * uVignetteStrength, 0.25, 1.0);
+    graded *= vig;
+  }
+  return clamp(graded, 0.0, 1.0);
 }
 
 void main() {
@@ -120,10 +135,10 @@ void main() {
   if (uTransparentBg > 0.5) {
     float bloomAlpha = clamp(max(bloom.r, max(bloom.g, bloom.b)), 0.0, 1.0);
     vec3 compTrans = clamp(chosen.rgb * chosen.a + bloom, 0.0, 1.0);
-    fragColor = vec4(compTrans, max(chosen.a, bloomAlpha));
+    fragColor = vec4(applyPostGrade(compTrans), max(chosen.a, bloomAlpha));
   } else {
     vec3 comp = clamp(mix(uBgColorSrgb, chosen.rgb, chosen.a) + bloom, 0.0, 1.0);
-    fragColor = vec4(comp, 1.0);
+    fragColor = vec4(applyPostGrade(comp), 1.0);
   }
 }
 `;
