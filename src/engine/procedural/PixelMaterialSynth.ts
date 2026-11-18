@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import {
   PixelizerMaterial,
+  enforceHiFiTextureSampling,
   enforcePixelArtTextureSampling,
   type PixelizerMaterialResources,
 } from '../PixelizerMaterial';
@@ -31,7 +32,6 @@ import {
   type UvIslandMeta,
 } from './PixelUvUnwrapper';
 import {
-  applyHeightGtaoAndWear,
   bake3DCurvatureToUvIslands,
   bakeVertexAoAndCreases,
   subdivideForAo,
@@ -40,10 +40,14 @@ import {
 export interface SynthesizedMaterialTextures {
   albedoMap: THREE.DataTexture;
   normalMap: THREE.DataTexture;
+  roughnessMap: THREE.DataTexture;
+  aoMap: THREE.DataTexture;
+  metalnessMap: THREE.DataTexture;
   emissionMap: THREE.DataTexture | null;
   hasEmission: boolean;
   texWidth: number;
   texHeight: number;
+  dilationPx?: number;
   quality: TextureQualityMetrics;
   dispose: () => void;
 }
@@ -62,6 +66,10 @@ export interface SynthMaterialOptions {
   emissiveRuneHex?: string | null;
   usePool?: boolean;
   cacheKey?: string;
+  /** Default false: uses smooth trilinear Hi-Fi sampling; set true for retro NearestFilter */
+  pixelArtSampling?: boolean;
+  /** Minimum UV island edge dilation margin in pixels (default 4) */
+  dilationPx?: number;
 }
 
 export interface TextureQualityMetrics {
@@ -83,6 +91,15 @@ function markTexturePooling(tex: THREE.DataTexture, pooled: boolean): void {
   tex.userData = { ...tex.userData, pooled };
 }
 
+function disposeBundleTextures(bundle: SynthesizedMaterialTextures): void {
+  bundle.albedoMap.dispose();
+  bundle.normalMap.dispose();
+  bundle.roughnessMap.dispose();
+  bundle.aoMap.dispose();
+  bundle.metalnessMap.dispose();
+  bundle.emissionMap?.dispose();
+}
+
 export function acquirePooledMaterialTextures(
   cacheKey: string,
   factory: () => SynthesizedMaterialTextures
@@ -98,6 +115,9 @@ export function acquirePooledMaterialTextures(
   const created = factory();
   markTexturePooling(created.albedoMap, true);
   markTexturePooling(created.normalMap, true);
+  markTexturePooling(created.roughnessMap, true);
+  markTexturePooling(created.aoMap, true);
+  markTexturePooling(created.metalnessMap, true);
   if (created.emissionMap) markTexturePooling(created.emissionMap, true);
 
   MATERIAL_TEXTURE_POOL.set(cacheKey, created);
@@ -107,9 +127,7 @@ export function acquirePooledMaterialTextures(
       const oldest = MATERIAL_TEXTURE_POOL.get(oldestKey);
       MATERIAL_TEXTURE_POOL.delete(oldestKey);
       if (oldest) {
-        oldest.albedoMap.dispose();
-        oldest.normalMap.dispose();
-        oldest.emissionMap?.dispose();
+        disposeBundleTextures(oldest);
       }
     }
   }
@@ -118,31 +136,42 @@ export function acquirePooledMaterialTextures(
 
 export function clearPooledMaterialTextures(): void {
   for (const bundle of MATERIAL_TEXTURE_POOL.values()) {
-    bundle.albedoMap.dispose();
-    bundle.normalMap.dispose();
-    bundle.emissionMap?.dispose();
+    disposeBundleTextures(bundle);
   }
   MATERIAL_TEXTURE_POOL.clear();
 }
 
 // ---------------------------------------------------------------------------
-// Color, Deterministic Spatial Hash & 2-Pass EDT Dilation Utilities
+// Color, Hue-Shifted Stylized Shading, Spatial Hash & 2-Pass EDT Dilation
 // ---------------------------------------------------------------------------
+
+function clampByte(v: number, lo = 12, hi = 246): number {
+  return Math.max(lo, Math.min(hi, Math.round(v)));
+}
+
+function clamp01(v: number): number {
+  return Math.max(0, Math.min(1, v));
+}
+
+function smoothstep(edge0: number, edge1: number, x: number): number {
+  const t = clamp01((x - edge0) / Math.max(1e-6, edge1 - edge0));
+  return t * t * (3 - 2 * t);
+}
 
 function hexToRgb255(hex: string): [number, number, number] {
   const c = new THREE.Color(hex);
   const srgb = new THREE.Color();
   c.getRGB(srgb, THREE.SRGBColorSpace);
   return [
-    Math.max(10, Math.min(246, Math.round(srgb.r * 255))),
-    Math.max(10, Math.min(246, Math.round(srgb.g * 255))),
-    Math.max(10, Math.min(246, Math.round(srgb.b * 255))),
+    clampByte(srgb.r * 255, 10, 246),
+    clampByte(srgb.g * 255, 10, 246),
+    clampByte(srgb.b * 255, 10, 246),
   ];
 }
 
 /**
- * Pixel-art hue-shifted tone variation: shadows shift slightly cooler toward indigo,
- * highlights shift slightly warmer toward ivory-gold, never hitting pure 0 or 255.
+ * Stylized hue-shifted tone variation: shadows shift slightly cooler toward indigo/plum,
+ * highlights desaturate smoothly toward clean ivory-gold, never hitting pure 0 or 255.
  */
 function shadeHueShiftRgb(
   base: [number, number, number],
@@ -152,20 +181,44 @@ function shadeHueShiftRgb(
   let g = base[1];
   let b = base[2];
   if (delta >= 0) {
-    const t = Math.min(0.45, delta);
+    const t = Math.min(0.48, delta);
     r = r + (242 - r) * t;
-    g = g + (236 - g) * t * 0.95;
-    b = b + (220 - b) * t * 0.85;
+    g = g + (238 - g) * t * 0.96;
+    b = b + (228 - b) * t * 0.88;
   } else {
-    const t = Math.min(0.6, -delta);
-    r = r * (1 - t * 0.78) + 28 * t;
-    g = g * (1 - t * 0.8) + 28 * t;
-    b = b * (1 - t * 0.66) + 48 * t;
+    const t = Math.min(0.65, -delta);
+    r = r * (1 - t * 0.78) + 32 * t;
+    g = g * (1 - t * 0.82) + 28 * t;
+    b = b * (1 - t * 0.64) + 50 * t;
   }
+  return [clampByte(r, 14, 244), clampByte(g, 14, 244), clampByte(b, 14, 244)];
+}
+
+/**
+ * Anime/Stylized Skin & Warm Organic Shading (reverse-engineered from Reze body1):
+ * - Shadows boost saturation and shift hue toward warm peach/coral/rose
+ * - Highlights desaturate and lift smoothly toward clean cool rose-ivory
+ */
+function shadeWarmSkinRgb(
+  base: [number, number, number],
+  delta: number,
+  warmShadowTarget: [number, number, number] = [208, 112, 116]
+): [number, number, number] {
+  if (delta >= 0) {
+    const t = Math.min(0.48, delta);
+    return [
+      clampByte(base[0] + (250 - base[0]) * t, 16, 246),
+      clampByte(base[1] + (226 - base[1]) * t * 0.96, 16, 246),
+      clampByte(base[2] + (220 - base[2]) * t * 0.92, 16, 246),
+    ];
+  }
+  const t = Math.min(0.7, -delta);
+  const satWarm = mixRgb(base, warmShadowTarget, t * 0.62);
+  const darkScale = 1 - t * 0.24;
   return [
-    Math.max(14, Math.min(244, Math.round(r))),
-    Math.max(14, Math.min(244, Math.round(g))),
-    Math.max(14, Math.min(244, Math.round(b))),
+    clampByte(satWarm[0] * darkScale + warmShadowTarget[0] * t * 0.08, 18, 244),
+    clampByte(satWarm[1] * darkScale + warmShadowTarget[1] * t * 0.04, 18, 244),
+    clampByte(satWarm[2] * darkScale + warmShadowTarget[2] * t * 0.05, 18, 244),
   ];
 }
 
@@ -174,7 +227,7 @@ function mixRgb(
   b: [number, number, number],
   t: number
 ): [number, number, number] {
-  const k = Math.max(0, Math.min(1, t));
+  const k = clamp01(t);
   return [
     Math.round(a[0] * (1 - k) + b[0] * k),
     Math.round(a[1] * (1 - k) + b[1] * k),
@@ -242,19 +295,23 @@ function edt1d(
   }
 }
 
-function dilateAtlasByEdt(
+export function dilateAtlasByEdt(
   mask: Uint8Array,
   width: number,
   height: number,
   albedoRgba: Uint8Array,
   normalRgba: Uint8Array,
-  emissionRgba: Uint8Array | null
+  emissionRgba: Uint8Array | null,
+  roughnessRgba?: Uint8Array | null,
+  aoRgba?: Uint8Array | null,
+  metalnessRgba?: Uint8Array | null,
+  preserveAlpha = false
 ): void {
   const n = width * height;
   const maxDim = Math.max(width, height);
   const inf = 1e12;
 
-  const colDist = new Float64Array(n);
+  const colDist = new Float32Array(n);
   const colBestY = new Int32Array(n);
   const nearestSrc = new Int32Array(n);
 
@@ -290,6 +347,9 @@ function dilateAtlasByEdt(
   const copyAlbedo = albedoRgba.slice();
   const copyNormal = normalRgba.slice();
   const copyEmission = emissionRgba ? emissionRgba.slice() : null;
+  const copyRough = roughnessRgba ? roughnessRgba.slice() : null;
+  const copyAo = aoRgba ? aoRgba.slice() : null;
+  const copyMetal = metalnessRgba ? metalnessRgba.slice() : null;
 
   for (let i = 0; i < n; i++) {
     if (mask[i]) continue;
@@ -300,13 +360,33 @@ function dilateAtlasByEdt(
     albedoRgba[d4 + 0] = copyAlbedo[s4 + 0];
     albedoRgba[d4 + 1] = copyAlbedo[s4 + 1];
     albedoRgba[d4 + 2] = copyAlbedo[s4 + 2];
-    albedoRgba[d4 + 3] = 255;
+    if (!preserveAlpha) {
+      albedoRgba[d4 + 3] = 255;
+    }
 
     normalRgba[d4 + 0] = copyNormal[s4 + 0];
     normalRgba[d4 + 1] = copyNormal[s4 + 1];
     normalRgba[d4 + 2] = copyNormal[s4 + 2];
     normalRgba[d4 + 3] = 255;
 
+    if (roughnessRgba && copyRough) {
+      roughnessRgba[d4 + 0] = copyRough[s4 + 0];
+      roughnessRgba[d4 + 1] = copyRough[s4 + 1];
+      roughnessRgba[d4 + 2] = copyRough[s4 + 2];
+      roughnessRgba[d4 + 3] = 255;
+    }
+    if (aoRgba && copyAo) {
+      aoRgba[d4 + 0] = copyAo[s4 + 0];
+      aoRgba[d4 + 1] = copyAo[s4 + 1];
+      aoRgba[d4 + 2] = copyAo[s4 + 2];
+      aoRgba[d4 + 3] = 255;
+    }
+    if (metalnessRgba && copyMetal) {
+      metalnessRgba[d4 + 0] = copyMetal[s4 + 0];
+      metalnessRgba[d4 + 1] = copyMetal[s4 + 1];
+      metalnessRgba[d4 + 2] = copyMetal[s4 + 2];
+      metalnessRgba[d4 + 3] = 255;
+    }
     if (emissionRgba && copyEmission) {
       emissionRgba[d4 + 0] = copyEmission[s4 + 0];
       emissionRgba[d4 + 1] = copyEmission[s4 + 1];
@@ -317,15 +397,46 @@ function dilateAtlasByEdt(
 }
 
 // ---------------------------------------------------------------------------
-// Sobel Height -> Gentle Tangent-Space Normal Map (Pass 3 safe)
+// Sobel Height -> Tangent-Space OpenGL Normal Map (Hi-Fi 3D Calibrated)
 // ---------------------------------------------------------------------------
+
+function getRecipeNormalGain(materialKind: MaterialRecipeId): { gain: number; maxSlope: number } {
+  switch (materialKind) {
+    case 'dragon_scales':
+      // Matches Black Dragon Dragon_Nor.jpg (~9-18 deg median, ~33 deg scale overlap lips)
+      return { gain: 1.55, maxSlope: 0.62 };
+    case 'wing_membrane':
+    case 'muscle_hide':
+    case 'stitched_leather':
+    case 'stone_masonry':
+    case 'mossy_cobble':
+    case 'roof_shingle':
+    case 'wood_planks':
+    case 'timber_frame':
+    case 'magma_obsidian':
+      return { gain: 1.05, maxSlope: 0.44 };
+    case 'forged_steel':
+    case 'brushed_gold':
+    case 'rarity_armor':
+      return { gain: 0.9, maxSlope: 0.36 };
+    case 'human_skin':
+    case 'goblin_skin':
+    case 'woven_cloth':
+    case 'plaster_wall':
+    case 'water_pool':
+      // Matches free_base_mesh subtle OpenGL normals (~2.5-5 deg tilt, smooth skin/cloth)
+      return { gain: 0.38, maxSlope: 0.22 };
+    default:
+      return { gain: 0.75, maxSlope: 0.32 };
+  }
+}
 
 function computeIslandNormalsFromHeight(
   heightField: Float32Array,
   coverageMask: Uint8Array,
   width: number,
   height: number,
-  islands: Pick<UvIslandMeta, 'pxBounds'>[],
+  islands: Pick<UvIslandMeta, 'pxBounds' | 'materialKind'>[],
   normalStrength: number
 ): Uint8Array {
   const out = new Uint8Array(width * height * 4);
@@ -336,15 +447,17 @@ function computeIslandNormalsFromHeight(
     out[i * 4 + 3] = 255;
   }
 
-  // Clamp subtle slope <= 0.24 (< 14 deg, so Pass 3 normalEdgeThreshold=0.14..0.22 ignores flat brick surfaces!)
-  const strength = Math.max(0, Math.min(0.95, normalStrength)) * 0.45;
-  if (strength <= 1e-4) return out;
+  const baseStrength = Math.max(0, Math.min(1.5, normalStrength)) * 0.95;
+  if (baseStrength <= 1e-4) return out;
 
   for (const isl of islands) {
     const x0 = Math.max(0, isl.pxBounds.x);
     const y0 = Math.max(0, isl.pxBounds.y);
     const x1 = Math.min(width - 1, isl.pxBounds.x + isl.pxBounds.w - 1);
     const y1 = Math.min(height - 1, isl.pxBounds.y + isl.pxBounds.h - 1);
+    const { gain, maxSlope } = getRecipeNormalGain(isl.materialKind);
+    const strength = baseStrength * gain;
+
     for (let y = y0; y <= y1; y++) {
       const ym = Math.max(y0, y - 1);
       const yp = Math.min(y1, y + 1);
@@ -354,7 +467,7 @@ function computeIslandNormalsFromHeight(
         const xm = Math.max(x0, x - 1);
         const xp = Math.min(x1, x + 1);
 
-        // 3x3 Sobel gradients on island-clamped heightfield
+        // 3x3 Sobel gradients on island-clamped heightfield (OpenGL +X right, +Y up)
         const tl = heightField[yp * width + xm];
         const tc = heightField[yp * width + x];
         const tr = heightField[yp * width + xp];
@@ -367,8 +480,8 @@ function computeIslandNormalsFromHeight(
         const dhdu = (tr + 2 * mr + br - (tl + 2 * ml + bl)) * 0.25;
         const dhdv = (tl + 2 * tc + tr - (bl + 2 * bc + br)) * 0.25;
 
-        let nx = Math.max(-0.24, Math.min(0.24, -dhdu * strength));
-        let ny = Math.max(-0.24, Math.min(0.24, -dhdv * strength));
+        let nx = Math.max(-maxSlope, Math.min(maxSlope, -dhdu * strength));
+        let ny = Math.max(-maxSlope, Math.min(maxSlope, -dhdv * strength));
         const nz = 1.0;
         const inv = 1 / Math.hypot(nx, ny, nz);
         nx *= inv;
@@ -387,12 +500,14 @@ function computeIslandNormalsFromHeight(
 }
 
 // ---------------------------------------------------------------------------
-// Material Recipe Pattern Generators (Clean Pixel-Art, Zero Salt-and-Pepper Noise)
+// Material Recipe Pattern Generators (Hi-Fi Stylized, Zero Speckled Noise)
 // ---------------------------------------------------------------------------
 
 interface TexelSample {
   rgb: [number, number, number];
   height: number;
+  roughness: number;
+  metalness: number;
   emissiveRgb?: [number, number, number];
 }
 
@@ -407,337 +522,585 @@ function sampleMaterialRecipe(
   seed: number,
   rarityTier: NonNullable<SynthMaterialOptions['rarityTier']>
 ): TexelSample {
+  const u = w > 1 ? lx / (w - 1) : 0.5;
   const v = h > 1 ? ly / (h - 1) : 0.5;
-  const onPerimeter = lx === 0 || ly === 0 || lx === w - 1 || ly === h - 1;
-  const gradV = (v - 0.5) * 0.25; // crisp top-to-bottom cel tone falloff
-  const silverTrim: [number, number, number] = [218, 224, 234]; // #dae0ea
-  const steelTrim: [number, number, number] = [179, 185, 209]; // #b3b9d1
-  const crimsonAccent: [number, number, number] = [180, 32, 42]; // #b4202a
-  const brassAccent: [number, number, number] = [214, 166, 68];
+  const minDim = Math.min(w, h);
+  const borderPx = minDim >= 44 ? 2 : 1;
+  const onPerimeter = lx < borderPx || ly < borderPx || lx >= w - borderPx || ly >= h - borderPx;
+  const gradV = (v - 0.5) * 0.24;
+  const gradU = (u - 0.5) * 0.08;
+  const silverTrim: [number, number, number] = [224, 230, 238];
+  const steelTrim: [number, number, number] = [184, 192, 214];
+  const crimsonAccent: [number, number, number] = [184, 38, 48];
+  const brassAccent: [number, number, number] = [216, 170, 74];
 
   switch (recipe) {
     case 'stone_masonry':
     case 'mossy_cobble': {
-      const tinyTrim = w <= 4 || h <= 4;
+      const tinyTrim = w <= 6 || h <= 6;
       if (tinyTrim) {
-        const block = Math.floor((lx + ly * 2) / 2);
-        const grain = ((block % 3) - 1) * 0.1 + ((lx + ly * 2) / Math.max(2, w + h) - 0.5) * 0.18;
-        let rgb = shadeHueShiftRgb(baseRgb, grain + gradV * 0.5);
-        let heightVal = 0.68 + grain * 0.35;
+        const slope = (u - 0.5) * 0.14 + (v - 0.5) * 0.22;
+        let rgb = shadeHueShiftRgb(baseRgb, slope);
+        let heightVal = 0.68 + slope * 0.3;
+        let rough = 0.80;
         if (recipe === 'mossy_cobble' && (ly === 0 || (lx === 0 && seed % 2 === 0))) {
           rgb = mixRgb(rgb, accentRgb, 0.55);
           heightVal += 0.06;
+          rough = 0.88;
         }
-        return { rgb, height: heightVal };
+        return { rgb, height: heightVal, roughness: rough, metalness: 0.0 };
       }
-      const rowH = h >= 12 ? 6 : 4;
-      const colW = w >= 14 ? 8 : 5;
+      const rowH = Math.max(5, Math.min(16, Math.round(h / Math.max(2, Math.round(h / 10)))));
+      const colW = Math.max(6, Math.min(24, Math.round(w / Math.max(2, Math.round(w / 14)))));
       const brickRow = Math.floor(ly / rowH);
       const staggerX = (brickRow % 2) * Math.floor(colW * 0.5);
       const bx = (lx + staggerX) % colW;
       const by = ly % rowH;
       const brickCol = Math.floor((lx + staggerX) / colW);
-      const mortar = bx === 0 || by === 0;
+      const mortarW = minDim >= 40 ? 2 : 1;
+      const mortar = bx < mortarW || by < mortarW;
       const brickId = hash2d(brickCol, brickRow, seed);
 
-      // Subtle macro weathering + clean masonry blocks
-      const macroWeather = (smoothNoise2d(Math.floor(lx / 5) * 0.55, Math.floor(ly / 5) * 0.55, seed + 41) - 0.5) * 0.07;
-      const hasCrack = brickId > 0.88 && bx === Math.floor(colW * 0.5) && by <= Math.floor(rowH * 0.5);
-      const topBevel = by === rowH - 1 ? 0.04 : by === 1 ? -0.025 : 0;
-      const brickDelta = (brickId - 0.5) * 0.09 + topBevel + macroWeather + gradV * 0.28;
+      // Smooth macro weathering + clean stylized stone blocks
+      const macroWeather = (smoothNoise2d(u * 4.5, v * 4.5, seed + 41) - 0.5) * 0.09;
+      const bevelBand = by === rowH - 1 ? 0.07 : by === mortarW ? -0.04 : 0;
+      const brickTilt = ((bx / Math.max(1, colW - 1)) - 0.5) * 0.05;
+      const brickDelta = (brickId - 0.5) * 0.12 + bevelBand + brickTilt + macroWeather + gradV * 0.35 + gradU;
 
       let rgb = mortar
-        ? shadeHueShiftRgb(baseRgb, -0.12)
-        : hasCrack
-          ? shadeHueShiftRgb(baseRgb, -0.10)
-          : shadeHueShiftRgb(baseRgb, brickDelta);
-      let heightVal = mortar ? 0.42 : hasCrack ? 0.46 : 0.68 + (brickId - 0.5) * 0.08 + topBevel * 0.25;
+        ? shadeHueShiftRgb(baseRgb, -0.22 + macroWeather * 0.3)
+        : shadeHueShiftRgb(baseRgb, brickDelta);
+      let heightVal = mortar ? 0.28 : 0.70 + (brickId - 0.5) * 0.08 + bevelBand * 0.6;
+      let rough = mortar ? 0.92 : 0.76 + (brickId - 0.5) * 0.08;
 
-      // Basal damp grime & moss creep on lower courses
-      const mx = Math.floor(lx / 3);
-      const my = Math.floor(ly / 3);
-      const mossPatch = smoothNoise2d(mx * 0.48, my * 0.48, seed + 71);
+      const mossPatch = smoothNoise2d(u * 5.2, v * 5.2, seed + 71);
       if (recipe === 'mossy_cobble') {
-        if ((v < 0.36 && mossPatch > 0.44) || (mortar && mossPatch > 0.58)) {
-          rgb = mixRgb(rgb, accentRgb, 0.58);
-          heightVal += 0.04;
+        const mossBlend = smoothstep(0.45, 0.72, mossPatch) * (v < 0.45 ? 0.75 : mortar ? 0.65 : 0.25);
+        if (mossBlend > 0.01) {
+          rgb = mixRgb(rgb, accentRgb, mossBlend);
+          heightVal += mossBlend * 0.05;
+          rough = rough * (1 - mossBlend) + 0.90 * mossBlend;
         }
-      } else if (v < 0.24 && mossPatch > 0.55) {
-        rgb = shadeHueShiftRgb(rgb, -0.06);
+      } else if (v < 0.24 && mossPatch > 0.5) {
+        const damp = (0.24 - v) / 0.24;
+        rgb = shadeHueShiftRgb(rgb, -0.10 * damp);
+        rough -= damp * 0.12;
       }
-      return { rgb, height: heightVal };
+      return { rgb, height: heightVal, roughness: clamp01(rough), metalness: 0.0 };
     }
 
     case 'wood_planks':
     case 'timber_frame': {
-      // Painterly Bark / stylized wood: elongated vertical brushstrokes blending bark & moss tones without noisy grain
-      const plankW = w >= 14 ? 6 : 4;
+      // Painterly Bark (Jabami tron_tree_remast_tex.png): ~13:1..20:1 vertical brushstroke anisotropy
+      const plankW = Math.max(6, Math.min(20, Math.round(w / Math.max(2, Math.round(w / 14)))));
       const plankIdx = Math.floor(lx / plankW);
-      const seam = lx % plankW === 0 && w >= 8;
-      const strokeA = smoothNoise2d(lx * 0.16, ly * 0.045, seed + 11) - 0.5;
-      const strokeB = smoothNoise2d(lx * 0.32 + 3.1, ly * 0.07, seed + 29) - 0.5;
-      const barkFlow = strokeA * 0.22 + strokeB * 0.14;
-      const plankVar = (hash2d(plankIdx, 19, seed) - 0.5) * 0.06;
-      const mossMask = smoothNoise2d(lx * 0.12, ly * 0.08, seed + 53);
-      const warmShadow: [number, number, number] = [44, 28, 20];
-      const bottomOcc = v < 0.3 ? (0.3 - v) / 0.3 : 0;
+      const seamW = w >= 40 ? 2 : 1;
+      const seam = w >= 12 && lx % plankW < seamW;
+      const strokeA = smoothNoise2d(lx * 0.18, ly * 0.014, seed + 11) - 0.5;
+      const strokeB = smoothNoise2d(lx * 0.38 + 4.7, ly * 0.028, seed + 29) - 0.5;
+      const barkFlow = strokeA * 0.26 + strokeB * 0.14;
+      const plankVar = (hash2d(plankIdx, 19, seed) - 0.5) * 0.08;
+      const mossMask = smoothNoise2d(u * 3.8, v * 2.2, seed + 53);
+      const warmShadow: [number, number, number] = [48, 30, 22];
+      const bottomOcc = v < 0.30 ? (0.30 - v) / 0.30 : 0;
 
       if (seam) {
-        return { rgb: shadeHueShiftRgb(baseRgb, -0.12), height: 0.45 };
+        return {
+          rgb: shadeHueShiftRgb(baseRgb, -0.22 + barkFlow * 0.2),
+          height: 0.34,
+          roughness: 0.88,
+          metalness: 0.0,
+        };
       }
 
-      let rgb = shadeHueShiftRgb(baseRgb, plankVar + barkFlow + gradV * 0.32);
-      if (mossMask > 0.58) {
-        rgb = mixRgb(rgb, accentRgb, (mossMask - 0.58) * 0.9);
+      let rgb = shadeHueShiftRgb(baseRgb, plankVar + barkFlow + gradV * 0.36 + gradU * 0.6);
+      if (mossMask > 0.56) {
+        rgb = mixRgb(rgb, accentRgb, Math.min(0.48, (mossMask - 0.56) * 0.95));
       }
       if (bottomOcc > 0) {
         rgb = mixRgb(rgb, warmShadow, bottomOcc * 0.28);
       }
       return {
         rgb,
-        height: 0.66 + barkFlow * 0.35,
+        height: 0.58 + barkFlow * 0.45,
+        roughness: clamp01(0.76 - barkFlow * 0.14),
+        metalness: 0.0,
       };
     }
 
     case 'roof_shingle': {
-      if (w <= 4 || h <= 4) {
-        const slope = ((lx + ly * 2) / Math.max(2, w + h * 2) - 0.4) * 0.24;
+      if (w <= 6 || h <= 6) {
+        const slope = (u * 0.35 + v * 0.65 - 0.45) * 0.26;
         return {
           rgb: shadeHueShiftRgb(baseRgb, slope),
           height: 0.62 + slope * 0.35,
+          roughness: 0.78,
+          metalness: 0.0,
         };
       }
-      const courseH = h >= 12 ? 6 : 4;
-      const tileW = w >= 12 ? 6 : 4;
+      const courseH = Math.max(5, Math.min(14, Math.round(h / Math.max(2, Math.round(h / 9)))));
+      const tileW = Math.max(5, Math.min(16, Math.round(w / Math.max(2, Math.round(w / 10)))));
       const row = Math.floor(ly / courseH);
       const stag = (row % 2) * Math.floor(tileW * 0.5);
       const col = Math.floor((lx + stag) / tileW);
-      const shadowLip = ly % courseH === 0;
-      const lipBevel = ly % courseH === 1;
-      const topRidge = ly % courseH === courseH - 1;
-      const vEdge = (lx + stag) % tileW === 0;
+      const localY = ly % courseH;
+      const localX = (lx + stag) % tileW;
+      const shadowLip = localY === 0;
+      const lipBevel = localY === 1;
+      const topRidge = localY === courseH - 1;
+      const vEdge = localX === 0;
       const idVar = (hash2d(col, row, seed + 33) - 0.5) * 0.16;
-      const mossLichen = smoothNoise2d(Math.floor(lx / 4) * 0.6, Math.floor(ly / 4) * 0.6, seed + 89);
-      const slopeShade = (v - 0.3) * 0.15 + (topRidge ? 0.08 : 0) + (lipBevel ? 0.09 : 0);
+      const mossLichen = smoothNoise2d(u * 5.0, v * 5.0, seed + 89);
+      const slopeShade = (v - 0.3) * 0.18 + gradU + (topRidge ? 0.08 : 0) + (lipBevel ? 0.10 : 0);
       let rgb = shadowLip
-        ? shadeHueShiftRgb(baseRgb, -0.24)
+        ? shadeHueShiftRgb(baseRgb, -0.26)
         : vEdge
-          ? shadeHueShiftRgb(baseRgb, -0.12)
+          ? shadeHueShiftRgb(baseRgb, -0.14)
           : shadeHueShiftRgb(baseRgb, idVar + slopeShade);
-      if (!shadowLip && mossLichen > 0.68 && v < 0.65) {
+      let rough = shadowLip ? 0.90 : 0.76 + (hash2d(col, row, seed + 5) - 0.5) * 0.08;
+      if (!shadowLip && mossLichen > 0.65 && v < 0.68) {
         rgb = mixRgb(rgb, accentRgb, 0.38);
+        rough = 0.88;
       }
-      const stepSlope = ((ly % courseH) / Math.max(1, courseH - 1)) * 0.3;
-      return { rgb, height: shadowLip ? 0.32 : 0.6 + stepSlope };
+      const stepSlope = (localY / Math.max(1, courseH - 1)) * 0.35;
+      return {
+        rgb,
+        height: shadowLip ? 0.28 : 0.56 + stepSlope,
+        roughness: clamp01(rough),
+        metalness: 0.0,
+      };
     }
 
     case 'plaster_wall': {
-      const mx = Math.floor(lx / 4);
-      const my = Math.floor(ly / 4);
-      const macro = smoothNoise2d(mx * 0.52, my * 0.52, seed + 19) - 0.5;
-      const dampBase = v < 0.3 ? (0.3 - v) * -0.42 : 0;
-      const trimEdge = (ly === 0 || ly === h - 1 || lx === 0 || lx === w - 1) && w >= 6 && h >= 6;
+      const macro = smoothNoise2d(u * 4.2, v * 4.2, seed + 19) - 0.5;
+      const dampBase = v < 0.3 ? (0.3 - v) * -0.38 : 0;
+      const trimEdge = onPerimeter && w >= 8 && h >= 8;
+      const innerInset = borderPx;
       const innerBevel =
-        !trimEdge && (ly === 1 || ly === h - 2 || lx === 1 || lx === w - 2) && w >= 8 && h >= 8;
-      const diagBevel = w < 6 || h < 6 ? ((lx + ly * 2) / Math.max(2, w + h) - 0.5) * 0.2 : 0;
+        !trimEdge &&
+        (lx === innerInset || lx === w - 1 - innerInset || ly === innerInset || ly === h - 1 - innerInset) &&
+        w >= 12 &&
+        h >= 12;
+      const diagBevel = gradU + gradV * 0.45;
       const rgb = trimEdge
-        ? shadeHueShiftRgb(accentRgb, -0.1)
+        ? shadeHueShiftRgb(accentRgb, -0.10 + gradU)
         : innerBevel
-          ? shadeHueShiftRgb(baseRgb, 0.1)
-          : shadeHueShiftRgb(baseRgb, macro * 0.18 + dampBase + diagBevel + gradV * 0.45);
-      return { rgb, height: trimEdge ? 0.84 : innerBevel ? 0.74 : 0.62 + macro * 0.14 };
+          ? shadeHueShiftRgb(baseRgb, 0.12 + gradU)
+          : shadeHueShiftRgb(baseRgb, macro * 0.16 + dampBase + diagBevel);
+      return {
+        rgb,
+        height: trimEdge ? 0.84 : innerBevel ? 0.74 : 0.62 + macro * 0.10,
+        roughness: trimEdge ? 0.72 : 0.84 - macro * 0.06,
+        metalness: 0.0,
+      };
     }
 
     case 'forged_steel':
     case 'brushed_gold':
     case 'rarity_armor': {
-      // Stylized Color Blocking + Vertical Gradient (brighter top, warm-tinted occlusion at bottom) + 1-2 texel plate linework
-      const sheenBand = Math.exp(-Math.pow((v - 0.72) * 2.4, 2)) * 0.14;
-      const warmShadow: [number, number, number] = [48, 28, 24];
-      const bottomOcc = v < 0.32 ? (0.32 - v) / 0.32 : 0;
-      const borderHigh = onPerimeter && w >= 8 && h >= 8;
-      const innerInlay =
-        !onPerimeter &&
-        (lx === 1 || lx === w - 2 || ly === 1 || ly === h - 2) &&
-        w >= 12 &&
-        h >= 12;
+      // Stylized Multi-Stop Metallic Specular Bands + Directional Anisotropy + Seam Linework + Rivets + Wear Highlights
+      const diagCoord = v * 0.78 + u * 0.26;
+      const primarySpecBand = Math.exp(-Math.pow((diagCoord - 0.72) * 3.4, 2)) * 0.22;
+      const secondaryBounce = Math.exp(-Math.pow((v - 0.24) * 4.5, 2)) * 0.08;
+      const brushedStreak = (smoothNoise2d(u * 2.8, v * 26.0, seed + 41) - 0.5) * 0.06;
+      const warmShadow: [number, number, number] = [48, 30, 26];
+      const bottomOcc = v < 0.30 ? (0.30 - v) / 0.30 : 0;
 
-      const plateFlow = (smoothNoise2d(lx * 0.22, ly * 0.22, seed + 41) - 0.5) * 0.18;
-      let rgb = shadeHueShiftRgb(baseRgb, gradV * 0.55 + sheenBand + plateFlow);
+      const rimWidth = minDim >= 40 ? 2 : 1;
+      const seamDist = rimWidth + 2;
+      const isTrimRim = onPerimeter && w >= 10 && h >= 10;
+      const isWearHighlight =
+        !isTrimRim &&
+        (lx === rimWidth || lx === w - 1 - rimWidth || ly === h - 1 - rimWidth) &&
+        w >= 14 &&
+        h >= 14;
+      const isPlateSeam =
+        !isTrimRim &&
+        (lx === seamDist || lx === w - 1 - seamDist || ly === seamDist || ly === h - 1 - seamDist) &&
+        w >= 18 &&
+        h >= 18;
+
+      let rgb = shadeHueShiftRgb(
+        baseRgb,
+        gradV * 0.55 + gradU + primarySpecBand + secondaryBounce + brushedStreak
+      );
       if (bottomOcc > 0) {
-        rgb = mixRgb(rgb, warmShadow, bottomOcc * 0.24);
+        rgb = mixRgb(rgb, warmShadow, bottomOcc * 0.22);
       }
-      let heightVal = 0.66 + sheenBand * 0.14;
+      let heightVal = 0.62 + primarySpecBand * 0.2 + brushedStreak * 0.25;
+      let rough = 0.28 - primarySpecBand * 0.25 + (brushedStreak * 0.4);
+      let metal = recipe === 'brushed_gold' ? 0.92 : 0.86;
       let emissiveRgb: [number, number, number] | undefined;
 
-      if (borderHigh) {
+      if (isTrimRim) {
         const trimBase =
           recipe === 'brushed_gold'
-            ? mixRgb(accentRgb, silverTrim, 0.35)
+            ? mixRgb(accentRgb, silverTrim, 0.38)
             : recipe === 'rarity_armor'
               ? mixRgb(accentRgb, silverTrim, 0.45)
-              : mixRgb(baseRgb, steelTrim, 0.45);
-        rgb = shadeHueShiftRgb(trimBase, 0.08);
-        heightVal = 0.76;
-      } else if (innerInlay) {
+              : mixRgb(baseRgb, steelTrim, 0.50);
+        rgb = shadeHueShiftRgb(trimBase, 0.14 + primarySpecBand * 0.4 + gradU);
+        heightVal = 0.80;
+        rough = 0.20;
+        metal = 0.92;
+      } else if (isWearHighlight) {
+        rgb = shadeHueShiftRgb(mixRgb(baseRgb, silverTrim, 0.35), 0.16);
+        heightVal = 0.72;
+        rough = 0.22;
+      } else if (isPlateSeam) {
         const grooveAccent =
           recipe === 'rarity_armor' && rarityTier === 'epic'
             ? mixRgb(baseRgb, crimsonAccent, 0.25)
             : baseRgb;
-        rgb = shadeHueShiftRgb(grooveAccent, -0.12);
-        heightVal = 0.56;
+        rgb = shadeHueShiftRgb(grooveAccent, -0.26);
+        heightVal = 0.36;
+        rough = 0.54;
+        metal = 0.45;
+      }
+
+      // Corner armor rivets on substantive armor plates
+      if (w >= 24 && h >= 24) {
+        const rOff = seamDist + 3;
+        const rRad = minDim >= 48 ? 2.2 : 1.5;
+        const corners = [
+          [rOff, rOff],
+          [w - 1 - rOff, rOff],
+          [rOff, h - 1 - rOff],
+          [w - 1 - rOff, h - 1 - rOff],
+        ];
+        for (const [rx, ry] of corners) {
+          const d = Math.hypot(lx - rx, ly - ry);
+          if (d <= rRad) {
+            const dome = 1 - (d / rRad) * (d / rRad);
+            const rivetBase = recipe === 'brushed_gold' ? silverTrim : brassAccent;
+            rgb = shadeHueShiftRgb(mixRgb(baseRgb, rivetBase, 0.6), 0.18 * dome);
+            heightVal = 0.72 + dome * 0.22;
+            rough = 0.20;
+            metal = 0.92;
+            break;
+          }
+        }
       }
 
       if (
         recipe === 'rarity_armor' &&
         (rarityTier === 'rare' || rarityTier === 'epic' || rarityTier === 'legendary') &&
-        w >= 14 &&
-        h >= 14
+        w >= 16 &&
+        h >= 16
       ) {
         const cx = Math.floor(w * 0.5);
         const cy = Math.floor(h * 0.5);
+        const sigilSpan = Math.max(2, Math.min(5, Math.floor(minDim * 0.12)));
         const manhattan = Math.abs(lx - cx) + Math.abs(ly - cy);
-        if (manhattan <= 1) {
-          emissiveRgb = mixRgb(accentRgb, [242, 240, 224], 0.3);
+        if (manhattan <= sigilSpan) {
+          const core = manhattan <= Math.max(1, sigilSpan - 2);
+          emissiveRgb = core
+            ? mixRgb(accentRgb, [246, 244, 232], 0.45)
+            : mixRgb(accentRgb, [224, 232, 244], 0.2);
           rgb = emissiveRgb;
-          heightVal = 0.82;
+          heightVal = 0.88;
+          rough = 0.18;
         }
       }
-      return { rgb, height: heightVal, emissiveRgb };
+      return {
+        rgb,
+        height: heightVal,
+        roughness: clamp01(rough),
+        metalness: clamp01(metal),
+        emissiveRgb,
+      };
     }
 
     case 'stitched_leather':
     case 'woven_cloth': {
-      // Color Blocking + Vertical Gradient + subtle Painted Folds (soft diagonal/curved crease) + 1-2 texel seam/border linework
-      const warmShadow: [number, number, number] = [52, 30, 24];
+      // Multi-stop Stylized Gradient + Directional Painted Fabric Folds (Dress_Base_color) + Crisp 1-2px Seams
+      const isCloth = recipe === 'woven_cloth';
+      const warmShadow: [number, number, number] = isCloth ? [42, 30, 44] : [54, 30, 22];
       const bottomOcc = v < 0.32 ? (0.32 - v) / 0.32 : 0;
-      const foldCurve = Math.sin((lx * 0.42 + ly * 0.24) * 0.55 + Math.cos(ly * 0.18) * 1.35);
-      const paintedFold = foldCurve * (recipe === 'woven_cloth' ? 0.065 : 0.042);
 
-      const isStitch =
-        (lx === 1 || lx === w - 2 || ly === 1 || ly === h - 2) &&
-        ((lx + ly) % 2 === 0) &&
-        w >= 10 &&
-        h >= 10;
-      const isHemTrim = (ly === 0 || ly === h - 1 || lx === 0 || lx === w - 1) && w >= 10 && h >= 10;
-      if (isStitch) {
-        const stitchCol = recipe === 'stitched_leather' ? mixRgb(accentRgb, brassAccent, 0.35) : mixRgb(accentRgb, silverTrim, 0.3);
-        return { rgb: shadeHueShiftRgb(stitchCol, 0.12), height: 0.74 };
-      }
+      // Smooth directional catenary folds (zero speckled noise)
+      const foldPhase = (u * 3.6 + v * 1.15 + Math.sin(v * 3.8 + u * 1.2) * 0.35) * Math.PI;
+      const foldWave = Math.sin(foldPhase) * 0.72 + Math.sin((u * 6.4 - v * 2.0) * Math.PI) * 0.28;
+      const foldAmp = isCloth ? 0.14 : 0.065;
+      const softGrain = isCloth ? 0 : (smoothNoise2d(u * 5.0, v * 5.0, seed + 61) - 0.5) * 0.05;
+      const paintedFold = foldWave * foldAmp + softGrain;
+
+      const rimW = minDim >= 44 ? 2 : 1;
+      const isHemTrim = onPerimeter && w >= 10 && h >= 10;
+      const stitchInset = rimW + 2;
+      const onStitchLine =
+        w >= 14 &&
+        h >= 14 &&
+        (lx === stitchInset ||
+          lx === w - 1 - stitchInset ||
+          ly === stitchInset ||
+          ly === h - 1 - stitchInset);
+      const isStitchDash = onStitchLine && ((lx + ly) % 4 < 2);
+      const isDarkSeam =
+        w >= 16 &&
+        h >= 16 &&
+        !isHemTrim &&
+        (lx === rimW || lx === w - 1 - rimW || ly === rimW || ly === h - 1 - rimW);
+
       if (isHemTrim) {
-        const hemCol = recipe === 'woven_cloth' ? mixRgb(accentRgb, crimsonAccent, 0.25) : accentRgb;
-        return { rgb: shadeHueShiftRgb(hemCol, -0.06), height: 0.72 };
+        const hemCol = isCloth ? mixRgb(accentRgb, crimsonAccent, 0.22) : shadeHueShiftRgb(accentRgb, -0.14);
+        return {
+          rgb: shadeHueShiftRgb(hemCol, gradU + (v - 0.5) * 0.12),
+          height: 0.72,
+          roughness: isCloth ? 0.68 : 0.62,
+          metalness: 0.0,
+        };
       }
-      let rgb = shadeHueShiftRgb(baseRgb, paintedFold + gradV * 0.42);
+      if (isDarkSeam) {
+        return {
+          rgb: shadeHueShiftRgb(baseRgb, -0.32),
+          height: 0.40,
+          roughness: 0.86,
+          metalness: 0.0,
+        };
+      }
+      if (isStitchDash) {
+        const stitchCol = isCloth
+          ? mixRgb(accentRgb, silverTrim, 0.32)
+          : mixRgb(accentRgb, brassAccent, 0.42);
+        return {
+          rgb: shadeHueShiftRgb(stitchCol, 0.14),
+          height: 0.78,
+          roughness: isCloth ? 0.62 : 0.55,
+          metalness: 0.0,
+        };
+      }
+
+      // Corner brass rivets on leather panels
+      if (!isCloth && w >= 24 && h >= 24) {
+        const rOff = stitchInset + 3;
+        const rRad = minDim >= 48 ? 2.0 : 1.4;
+        const corners = [
+          [rOff, rOff],
+          [w - 1 - rOff, rOff],
+          [rOff, h - 1 - rOff],
+          [w - 1 - rOff, h - 1 - rOff],
+        ];
+        for (const [rx, ry] of corners) {
+          const d = Math.hypot(lx - rx, ly - ry);
+          if (d <= rRad) {
+            const dome = 1 - (d / rRad) * (d / rRad);
+            return {
+              rgb: shadeHueShiftRgb(brassAccent, 0.18 * dome),
+              height: 0.76 + dome * 0.20,
+              roughness: 0.26,
+              metalness: 0.88,
+            };
+          }
+        }
+      }
+
+      let rgb = shadeHueShiftRgb(baseRgb, paintedFold + gradV * 0.44 + gradU);
       if (bottomOcc > 0) {
-        rgb = mixRgb(rgb, warmShadow, bottomOcc * 0.24);
+        rgb = mixRgb(rgb, warmShadow, bottomOcc * 0.25);
       }
-      return { rgb, height: 0.62 + paintedFold * 0.28 };
+      return {
+        rgb,
+        height: 0.58 + paintedFold * 0.85,
+        roughness: clamp01((isCloth ? 0.82 : 0.58) - foldWave * 0.06),
+        metalness: 0.0,
+      };
     }
 
     case 'human_skin':
     case 'goblin_skin':
     case 'orc_hide':
     case 'demon_hide': {
-      // Clean Color Blocking + Vertical Gradient (brighter top, warm-tinted occlusion at bottom) without high-frequency noise
-      const warmShadow: [number, number, number] = [58, 30, 24];
-      const bottomOcc = v < 0.34 ? (0.34 - v) / 0.34 : 0;
-      const softTone = (smoothNoise2d(lx * 0.08, ly * 0.08, seed + 93) - 0.5) * 0.08;
-      const ridge =
+      // Reverse-engineered Reze Anime/Stylized Skin: zero speckled noise, warm coral/peach shadows, desaturated cool highlights
+      const subsurface = (smoothNoise2d(u * 2.4, v * 2.4, seed + 93) - 0.5) * 0.10;
+      const radialWarmth = Math.exp(-((u - 0.5) * (u - 0.5) + (v - 0.55) * (v - 0.55)) * 3.2) * 0.08;
+      const contour =
         recipe === 'demon_hide' || recipe === 'orc_hide'
-          ? Math.abs(Math.sin(lx * 0.32 + ly * 0.28)) * 0.07
+          ? Math.sin((u * 2.6 + v * 0.6) * Math.PI) * 0.075
           : 0;
-      let rgb = shadeHueShiftRgb(baseRgb, softTone + ridge + gradV * 0.55);
-      if (bottomOcc > 0) {
-        rgb = mixRgb(rgb, warmShadow, bottomOcc * 0.26);
+      const delta = subsurface + radialWarmth + contour + gradV * 0.65 + gradU;
+      const warmTarget: [number, number, number] =
+        recipe === 'human_skin'
+          ? [212, 116, 120]
+          : recipe === 'goblin_skin'
+            ? [76, 98, 52]
+            : recipe === 'orc_hide'
+              ? [84, 86, 48]
+              : [128, 46, 48];
+      let rgb = shadeWarmSkinRgb(baseRgb, delta, warmTarget);
+      if (v < 0.34) {
+        const occ = (0.34 - v) / 0.34;
+        rgb = mixRgb(rgb, warmTarget, occ * 0.24);
       }
       return {
         rgb,
-        height: 0.66 + softTone * 0.25 + ridge,
+        height: 0.62 + subsurface * 0.25 + radialWarmth * 0.4 + contour * 0.5,
+        roughness: clamp01(0.60 - radialWarmth * 0.6 - gradV * 0.12),
+        metalness: 0.0,
       };
     }
 
     case 'dragon_scales': {
-      // Overlapping diamond/hexagonal scale pattern with ridge highlights
-      const row = Math.floor(ly * 0.45);
-      const col = Math.floor((lx + (row % 2) * 1.1) * 0.45);
-      const fx = (lx + (row % 2) * 1.1) * 0.45 - col - 0.5;
-      const fy = ly * 0.45 - row - 0.5;
-      const dist = Math.hypot(fx, fy);
-      const scaleDome = Math.max(0, 1 - dist * 1.35);
-      const jitter = (hash2d(col, row, seed + 211) - 0.5) * 0.14;
+      // Imbricated overlapping teardrop/shield scale heightfield (Black Dragon Dragon_Nor.jpg regime)
+      const scaleW = Math.max(5, Math.min(14, Math.round(minDim / 6.5)));
+      const scaleH = Math.max(5, Math.round(scaleW * 1.12));
+      const baseRow = Math.floor(ly / scaleH);
+
+      let bestHeight = 0;
+      let bestR2 = 1.0;
+      let bestDx = 0;
+      let bestId = 0.5;
+      let bestRowBias = -1;
+
+      // Evaluate current row and upper overlapping row (flipY=false => higher row overlaps lower)
+      for (let rOff = 0; rOff <= 1; rOff++) {
+        const row = baseRow + rOff;
+        const stag = (row % 2) * scaleW * 0.5;
+        const baseCol = Math.floor((lx + stag) / scaleW);
+        for (let cOff = -1; cOff <= 1; cOff++) {
+          const col = baseCol + cOff;
+          const cx = col * scaleW + scaleW * 0.5 - stag;
+          const cy = row * scaleH + scaleH * 0.5;
+          const dx = (lx - cx) / (scaleW * 0.58);
+          const dy = (ly - cy) / (scaleH * 0.64);
+          // Pointed teardrop shield profile (narrower toward bottom overlap tip, fuller at base)
+          const yScale = dy < 0 ? 0.85 : 1.32;
+          const r2 = dx * dx * 1.15 + (dy - 0.06) * (dy - 0.06) * yScale;
+          if (r2 < 1.0) {
+            const keel = Math.max(0, 1 - Math.abs(dx) * 3.1) * 0.22 * (1 - r2);
+            const dome = Math.pow(1 - r2, 0.72) * 0.78 + keel;
+            if (row > bestRowBias || (row === bestRowBias && dome > bestHeight)) {
+              bestRowBias = row;
+              bestHeight = dome;
+              bestR2 = r2;
+              bestDx = dx;
+              bestId = hash2d(col, row, seed + 211);
+            }
+          }
+        }
+      }
+
+      const lipCrevice = smoothstep(0.68, 1.0, bestR2);
+      const keelCatch = Math.max(0, 1 - Math.abs(bestDx) * 3.5) * (1 - lipCrevice) * 0.16;
+      const jitter = (bestId - 0.5) * 0.14;
+      const toneDelta = (bestHeight - 0.42) * 0.36 + keelCatch - lipCrevice * 0.28 + jitter + gradV * 0.48 + gradU;
+
       return {
-        rgb: shadeHueShiftRgb(baseRgb, (scaleDome - 0.35) * 0.28 + jitter + gradV * 0.55),
-        height: 0.45 + scaleDome * 0.45 + jitter * 0.3,
+        rgb: shadeHueShiftRgb(baseRgb, toneDelta),
+        height: 0.22 + bestHeight * 0.72,
+        roughness: clamp01(0.36 + lipCrevice * 0.34 - keelCatch * 0.3),
+        metalness: 0.06,
       };
     }
 
     case 'wing_membrane': {
-      // Translucent-feeling leathery membrane with subtle radial veins
-      const vein = Math.pow(Math.max(0, 1 - Math.abs(Math.sin(lx * 0.22 + smoothNoise2d(lx * 0.15, ly * 0.15, seed + 307) * 2.2)) * 4.5), 2);
-      const grain = (smoothNoise2d(lx * 0.35, ly * 0.35, seed + 311) - 0.5) * 0.14;
-      const memRgb = mixRgb(baseRgb, accentRgb, vein * 0.32);
+      // Translucent-feeling veined patagium with subsurface center warmth + raised vascular ribs
+      const warp = (smoothNoise2d(u * 3.8, v * 3.8, seed + 307) - 0.5) * 0.42;
+      const ribA = Math.abs(Math.sin((u * 3.6 + v * 0.7 + warp) * Math.PI));
+      const ribB = Math.abs(Math.sin((v * 4.2 - u * 0.5 - warp * 0.8) * Math.PI));
+      const veinDist = Math.min(ribA, ribB * 1.15);
+      const vein = Math.pow(Math.max(0, 1 - veinDist * 4.8), 2.0);
+      const centerGlow = Math.exp(-((u - 0.5) * (u - 0.5) + (v - 0.5) * (v - 0.5)) * 3.2);
+      const leatherRipple = (smoothNoise2d(u * 9.0, v * 9.0, seed + 311) - 0.5) * 0.08;
+
+      const translucentCore = mixRgb(baseRgb, accentRgb, centerGlow * 0.32);
+      const webbed = mixRgb(translucentCore, shadeHueShiftRgb(accentRgb, -0.18), vein * 0.45);
       return {
-        rgb: shadeHueShiftRgb(memRgb, grain - vein * 0.12 + gradV * 0.35),
-        height: 0.38 + vein * 0.22 + grain * 0.2,
+        rgb: shadeHueShiftRgb(webbed, centerGlow * 0.16 + leatherRipple - vein * 0.08 + gradV * 0.32 + gradU),
+        height: 0.40 + vein * 0.34 + leatherRipple * 0.3,
+        roughness: clamp01(0.44 + vein * 0.18 - centerGlow * 0.08),
+        metalness: 0.0,
       };
     }
 
     case 'muscle_hide': {
-      // Striated muscular fibers with organic pore variation
-      const fiber = Math.sin(lx * 0.65 + smoothNoise2d(lx * 0.2, ly * 0.2, seed + 401) * 2.0) * 0.12;
-      const pore = (smoothNoise2d(lx * 0.4, ly * 0.4, seed + 409) - 0.5) * 0.16;
+      // Smooth anatomical muscle bundle striations with warm subsurface shadow shift
+      const warp = smoothNoise2d(u * 2.8, v * 2.8, seed + 401) * 1.4;
+      const fiber = Math.sin((u * 4.8 + v * 0.6 + warp) * Math.PI);
+      const secondary = Math.sin((v * 7.5 - u * 1.2) * Math.PI) * 0.25;
+      const bundle = fiber * 0.78 + secondary * 0.22;
       return {
-        rgb: shadeHueShiftRgb(baseRgb, fiber + pore + gradV * 0.5),
-        height: 0.58 + fiber * 0.4 + pore * 0.25,
+        rgb: shadeWarmSkinRgb(baseRgb, bundle * 0.18 + gradV * 0.48 + gradU, [126, 52, 54]),
+        height: 0.52 + bundle * 0.28,
+        roughness: clamp01(0.48 - bundle * 0.08),
+        metalness: 0.0,
       };
     }
 
     case 'magma_obsidian': {
-      const crackVal = Math.abs(smoothNoise2d(lx * 0.26, ly * 0.26, seed + 111) - 0.5);
-      const isCrack = crackVal < 0.065;
+      const crackVal = Math.abs(smoothNoise2d(u * 5.2, v * 5.2, seed + 111) - 0.5);
+      const isCrack = crackVal < 0.055;
       if (isCrack) {
-        const glow = mixRgb(accentRgb, [252, 204, 108], 0.35);
-        return { rgb: glow, height: 0.25, emissiveRgb: glow };
+        const heat = 1 - crackVal / 0.055;
+        const glow = mixRgb(accentRgb, [252, 212, 118], 0.25 + heat * 0.45);
+        return { rgb: glow, height: 0.22, roughness: 0.82, metalness: 0.0, emissiveRgb: glow };
       }
-      const chip = (hash2d(Math.floor(lx / 2), Math.floor(ly / 2), seed) - 0.5) * 0.18;
-      return { rgb: shadeHueShiftRgb(baseRgb, chip + gradV * 0.45), height: 0.78 };
+      const facet = smoothNoise2d(u * 8.0, v * 8.0, seed) - 0.5;
+      return {
+        rgb: shadeHueShiftRgb(baseRgb, facet * 0.20 + gradV * 0.45 + gradU),
+        height: 0.78 + facet * 0.14,
+        roughness: clamp01(0.32 - facet * 0.10),
+        metalness: 0.12,
+      };
     }
 
     case 'runic_glow': {
-      const border = onPerimeter && w >= 4 && h >= 4;
-      const glyph = ((lx ^ ly) % 3 === 0) && w >= 5 && h >= 5;
+      const border = onPerimeter && w >= 6 && h >= 6;
+      const glyph = ((Math.floor(u * 6) ^ Math.floor(v * 6)) % 3 === 0) && w >= 8 && h >= 8;
+      const pulse = Math.exp(-((u - 0.5) * (u - 0.5) + (v - 0.5) * (v - 0.5)) * 2.5) * 0.22;
       const rgb = border
-        ? shadeHueShiftRgb(accentRgb, 0.25)
+        ? shadeHueShiftRgb(accentRgb, 0.22 + gradU)
         : glyph
-          ? mixRgb(baseRgb, [242, 240, 232], 0.45)
-          : shadeHueShiftRgb(baseRgb, gradV * 0.4);
-      return { rgb, height: glyph ? 0.9 : 0.65, emissiveRgb: rgb };
+          ? mixRgb(baseRgb, [242, 240, 232], 0.42)
+          : shadeHueShiftRgb(baseRgb, pulse + gradV * 0.38 + gradU);
+      return {
+        rgb,
+        height: glyph ? 0.90 : 0.64,
+        roughness: 0.28,
+        metalness: 0.15,
+        emissiveRgb: rgb,
+      };
     }
 
     case 'bone_ivory': {
-      const striation = Math.sin(ly * 0.7 + hash2d(lx, 0, seed) * 2) * 0.08;
+      const striation = Math.sin(u * Math.PI * 6.0 + smoothNoise2d(u * 3.0, v * 2.0, seed) * 1.8) * 0.07;
+      const age = (smoothNoise2d(u * 4.0, v * 4.0, seed + 17) - 0.5) * 0.08;
       return {
-        rgb: shadeHueShiftRgb(baseRgb, striation + gradV * 0.6),
-        height: 0.72 + striation * 0.5,
+        rgb: shadeHueShiftRgb(baseRgb, striation + age + gradV * 0.55 + gradU),
+        height: 0.70 + striation * 0.45,
+        roughness: clamp01(0.54 - gradV * 0.10),
+        metalness: 0.0,
       };
     }
 
     case 'foliage_leaf': {
-      const cluster = smoothNoise2d(lx * 0.35, ly * 0.35, seed + 21);
-      const leaf = (hash2d(Math.floor(lx / 2), Math.floor(ly / 2), seed + 5) - 0.5) * 0.25;
+      // Jabami-inspired sculpted two-tier leaf lobe clusters (opaque for 3D canopies)
+      const lobe1 = smoothNoise2d(u * 5.8, v * 5.8, seed + 21);
+      const lobe2 = smoothNoise2d(u * 11.5, v * 11.5, seed + 47);
+      const cluster = lobe1 * 0.72 + lobe2 * 0.28;
+      const tierBlend = smoothstep(0.35, 0.75, cluster + (v - 0.5) * 0.25);
+      const shadedTier = shadeHueShiftRgb(baseRgb, -0.20 + gradU);
+      const sunlitTier = mixRgb(shadeHueShiftRgb(baseRgb, 0.20), accentRgb, 0.35);
       return {
-        rgb: shadeHueShiftRgb(baseRgb, (cluster - 0.45) * 0.35 + leaf + gradV * 0.65),
-        height: 0.55 + cluster * 0.35,
+        rgb: mixRgb(shadedTier, sunlitTier, tierBlend),
+        height: 0.40 + cluster * 0.52,
+        roughness: clamp01(0.72 - tierBlend * 0.14),
+        metalness: 0.0,
       };
     }
 
     case 'water_pool': {
-      const ripple = Math.sin(lx * 0.7 + ly * 0.7) * 0.12 + (smoothNoise2d(lx * 0.25, ly * 0.25, seed) - 0.5) * 0.2;
-      const foam = ripple > 0.14;
+      const ripple =
+        Math.sin((u * 4.5 + v * 4.5) * Math.PI) * 0.10 +
+        (smoothNoise2d(u * 6.0, v * 6.0, seed) - 0.5) * 0.18;
+      const foam = ripple > 0.13;
       return {
-        rgb: foam ? mixRgb(baseRgb, [224, 242, 248], 0.55) : shadeHueShiftRgb(baseRgb, ripple),
+        rgb: foam
+          ? mixRgb(baseRgb, [226, 244, 250], 0.55)
+          : shadeHueShiftRgb(baseRgb, ripple + gradU),
         height: 0.5 + ripple * 0.3,
+        roughness: foam ? 0.52 : 0.16,
+        metalness: 0.05,
       };
     }
   }
@@ -754,7 +1117,8 @@ function applySemanticLandmark(
   heightField: Float32Array,
   albedoRgba: Uint8Array,
   emissionRgba: Uint8Array,
-  opts: SynthMaterialOptions
+  opts: SynthMaterialOptions,
+  roughnessField?: Float32Array
 ): boolean {
   if (isl.landmarkKind === 'none') return false;
   const { x: x0, y: y0, w, h } = isl.pxBounds;
@@ -766,17 +1130,21 @@ function applySemanticLandmark(
     ly: number,
     rgb: [number, number, number],
     heightVal: number,
-    emitRgb?: [number, number, number]
+    emitRgb?: [number, number, number],
+    roughnessVal?: number
   ) => {
     if (lx < 0 || ly < 0 || lx >= w || ly >= h) return;
     const gx = x0 + lx;
     const gy = y0 + ly;
     const idx = gy * width + gx;
     const o4 = idx * 4;
-    albedoRgba[o4 + 0] = Math.max(12, Math.min(245, rgb[0]));
-    albedoRgba[o4 + 1] = Math.max(12, Math.min(245, rgb[1]));
-    albedoRgba[o4 + 2] = Math.max(12, Math.min(245, rgb[2]));
+    albedoRgba[o4 + 0] = clampByte(rgb[0], 14, 246);
+    albedoRgba[o4 + 1] = clampByte(rgb[1], 14, 246);
+    albedoRgba[o4 + 2] = clampByte(rgb[2], 14, 246);
     heightField[idx] = heightVal;
+    if (roughnessField && roughnessVal !== undefined) {
+      roughnessField[idx] = clamp01(roughnessVal);
+    }
     if (emitRgb) {
       emissionRgba[o4 + 0] = emitRgb[0];
       emissionRgba[o4 + 1] = emitRgb[1];
@@ -786,14 +1154,164 @@ function applySemanticLandmark(
     }
   };
 
+  const blendPx = (
+    lx: number,
+    ly: number,
+    rgb: [number, number, number],
+    alpha: number,
+    heightVal?: number,
+    emitRgb?: [number, number, number],
+    roughnessVal?: number
+  ) => {
+    if (lx < 0 || ly < 0 || lx >= w || ly >= h || alpha <= 0.005) return;
+    const a = clamp01(alpha);
+    const gx = x0 + lx;
+    const gy = y0 + ly;
+    const idx = gy * width + gx;
+    const o4 = idx * 4;
+    albedoRgba[o4 + 0] = clampByte(albedoRgba[o4 + 0] * (1 - a) + rgb[0] * a, 14, 246);
+    albedoRgba[o4 + 1] = clampByte(albedoRgba[o4 + 1] * (1 - a) + rgb[1] * a, 14, 246);
+    albedoRgba[o4 + 2] = clampByte(albedoRgba[o4 + 2] * (1 - a) + rgb[2] * a, 14, 246);
+    if (heightVal !== undefined) {
+      heightField[idx] = heightField[idx] * (1 - a) + heightVal * a;
+    }
+    if (roughnessField && roughnessVal !== undefined) {
+      roughnessField[idx] = clamp01(roughnessField[idx] * (1 - a) + roughnessVal * a);
+    }
+    if (emitRgb) {
+      emissionRgba[o4 + 0] = Math.round(emissionRgba[o4 + 0] * (1 - a) + emitRgb[0] * a);
+      emissionRgba[o4 + 1] = Math.round(emissionRgba[o4 + 1] * (1 - a) + emitRgb[1] * a);
+      emissionRgba[o4 + 2] = Math.round(emissionRgba[o4 + 2] * (1 - a) + emitRgb[2] * a);
+      emissionRgba[o4 + 3] = 255;
+      wroteEmission = true;
+    }
+  };
+
   if (isl.landmarkKind === 'head_front') {
-    const sclera: [number, number, number] = [232, 238, 244];
+    const sclera: [number, number, number] = [238, 241, 246];
+    const scleraShadow: [number, number, number] = [204, 206, 222];
     const irisRgb = hexToRgb255(opts.eyeHex ?? '#2c68b8');
     const glowRgb = opts.eyeGlowHex ? hexToRgb255(opts.eyeGlowHex) : undefined;
-    const browRgb = hexToRgb255(opts.browHex ?? '#352620');
+    const browRgb = hexToRgb255(opts.browHex ?? '#2b2024');
     const skinBase = hexToRgb255(isl.baseHex);
+    const blushCol: [number, number, number] = [244, 143, 158]; // #f48f9e from Reze body1
 
-    // Symmetry eyes positioned nicely in upper-mid face (v ~ 0.45..0.60)
+    if (w >= 24 && h >= 24) {
+      const cx = (w - 1) * 0.5;
+      const eyeY = h * 0.50;
+      const eyeOffX = w * 0.22;
+      const eyeRx = Math.max(2.4, w * 0.115);
+      const eyeRy = Math.max(1.8, h * 0.085);
+
+      // 1. Soft peach/coral cheek blush & subsurface nose warmth
+      const blushY = h * 0.35;
+      const blushOffX = w * 0.26;
+      const blushRx = Math.max(2.0, w * 0.14);
+      const blushRy = Math.max(1.5, h * 0.085);
+      for (let ly = Math.max(0, Math.floor(blushY - blushRy * 2)); ly <= Math.min(h - 1, Math.ceil(blushY + blushRy * 2)); ly++) {
+        for (let lx = 0; lx < w; lx++) {
+          for (const side of [-1, 1]) {
+            const dx = (lx - (cx + side * blushOffX)) / blushRx;
+            const dy = (ly - blushY) / blushRy;
+            const d2 = dx * dx + dy * dy;
+            if (d2 < 2.2) {
+              const weight = Math.exp(-d2 * 1.45) * 0.26;
+              blendPx(lx, ly, blushCol, weight);
+            }
+          }
+        }
+      }
+
+      // 2. Crisp stylized anime eyes (upper lash arc, shaded sclera, layered iris, pupil, specular catchlight)
+      const pupilCol: [number, number, number] = [26, 20, 32];
+      const upperIris = shadeHueShiftRgb(irisRgb, -0.28);
+      const lowerIris = mixRgb(irisRgb, [232, 242, 252], 0.34);
+
+      for (const side of [-1, 1]) {
+        const ex = cx + side * eyeOffX;
+        const xMin = Math.max(0, Math.floor(ex - eyeRx - 3));
+        const xMax = Math.min(w - 1, Math.ceil(ex + eyeRx + 3));
+        const yMin = Math.max(0, Math.floor(eyeY - eyeRy - 2));
+        const yMax = Math.min(h - 1, Math.ceil(eyeY + eyeRy * 2.5 + 3));
+
+        for (let ly = yMin; ly <= yMax; ly++) {
+          for (let lx = xMin; lx <= xMax; lx++) {
+            const dx = lx - ex;
+            const dy = ly - eyeY;
+            const nx = dx / eyeRx;
+            const ny = dy / eyeRy;
+            const eyeDist = Math.hypot(nx, ny);
+
+            // Sclera & iris inside almond eye mask
+            if (eyeDist <= 1.05) {
+              const maskAlpha = 1 - smoothstep(0.86, 1.05, eyeDist);
+              const ix = (dx + side * eyeRx * 0.06) / (eyeRx * 0.56);
+              const iy = dy / (eyeRy * 0.88);
+              const irisDist = Math.hypot(ix, iy);
+
+              let col = ny > 0.25 ? mixRgb(sclera, scleraShadow, (ny - 0.25) * 0.9) : sclera;
+              let emit: [number, number, number] | undefined;
+
+              if (glowRgb) {
+                col = irisDist < 0.45 ? mixRgb(glowRgb, [246, 244, 228], 0.45) : glowRgb;
+                emit = col;
+              } else if (irisDist <= 1.0) {
+                const vIris = clamp01(0.5 + iy * 0.5);
+                col = vIris > 0.55 ? mixRgb(irisRgb, upperIris, (vIris - 0.55) / 0.45) : mixRgb(lowerIris, irisRgb, vIris / 0.55);
+                if (irisDist < 0.42) {
+                  col = mixRgb(col, pupilCol, 1 - smoothstep(0.28, 0.42, irisDist));
+                }
+                // Crisp specular catchlight in upper-left of iris
+                const specD = Math.hypot(ix + 0.28, iy - 0.34);
+                if (specD < 0.28) {
+                  col = mixRgb(col, [248, 248, 252], 1 - smoothstep(0.12, 0.28, specD));
+                }
+              }
+
+              blendPx(lx, ly, col, maskAlpha, glowRgb ? 0.86 : 0.42, emit, 0.16);
+            }
+
+            // Crisp painted upper eyeliner / lash line
+            const archY = eyeY + eyeRy * (0.85 - 0.65 * Math.min(1.3, nx * nx));
+            const lashThick = Math.max(0.9, eyeRy * 0.28);
+            if (Math.abs(nx) <= 1.18 && Math.abs(ly - archY) <= lashThick) {
+              const lashAlpha = (1 - smoothstep(lashThick * 0.45, lashThick, Math.abs(ly - archY))) * (1 - smoothstep(0.95, 1.18, Math.abs(nx)));
+              blendPx(lx, ly, browRgb, lashAlpha * 0.92, 0.72, undefined, 0.48);
+            }
+
+            // Expressive tapered eyebrow arc
+            const bx = dx / (eyeRx * 1.15);
+            const browCenterY = eyeY + eyeRy * 1.68 + (1 - Math.min(1, bx * bx)) * eyeRy * 0.42;
+            const browThick = Math.max(0.85, eyeRy * 0.24);
+            if (Math.abs(bx) <= 1.05 && Math.abs(ly - browCenterY) <= browThick) {
+              const browAlpha = (1 - smoothstep(browThick * 0.4, browThick, Math.abs(ly - browCenterY))) * (1 - smoothstep(0.75, 1.05, Math.abs(bx)));
+              blendPx(lx, ly, browRgb, browAlpha * 0.88, 0.78, undefined, 0.62);
+            }
+          }
+        }
+      }
+
+      // 3. Nose shadow wedge + soft coral-peach lip accent
+      const noseY = Math.round(h * 0.36);
+      const noseShadow = shadeWarmSkinRgb(skinBase, -0.32, [202, 108, 112]);
+      const noseHi = shadeWarmSkinRgb(skinBase, 0.28);
+      for (let dx = -1; dx <= 1; dx++) {
+        blendPx(Math.round(cx) + dx, noseY, noseShadow, dx === 0 ? 0.55 : 0.28, 0.78);
+        if (dx === 0) blendPx(Math.round(cx), noseY + 1, noseHi, 0.45, 0.82);
+      }
+
+      const mouthY = Math.max(2, Math.round(h * 0.22));
+      const mouthHalf = Math.max(2, Math.round(w * 0.08));
+      const lipCol = mixRgb(skinBase, [206, 98, 108], 0.62);
+      for (let dx = -mouthHalf; dx <= mouthHalf; dx++) {
+        const taper = 1 - Math.abs(dx) / (mouthHalf + 1);
+        blendPx(Math.round(cx) + dx, mouthY, lipCol, 0.78 * taper, 0.48, undefined, 0.40);
+        blendPx(Math.round(cx) + dx, mouthY - 1, shadeWarmSkinRgb(skinBase, -0.20), 0.35 * taper, 0.45);
+      }
+      return wroteEmission;
+    }
+
+    // Compact island (< 24px) crisp pixel-art eye fallback
     const eyeY = Math.round(h * 0.48);
     const eyeOffset = Math.max(2, Math.round(w * 0.22));
     const cx = Math.floor(w * 0.5);
@@ -805,7 +1323,7 @@ function applySemanticLandmark(
       for (let dy = 0; dy < eyeHeight; dy++) {
         for (let dx = 0; dx < eyeSpan; dx++) {
           const isPupil =
-            eyeSpan >= 3 ? dx === (side < 0 ? 1 : 1) : dx === (side < 0 ? 1 : 0);
+            eyeSpan >= 3 ? dx === 1 : dx === (side < 0 ? 1 : 0);
           const isGlint = dy === eyeHeight - 1 && dx === 0 && eyeSpan >= 2 && !glowRgb;
           const col = glowRgb
             ? isPupil
@@ -816,24 +1334,22 @@ function applySemanticLandmark(
               : isPupil
                 ? irisRgb
                 : sclera;
-          setPx(exStart + dx, eyeY + dy, col, glowRgb ? 0.85 : 0.42, glowRgb);
+          setPx(exStart + dx, eyeY + dy, col, glowRgb ? 0.85 : 0.42, glowRgb, 0.18);
         }
       }
-      // Expressive eyebrow 1-2px above eye
       const browY = Math.min(h - 2, eyeY + eyeHeight + 1);
       for (let dx = -1; dx <= eyeSpan; dx++) {
         setPx(exStart + dx, browY, browRgb, 0.82);
       }
     }
 
-    // Subtle nose / cheek blush & mouth / chin anchor (flipY=false -> smaller y is chin!)
     const mouthY = Math.max(1, Math.round(h * 0.22));
     const noseY = Math.round((eyeY + mouthY) * 0.5);
-    setPx(cx, noseY, shadeHueShiftRgb(skinBase, -0.18), 0.78);
+    setPx(cx, noseY, shadeWarmSkinRgb(skinBase, -0.22), 0.78);
     if (w >= 14) {
-      setPx(cx - 1, mouthY, shadeHueShiftRgb(skinBase, -0.28), 0.45);
-      setPx(cx, mouthY, shadeHueShiftRgb(skinBase, -0.28), 0.45);
-      setPx(cx + 1, mouthY, shadeHueShiftRgb(skinBase, -0.28), 0.45);
+      setPx(cx - 1, mouthY, shadeWarmSkinRgb(skinBase, -0.30), 0.45);
+      setPx(cx, mouthY, shadeWarmSkinRgb(skinBase, -0.30), 0.45);
+      setPx(cx + 1, mouthY, shadeWarmSkinRgb(skinBase, -0.30), 0.45);
     }
     return wroteEmission;
   }
@@ -843,16 +1359,18 @@ function applySemanticLandmark(
     const brass = hexToRgb255(opts.emblemHex ?? '#d4a644');
     const strap1 = Math.round(h * 0.28);
     const strap2 = Math.round(h * 0.72);
+    const strapH = h >= 32 ? 2 : 1;
     for (let lx = 0; lx < w; lx++) {
-      setPx(lx, strap1, iron, 0.88);
-      setPx(lx, strap2, iron, 0.88);
+      for (let dy = 0; dy < strapH; dy++) {
+        setPx(lx, strap1 + dy, iron, 0.88, undefined, 0.35);
+        setPx(lx, strap2 + dy, iron, 0.88, undefined, 0.35);
+      }
     }
-    // Chunky brass ring / handle on right edge
     const hx = Math.max(2, Math.round(w * 0.75));
     const hy = Math.round(h * 0.48);
-    setPx(hx, hy, brass, 0.94);
-    setPx(hx, hy - 1, shadeHueShiftRgb(brass, -0.2), 0.9);
-    setPx(hx - 1, hy, shadeHueShiftRgb(brass, 0.2), 0.92);
+    setPx(hx, hy, brass, 0.94, undefined, 0.22);
+    setPx(hx, hy - 1, shadeHueShiftRgb(brass, -0.2), 0.9, undefined, 0.25);
+    setPx(hx - 1, hy, shadeHueShiftRgb(brass, 0.2), 0.92, undefined, 0.22);
     return wroteEmission;
   }
 
@@ -861,7 +1379,7 @@ function applySemanticLandmark(
     const cy = Math.floor(h * 0.54);
     const accent = hexToRgb255(opts.emblemHex ?? isl.accentHex ?? '#d6b45a');
     const runeGlow = opts.emissiveRuneHex ? hexToRgb255(opts.emissiveRuneHex) : undefined;
-    const rad = Math.max(2, Math.min(4, Math.floor(Math.min(w, h) * 0.22)));
+    const rad = Math.max(2, Math.min(8, Math.floor(Math.min(w, h) * 0.22)));
 
     for (let dy = -rad; dy <= rad; dy++) {
       for (let dx = -rad; dx <= rad; dx++) {
@@ -869,7 +1387,7 @@ function applySemanticLandmark(
         if (man > rad) continue;
         const isCore = man <= Math.max(0, rad - 2);
         const col = isCore && runeGlow ? runeGlow : isCore ? shadeHueShiftRgb(accent, 0.25) : accent;
-        setPx(cx + dx, cy + dy, col, 0.92, isCore ? runeGlow : undefined);
+        setPx(cx + dx, cy + dy, col, 0.92, isCore ? runeGlow : undefined, 0.24);
       }
     }
     return wroteEmission;
@@ -883,10 +1401,10 @@ function applySemanticLandmark(
     const cy = Math.floor(h * 0.5);
     const span = Math.max(2, Math.floor(Math.min(w, h) * 0.34));
     for (let k = -span; k <= span; k++) {
-      setPx(cx, cy + k, glow, 0.85, glow);
+      setPx(cx, cy + k, glow, 0.85, glow, 0.2);
       if (Math.abs(k) === Math.floor(span * 0.6)) {
-        setPx(cx - 1, cy + k, glow, 0.85, glow);
-        setPx(cx + 1, cy + k, glow, 0.85, glow);
+        setPx(cx - 1, cy + k, glow, 0.85, glow, 0.2);
+        setPx(cx + 1, cy + k, glow, 0.85, glow, 0.2);
       }
     }
     return wroteEmission;
@@ -991,6 +1509,203 @@ export function measureTextureQuality(
 }
 
 // ---------------------------------------------------------------------------
+// Hi-Fi Smooth GTAO + Curvature Wear + AO / Roughness Map Baking
+// ---------------------------------------------------------------------------
+
+const GTAO_DIR_X = [1, -1, 0, 0, 1, -1, 1, -1];
+const GTAO_DIR_Y = [0, 0, 1, -1, 1, 1, -1, -1];
+const GTAO_DIR_INV_LEN = [1, 1, 1, 1, 0.70710678, 0.70710678, 0.70710678, 0.70710678];
+
+function applyHiFiGtaoWearAndBakeAo(
+  heightField: Float32Array,
+  coverageMask: Uint8Array,
+  texWidth: number,
+  texHeight: number,
+  islands: UvIslandMeta[],
+  albedoRgba: Uint8Array,
+  roughnessField: Float32Array,
+  aoRgba: Uint8Array,
+  options: {
+    gtaoStrength: number;
+    gtaoRadiusPx: number;
+    curvatureStrength: number;
+    verticalGrimeStrength: number;
+    curvatureMap: Float32Array | null;
+    quantStep?: number;
+  }
+): void {
+  const gtaoStrength = clamp01(options.gtaoStrength);
+  const radius = Math.max(1, Math.min(8, Math.round(options.gtaoRadiusPx)));
+  const curveStrength = Math.max(0, Math.min(0.55, options.curvatureStrength));
+  const grimeStrength = Math.max(0, Math.min(0.6, options.verticalGrimeStrength));
+  const curvatureMap = options.curvatureMap;
+  const quantStep = options.quantStep ?? 0;
+
+  let globalYMin = Infinity;
+  let globalYMax = -Infinity;
+  for (const isl of islands) {
+    if (typeof isl.worldYMin === 'number' && Number.isFinite(isl.worldYMin)) {
+      if (isl.worldYMin < globalYMin) globalYMin = isl.worldYMin;
+    }
+    if (typeof isl.worldYMax === 'number' && Number.isFinite(isl.worldYMax)) {
+      if (isl.worldYMax > globalYMax) globalYMax = isl.worldYMax;
+    }
+  }
+  const hasGlobalWorldY = globalYMax > globalYMin + 0.05 && Number.isFinite(globalYMin);
+  const globalYSpan = hasGlobalWorldY ? Math.max(0.1, globalYMax - globalYMin) : 1.0;
+
+  for (const isl of islands) {
+    const x0 = Math.max(0, isl.pxBounds.x);
+    const y0 = Math.max(0, isl.pxBounds.y);
+    const x1 = Math.min(texWidth - 1, isl.pxBounds.x + isl.pxBounds.w - 1);
+    const y1 = Math.min(texHeight - 1, isl.pxBounds.y + isl.pxBounds.h - 1);
+    if (x1 < x0 || y1 < y0) continue;
+
+    const skipHeavyDirt =
+      isl.landmarkKind === 'head_front' ||
+      isl.materialKind === 'human_skin' ||
+      isl.materialKind === 'runic_glow';
+
+    const islH = Math.max(1, y1 - y0 + 1);
+    const islYMin = typeof isl.worldYMin === 'number' ? isl.worldYMin : 0;
+    const islYMax = typeof isl.worldYMax === 'number' ? isl.worldYMax : 1;
+    const avgNormY = typeof isl.avgNormalY === 'number' ? isl.avgNormalY : 0;
+
+    const isMetalOrArmor =
+      isl.materialKind === 'forged_steel' ||
+      isl.materialKind === 'rarity_armor' ||
+      isl.materialKind === 'brushed_gold';
+    const isSkin =
+      isl.materialKind === 'human_skin' || isl.materialKind === 'goblin_skin';
+    const minShade = isSkin ? 0.72 : isMetalOrArmor ? 0.56 : 0.50;
+
+    for (let y = y0; y <= y1; y++) {
+      const vFrac = islH > 1 ? (y - y0) / (islH - 1) : 0.5;
+      let zenithFactor = 0;
+      if (!skipHeavyDirt) {
+        if (hasGlobalWorldY) {
+          const estY = isl.lockVertical
+            ? islYMin + vFrac * (islYMax - islYMin)
+            : (islYMin + islYMax) * 0.5;
+          const yNorm = clamp01((estY - globalYMin) / globalYSpan);
+          zenithFactor =
+            -0.14 * (1 - yNorm) + 0.09 * yNorm + Math.max(-0.04, Math.min(0.05, avgNormY * 0.05));
+        } else if (isl.lockVertical) {
+          zenithFactor = -0.10 * (1 - vFrac) + 0.07 * vFrac;
+        }
+      }
+
+      for (let x = x0; x <= x1; x++) {
+        const idx = y * texWidth + x;
+        if (!coverageMask[idx]) continue;
+
+        const hCenter = heightField[idx];
+        let maxHorizonSum = 0;
+        for (let d = 0; d < 8; d++) {
+          const dx = GTAO_DIR_X[d];
+          const dy = GTAO_DIR_Y[d];
+          const invLen = GTAO_DIR_INV_LEN[d];
+          let bestSlope = 0;
+          for (let step = 1; step <= radius; step++) {
+            const nx = Math.max(x0, Math.min(x1, x + dx * step));
+            const ny = Math.max(y0, Math.min(y1, y + dy * step));
+            const dH = heightField[ny * texWidth + nx] - hCenter;
+            if (dH > 0) {
+              const slope = (dH * 4.0 * invLen) / step;
+              if (slope > bestSlope) bestSlope = slope;
+            }
+          }
+          maxHorizonSum += 1 / Math.sqrt(1 + bestSlope * bestSlope);
+        }
+        const rawAo = maxHorizonSum * 0.125;
+        const ao = 1 - (1 - rawAo) * gtaoStrength;
+
+        const hL = heightField[y * texWidth + Math.max(x0, x - 1)];
+        const hR = heightField[y * texWidth + Math.min(x1, x + 1)];
+        const hD = heightField[Math.max(y0, y - 1) * texWidth + x];
+        const hU = heightField[Math.min(y1, y + 1) * texWidth + x];
+        const curvature2D = (hCenter - 0.25 * (hL + hR + hD + hU)) * 2.8;
+        const curv3D = curvatureMap && idx < curvatureMap.length ? curvatureMap[idx] : 0;
+
+        const curveDelta2D = Math.max(-0.16, Math.min(0.16, curvature2D * curveStrength));
+        const curveDelta3D =
+          curv3D >= 0 ? Math.min(0.18, curv3D * 0.18) : Math.max(-0.18, curv3D * 0.20);
+        const totalCurveDelta = Math.max(-0.22, Math.min(0.22, curveDelta2D + curveDelta3D));
+
+        const o4 = idx * 4;
+        const aoByte = clampByte(ao * (1 + Math.min(0, totalCurveDelta) * 0.5) * 255, 48, 255);
+        aoRgba[o4 + 0] = aoByte;
+        aoRgba[o4 + 1] = aoByte;
+        aoRgba[o4 + 2] = aoByte;
+        aoRgba[o4 + 3] = 255;
+
+        // Subtle roughness cavity & edge-wear modulation
+        roughnessField[idx] = clamp01(
+          roughnessField[idx] + (1 - ao) * 0.14 - Math.max(0, totalCurveDelta) * 0.18
+        );
+
+        let r = albedoRgba[o4 + 0];
+        let g = albedoRgba[o4 + 1];
+        let b = albedoRgba[o4 + 2];
+
+        const shadeFactor = Math.max(
+          minShade,
+          Math.min(1.20, ao + totalCurveDelta + zenithFactor)
+        );
+        if (shadeFactor < 1.0) {
+          const shadowMix = (1 - shadeFactor) * 0.30;
+          if (isSkin) {
+            // Warm peach-coral ambient occlusion for anime/stylized skin
+            r = r * shadeFactor * (1 - shadowMix) + 196 * shadowMix;
+            g = g * shadeFactor * (1 - shadowMix) + 102 * shadowMix;
+            b = b * shadeFactor * (1 - shadowMix) + 106 * shadowMix;
+          } else {
+            r = r * shadeFactor * (1 - shadowMix) + 32 * shadowMix;
+            g = g * shadeFactor * (1 - shadowMix) + 30 * shadowMix;
+            b = b * shadeFactor * (1 - shadowMix) + 48 * shadowMix;
+          }
+        } else if (shadeFactor > 1.0) {
+          const hiMix = Math.min(0.22, (shadeFactor - 1.0) * 1.1);
+          const targetR = isMetalOrArmor ? 232 : isSkin ? 250 : 240;
+          const targetG = isMetalOrArmor ? 236 : isSkin ? 228 : 236;
+          const targetB = isMetalOrArmor ? 244 : isSkin ? 222 : 224;
+          r = r + (targetR - r) * hiMix;
+          g = g + (targetG - g) * hiMix;
+          b = b + (targetB - b) * hiMix;
+        }
+
+        if (isl.lockVertical && !skipHeavyDirt && grimeStrength > 0.01) {
+          const bottomMask = Math.max(0, 1 - vFrac * 2.0);
+          if (bottomMask > 0) {
+            const effGrime = isSkin
+              ? grimeStrength * 0.25
+              : isMetalOrArmor
+                ? grimeStrength * 0.45
+                : grimeStrength * 0.75;
+            const tint = bottomMask * effGrime;
+            if (isl.materialKind === 'mossy_cobble' || isl.materialKind === 'stone_masonry') {
+              r = r * (1 - tint) + 54 * tint;
+              g = g * (1 - tint) + 82 * tint;
+              b = b * (1 - tint) + 44 * tint;
+            } else {
+              r = r * (1 - tint) + 40 * tint;
+              g = g * (1 - tint) + 34 * tint;
+              b = b * (1 - tint) + 44 * tint;
+            }
+          }
+        }
+
+        const q = (val: number) =>
+          quantStep > 0 ? Math.round(val / quantStep) * quantStep : Math.round(val);
+        albedoRgba[o4 + 0] = Math.max(16, Math.min(244, q(r)));
+        albedoRgba[o4 + 1] = Math.max(16, Math.min(244, q(g)));
+        albedoRgba[o4 + 2] = Math.max(16, Math.min(244, q(b)));
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Main Synthesis Entrypoints
 // ---------------------------------------------------------------------------
 
@@ -1004,11 +1719,26 @@ export function synthesizeAtlasTextures(
     const w = unwrapped.texWidth;
     const h = unwrapped.texHeight;
     const count = w * h;
+    const pixelArtSampling = options.pixelArtSampling === true;
+    const dilationPx = Math.max(4, Math.round(options.dilationPx ?? unwrapped.paddingPx ?? 4));
 
     const albedoRgba = new Uint8Array(count * 4);
+    const roughnessRgba = new Uint8Array(count * 4);
+    const aoRgba = new Uint8Array(count * 4);
+    const metalnessRgba = new Uint8Array(count * 4);
     const emissionRgba = new Uint8Array(count * 4);
     const heightField = new Float32Array(count).fill(0.5);
+    const roughnessField = new Float32Array(count).fill(0.65);
+    const metalnessField = new Float32Array(count).fill(0.0);
     const coverageMask = new Uint8Array(count);
+
+    for (let i = 0; i < count; i++) {
+      const o4 = i * 4;
+      aoRgba[o4 + 0] = 255;
+      aoRgba[o4 + 1] = 255;
+      aoRgba[o4 + 2] = 255;
+      aoRgba[o4 + 3] = 255;
+    }
 
     let hasEmission = false;
 
@@ -1042,6 +1772,8 @@ export function synthesizeAtlasTextures(
           );
           if (!sample) continue;
           heightField[idx] = sample.height;
+          roughnessField[idx] = sample.roughness;
+          metalnessField[idx] = sample.metalness;
           const o4 = idx * 4;
           albedoRgba[o4 + 0] = sample.rgb[0];
           albedoRgba[o4 + 1] = sample.rgb[1];
@@ -1058,43 +1790,87 @@ export function synthesizeAtlasTextures(
         }
       }
 
-      if (applySemanticLandmark(isl, w, heightField, albedoRgba, emissionRgba, options)) {
+      if (
+        applySemanticLandmark(
+          isl,
+          w,
+          heightField,
+          albedoRgba,
+          emissionRgba,
+          options,
+          roughnessField
+        )
+      ) {
         hasEmission = true;
       }
     }
 
-    // Apply subtle texel-space Horizon AO + Dihedral Curvature Wear + Zenithal Grime
-    applyHeightGtaoAndWear(heightField, coverageMask, w, h, unwrapped.islands, albedoRgba, {
-      gtaoStrength: options.gtaoStrength ?? 0.28,
-      gtaoRadiusPx: options.gtaoRadiusPx ?? 3,
-      curvatureStrength: 0.08,
-      verticalGrimeStrength: 0.08,
-      curvatureMap: options.curvatureMap ?? null,
-    });
+    // Apply smooth texel-space Horizon AO + Dihedral Curvature Wear + Zenithal Grime + bake AO map
+    applyHiFiGtaoWearAndBakeAo(
+      heightField,
+      coverageMask,
+      w,
+      h,
+      unwrapped.islands,
+      albedoRgba,
+      roughnessField,
+      aoRgba,
+      {
+        gtaoStrength: options.gtaoStrength ?? 0.28,
+        gtaoRadiusPx: options.gtaoRadiusPx ?? (w >= 512 ? 4 : 3),
+        curvatureStrength: 0.08,
+        verticalGrimeStrength: 0.07,
+        curvatureMap: options.curvatureMap ?? null,
+        quantStep: pixelArtSampling ? 6 : 0,
+      }
+    );
 
-    // Compute subtle tangent-space Sobel normals (clamped so Pass 3 ignores flat areas)
+    for (let i = 0; i < count; i++) {
+      if (!coverageMask[i]) continue;
+      const o4 = i * 4;
+      const rByte = clampByte(roughnessField[i] * 255, 16, 250);
+      roughnessRgba[o4 + 0] = rByte;
+      roughnessRgba[o4 + 1] = rByte;
+      roughnessRgba[o4 + 2] = rByte;
+      roughnessRgba[o4 + 3] = 255;
+
+      const mByte = clampByte(metalnessField[i] * 255, 0, 255);
+      metalnessRgba[o4 + 0] = mByte;
+      metalnessRgba[o4 + 1] = mByte;
+      metalnessRgba[o4 + 2] = mByte;
+      metalnessRgba[o4 + 3] = 255;
+    }
+
+    // Compute smooth tangent-space OpenGL Sobel normals calibrated per material recipe
     const normalRgba = computeIslandNormalsFromHeight(
       heightField,
       coverageMask,
       w,
       h,
       unwrapped.islands,
-      options.normalStrength ?? 0.14
+      options.normalStrength ?? 0.42
     );
 
-    // Dilate valid texels across padding gutters via 2-pass Felzenszwalb EDT
+    // Dilate valid texels across >=4px padding gutters & background via 2-pass Felzenszwalb EDT
     dilateAtlasByEdt(
       coverageMask,
       w,
       h,
       albedoRgba,
       normalRgba,
-      hasEmission ? emissionRgba : null
+      hasEmission ? emissionRgba : null,
+      roughnessRgba,
+      aoRgba,
+      metalnessRgba
     );
 
     const quality = measureTextureQuality(albedoRgba, unwrapped.islands, w, h);
 
-    const albedoMap = enforcePixelArtTextureSampling(
+    const enforceSampling = pixelArtSampling
+      ? enforcePixelArtTextureSampling
+      : enforceHiFiTextureSampling;
+
+    const albedoMap = enforceSampling(
       new THREE.DataTexture(albedoRgba, w, h, THREE.RGBAFormat),
       'albedo'
     );
@@ -1102,7 +1878,7 @@ export function synthesizeAtlasTextures(
     albedoMap.needsUpdate = true;
     markTexturePooling(albedoMap, false);
 
-    const normalMap = enforcePixelArtTextureSampling(
+    const normalMap = enforceSampling(
       new THREE.DataTexture(normalRgba, w, h, THREE.RGBAFormat),
       'normal'
     );
@@ -1110,9 +1886,33 @@ export function synthesizeAtlasTextures(
     normalMap.needsUpdate = true;
     markTexturePooling(normalMap, false);
 
+    const roughnessMap = enforceSampling(
+      new THREE.DataTexture(roughnessRgba, w, h, THREE.RGBAFormat),
+      'normal'
+    );
+    roughnessMap.flipY = false;
+    roughnessMap.needsUpdate = true;
+    markTexturePooling(roughnessMap, false);
+
+    const aoMap = enforceSampling(
+      new THREE.DataTexture(aoRgba, w, h, THREE.RGBAFormat),
+      'normal'
+    );
+    aoMap.flipY = false;
+    aoMap.needsUpdate = true;
+    markTexturePooling(aoMap, false);
+
+    const metalnessMap = enforceSampling(
+      new THREE.DataTexture(metalnessRgba, w, h, THREE.RGBAFormat),
+      'normal'
+    );
+    metalnessMap.flipY = false;
+    metalnessMap.needsUpdate = true;
+    markTexturePooling(metalnessMap, false);
+
     let emissionMap: THREE.DataTexture | null = null;
     if (hasEmission) {
-      emissionMap = enforcePixelArtTextureSampling(
+      emissionMap = enforceSampling(
         new THREE.DataTexture(emissionRgba, w, h, THREE.RGBAFormat),
         'emission'
       );
@@ -1124,14 +1924,21 @@ export function synthesizeAtlasTextures(
     return {
       albedoMap,
       normalMap,
+      roughnessMap,
+      aoMap,
+      metalnessMap,
       emissionMap,
       hasEmission,
       texWidth: w,
       texHeight: h,
+      dilationPx,
       quality,
       dispose: () => {
         if (albedoMap.userData?.pooled !== true) albedoMap.dispose();
         if (normalMap.userData?.pooled !== true) normalMap.dispose();
+        if (roughnessMap.userData?.pooled !== true) roughnessMap.dispose();
+        if (aoMap.userData?.pooled !== true) aoMap.dispose();
+        if (metalnessMap.userData?.pooled !== true) metalnessMap.dispose();
         if (emissionMap && emissionMap.userData?.pooled !== true) emissionMap.dispose();
       },
     };
@@ -1144,7 +1951,7 @@ export function synthesizeAtlasTextures(
 }
 
 // ---------------------------------------------------------------------------
-// Shared Modular Tileset Sheet Atlas (`256x256` @ 32 px/m -> 0 overlaps, ultra-fast!)
+// Shared Modular Tileset Sheet Atlas (`512x512` @ 64 px/m -> 0 overlaps, 8px gutter!)
 // ---------------------------------------------------------------------------
 
 export interface ModularTilesetSheet {
@@ -1165,24 +1972,24 @@ const SHEET_SLOT_DEFS: {
   lockVertical: boolean;
   landmark?: 'rune_panel' | 'none';
 }[] = [
-  { id: 'floor_a', recipe: 'stone_masonry', baseHex: '#566470', accentHex: '#697a88', x: 4, y: 4, w: 48, h: 48, lockVertical: false },
-  { id: 'floor_b', recipe: 'stone_masonry', baseHex: '#4f5c68', accentHex: '#60707c', x: 60, y: 4, w: 48, h: 48, lockVertical: false },
-  { id: 'floor_moss', recipe: 'mossy_cobble', baseHex: '#505f66', accentHex: '#4a7a42', x: 116, y: 4, w: 48, h: 48, lockVertical: false },
-  { id: 'floor_rune', recipe: 'runic_glow', baseHex: '#455a6e', accentHex: '#4ee6a8', x: 172, y: 4, w: 48, h: 48, lockVertical: false, landmark: 'rune_panel' },
-  { id: 'wall_stone', recipe: 'stone_masonry', baseHex: '#677482', accentHex: '#808e9c', x: 4, y: 60, w: 48, h: 88, lockVertical: true },
-  { id: 'wall_moss', recipe: 'mossy_cobble', baseHex: '#627079', accentHex: '#4e8344', x: 60, y: 60, w: 48, h: 88, lockVertical: true },
-  { id: 'plaza_cobble', recipe: 'mossy_cobble', baseHex: '#8d8678', accentHex: '#6d7f55', x: 116, y: 60, w: 48, h: 48, lockVertical: false },
-  { id: 'timber_curb', recipe: 'wood_planks', baseHex: '#734e32', accentHex: '#513724', x: 172, y: 60, w: 48, h: 48, lockVertical: true },
+  { id: 'floor_a', recipe: 'stone_masonry', baseHex: '#566470', accentHex: '#697a88', x: 8, y: 8, w: 96, h: 96, lockVertical: false },
+  { id: 'floor_b', recipe: 'stone_masonry', baseHex: '#4f5c68', accentHex: '#60707c', x: 120, y: 8, w: 96, h: 96, lockVertical: false },
+  { id: 'floor_moss', recipe: 'mossy_cobble', baseHex: '#505f66', accentHex: '#4a7a42', x: 232, y: 8, w: 96, h: 96, lockVertical: false },
+  { id: 'floor_rune', recipe: 'runic_glow', baseHex: '#455a6e', accentHex: '#4ee6a8', x: 344, y: 8, w: 96, h: 96, lockVertical: false, landmark: 'rune_panel' },
+  { id: 'wall_stone', recipe: 'stone_masonry', baseHex: '#677482', accentHex: '#808e9c', x: 8, y: 120, w: 96, h: 176, lockVertical: true },
+  { id: 'wall_moss', recipe: 'mossy_cobble', baseHex: '#627079', accentHex: '#4e8344', x: 120, y: 120, w: 96, h: 176, lockVertical: true },
+  { id: 'plaza_cobble', recipe: 'mossy_cobble', baseHex: '#8d8678', accentHex: '#6d7f55', x: 232, y: 120, w: 96, h: 96, lockVertical: false },
+  { id: 'timber_curb', recipe: 'wood_planks', baseHex: '#734e32', accentHex: '#513724', x: 344, y: 120, w: 96, h: 96, lockVertical: true },
 ];
 
 export function synthesizeModularTilesetSheet(
   biome: 'dungeon_ruins' | 'starter_city' = 'dungeon_ruins',
   seed = 777,
   gtaoStrength = 0.55,
-  normalStrength = 0.35
+  normalStrength = 0.42
 ): ModularTilesetSheet {
   const key = `tileset_sheet:${biome}:${seed}:${Math.round(gtaoStrength * 20)}:${Math.round(normalStrength * 20)}`;
-  const size = 256;
+  const size = 512;
 
   const islands: UvIslandMeta[] = SHEET_SLOT_DEFS.map((s, idx) => {
     const adjustedBase =
@@ -1209,7 +2016,7 @@ export function synthesizeModularTilesetSheet(
         u1: (s.x + s.w) / size,
         v1: (s.y + s.h) / size,
       },
-      texelsPerMeter: 32,
+      texelsPerMeter: 64,
       triIndices: [],
     };
   });
@@ -1219,8 +2026,8 @@ export function synthesizeModularTilesetSheet(
       geometry: new THREE.BufferGeometry(),
       texWidth: size,
       texHeight: size,
-      texelsPerMeter: 32,
-      paddingPx: 4,
+      texelsPerMeter: 64,
+      paddingPx: 8,
       islands,
       triIslandIds: new Int32Array(0),
     };
@@ -1229,6 +2036,7 @@ export function synthesizeModularTilesetSheet(
       gtaoStrength,
       normalStrength,
       emissiveRuneHex: '#4ee6a8',
+      dilationPx: 8,
     });
     fakeUnwrapped.geometry.dispose();
     return out;
@@ -1247,11 +2055,11 @@ export function synthesizeStructureBiomeSheet(
   colors: { wallCol: string; trimCol: string; floorCol: string; accentCol: string },
   seed = 77,
   gtaoStrength = 0.55,
-  normalStrength = 0.36
+  normalStrength = 0.42
 ): ModularTilesetSheet {
   const colKey = `${colors.wallCol}_${colors.trimCol}_${colors.floorCol}_${colors.accentCol}`;
   const key = `struct_sheet:${biome}:${colKey}:${seed}:${Math.round(gtaoStrength * 20)}:${Math.round(normalStrength * 20)}`;
-  const size = 256;
+  const size = 512;
 
   const wallRecipe: MaterialRecipeId =
     biome === 'medieval'
@@ -1284,23 +2092,23 @@ export function synthesizeStructureBiomeSheet(
     lockVertical: boolean;
     landmark?: LandmarkKind;
   }[] = [
-    { id: 'wall', recipe: wallRecipe, baseHex: colors.wallCol, accentHex: colors.trimCol, x: 4, y: 4, w: 76, h: 76, lockVertical: true },
-    { id: 'trim', recipe: trimRecipe, baseHex: colors.trimCol, accentHex: colors.wallCol, x: 88, y: 4, w: 76, h: 76, lockVertical: true },
-    { id: 'floor', recipe: floorRecipe, baseHex: colors.floorCol, accentHex: colors.trimCol, x: 172, y: 4, w: 76, h: 76, lockVertical: false },
-    { id: 'roof', recipe: roofRecipe, baseHex: colors.accentCol, accentHex: colors.trimCol, x: 4, y: 88, w: 76, h: 76, lockVertical: false },
+    { id: 'wall', recipe: wallRecipe, baseHex: colors.wallCol, accentHex: colors.trimCol, x: 8, y: 8, w: 152, h: 152, lockVertical: true },
+    { id: 'trim', recipe: trimRecipe, baseHex: colors.trimCol, accentHex: colors.wallCol, x: 176, y: 8, w: 152, h: 152, lockVertical: true },
+    { id: 'floor', recipe: floorRecipe, baseHex: colors.floorCol, accentHex: colors.trimCol, x: 344, y: 8, w: 152, h: 152, lockVertical: false },
+    { id: 'roof', recipe: roofRecipe, baseHex: colors.accentCol, accentHex: colors.trimCol, x: 8, y: 176, w: 152, h: 152, lockVertical: false },
     {
       id: 'accent',
       recipe: accentRecipe,
       baseHex: colors.accentCol,
       accentHex: colors.trimCol,
-      x: 88,
-      y: 88,
-      w: 76,
-      h: 76,
+      x: 176,
+      y: 176,
+      w: 152,
+      h: 152,
       lockVertical: true,
       landmark: biome === 'dungeon' || biome === 'scifi' ? 'rune_panel' : 'none',
     },
-    { id: 'wood', recipe: 'wood_planks', baseHex: '#6d482e', accentHex: '#3d2718', x: 172, y: 88, w: 76, h: 76, lockVertical: true },
+    { id: 'wood', recipe: 'wood_planks', baseHex: '#6d482e', accentHex: '#3d2718', x: 344, y: 176, w: 152, h: 152, lockVertical: true },
   ];
 
   const islands: UvIslandMeta[] = defs.map((s, idx) => ({
@@ -1321,7 +2129,7 @@ export function synthesizeStructureBiomeSheet(
       u1: (s.x + s.w) / size,
       v1: (s.y + s.h) / size,
     },
-    texelsPerMeter: 32,
+    texelsPerMeter: 64,
     triIndices: [],
   }));
 
@@ -1331,8 +2139,8 @@ export function synthesizeStructureBiomeSheet(
       geometry: new THREE.BufferGeometry(),
       texWidth: size,
       texHeight: size,
-      texelsPerMeter: 32,
-      paddingPx: 4,
+      texelsPerMeter: 64,
+      paddingPx: 8,
       islands,
       triIslandIds: new Int32Array(0),
     };
@@ -1341,6 +2149,7 @@ export function synthesizeStructureBiomeSheet(
       gtaoStrength,
       normalStrength,
       emissiveRuneHex: hasGlow ? colors.accentCol : null,
+      dilationPx: 8,
     });
     fakeUnwrapped.geometry.dispose();
     return out;
@@ -1436,6 +2245,12 @@ export interface BakedAssetOptions extends Omit<UnwrapOptions, 'vertexColorMode'
   cacheKey?: string;
   inspectUvs?: boolean;
   partTagToBoneIndex?: ReadonlyMap<string, number>;
+  /** Default false: uses smooth trilinear Hi-Fi texture sampling; set true for retro NearestFilter */
+  pixelArtSampling?: boolean;
+  /** Minimum UV island edge dilation in pixels (default 4) */
+  dilationPx?: number;
+  /** Lock exact texelsPerMeter without adaptive Hi-Fi upscaling */
+  exactTexelsPerMeter?: boolean;
 }
 
 export interface UnwrapMetricsSummary {
@@ -1463,6 +2278,103 @@ export interface BakedAssetResult {
   dispose: () => void;
 }
 
+function estimatePartsSurfaceArea(parts: TaggedGeometryPart[]): { area: number; maxSpan: number } {
+  let area = 0;
+  let minX = Infinity,
+    minY = Infinity,
+    minZ = Infinity;
+  let maxX = -Infinity,
+    maxY = -Infinity,
+    maxZ = -Infinity;
+
+  for (const p of parts) {
+    const pos = p.geometry.getAttribute('position');
+    if (!pos) continue;
+    const idx = p.geometry.getIndex();
+    const triCount = idx ? Math.floor(idx.count / 3) : Math.floor(pos.count / 3);
+    for (let t = 0; t < triCount; t++) {
+      const i0 = idx ? idx.getX(t * 3) : t * 3;
+      const i1 = idx ? idx.getX(t * 3 + 1) : t * 3 + 1;
+      const i2 = idx ? idx.getX(t * 3 + 2) : t * 3 + 2;
+      const ax = pos.getX(i0),
+        ay = pos.getY(i0),
+        az = pos.getZ(i0);
+      const bx = pos.getX(i1),
+        by = pos.getY(i1),
+        bz = pos.getZ(i1);
+      const cx = pos.getX(i2),
+        cy = pos.getY(i2),
+        cz = pos.getZ(i2);
+      if (ax < minX) minX = ax;
+      if (bx < minX) minX = bx;
+      if (cx < minX) minX = cx;
+      if (ay < minY) minY = ay;
+      if (by < minY) minY = by;
+      if (cy < minY) minY = cy;
+      if (az < minZ) minZ = az;
+      if (bz < minZ) minZ = bz;
+      if (cz < minZ) minZ = cz;
+      if (ax > maxX) maxX = ax;
+      if (bx > maxX) maxX = bx;
+      if (cx > maxX) maxX = cx;
+      if (ay > maxY) maxY = ay;
+      if (by > maxY) maxY = by;
+      if (cy > maxY) maxY = cy;
+      if (az > maxZ) maxZ = az;
+      if (bz > maxZ) maxZ = bz;
+      if (cz > maxZ) maxZ = cz;
+
+      const e1x = bx - ax,
+        e1y = by - ay,
+        e1z = bz - az;
+      const e2x = cx - ax,
+        e2y = cy - ay,
+        e2z = cz - az;
+      const nx = e1y * e2z - e1z * e2y;
+      const ny = e1z * e2x - e1x * e2z;
+      const nz = e1x * e2y - e1y * e2x;
+      area += 0.5 * Math.hypot(nx, ny, nz);
+    }
+  }
+  const maxSpan = Number.isFinite(minX) ? Math.max(maxX - minX, maxY - minY, maxZ - minZ) : 1;
+  return { area: Math.max(0.05, area), maxSpan };
+}
+
+function resolveAdaptiveHiFiTexelsPerMeter(
+  parts: TaggedGeometryPart[],
+  options: BakedAssetOptions
+): { texelsPerMeter: number; minAtlasSize: number; maxAtlasSize: number; paddingPx: number } {
+  const { area, maxSpan } = estimatePartsSurfaceArea(parts);
+  const isLargeArchitecture = area > 25 || maxSpan > 6.0;
+  const isBatchArchitecture =
+    options.texelsPerMeter !== undefined && options.texelsPerMeter <= 36;
+  let ppm: number;
+
+  if (options.exactTexelsPerMeter && options.texelsPerMeter !== undefined) {
+    ppm = options.texelsPerMeter;
+  } else if (options.texelsPerMeter === undefined) {
+    ppm = isLargeArchitecture
+      ? Math.round(Math.max(64, Math.min(140, Math.sqrt(260000 / area))))
+      : Math.round(Math.max(160, Math.min(220, Math.sqrt(380000 / area))));
+  } else if (isBatchArchitecture) {
+    // Preserve fast baking for large multi-piece architectural builders (CityBuilder / Dungeon)
+    ppm = options.texelsPerMeter!;
+  } else if (options.texelsPerMeter < 140) {
+    const targetFill = parts.length <= 4 && area < 0.8 ? 96000 : 320000;
+    const adaptive = isLargeArchitecture
+      ? Math.round(Math.max(48, Math.min(80, Math.sqrt(180000 / area))))
+      : Math.round(Math.max(144, Math.min(200, Math.sqrt(targetFill / area))));
+    ppm = Math.max(options.texelsPerMeter, adaptive);
+  } else {
+    ppm = options.texelsPerMeter;
+  }
+
+  const paddingPx = Math.max(4, Math.round(options.paddingPx ?? 4));
+  const minAtlasSize = options.minAtlasSize ?? 64;
+  const maxAtlasSize = options.maxAtlasSize ?? 1024;
+  return { texelsPerMeter: ppm, minAtlasSize, maxAtlasSize, paddingPx };
+}
+
 function measureMinVertexAo(geo: THREE.BufferGeometry): number {
   const col = geo.getAttribute('color');
   if (!col || col.count === 0) return 1;
@@ -1475,7 +2387,8 @@ function measureMinVertexAo(geo: THREE.BufferGeometry): number {
 }
 
 /**
- * Unwraps, bakes vertex AO/creases, synthesizes procedural pixel-art PBR textures, and
+ * Unwraps, bakes vertex AO/creases, synthesizes procedural Hi-Fi stylized PBR textures
+ * (`albedoMap`, `normalMap`, `roughnessMap`, `aoMap`, `metalnessMap`, `emissionMap`), and
  * optionally computes tangent frames & UV quality diagnostics in one unified call.
  *
  * When `finishMode === 'classic_flat'`, returns flat vertex-colored geometry matching legacy rendering.
@@ -1491,7 +2404,7 @@ export function bakeTaggedPartsAsset(
     const emptyGeo = mergeColoredParts([]);
     const metrics: UnwrapMetricsSummary = {
       finishMode,
-      texelsPerMeter: options.texelsPerMeter ?? 32,
+      texelsPerMeter: options.texelsPerMeter ?? 180,
       texWidth: 0,
       texHeight: 0,
       islandsCount: 0,
@@ -1576,12 +2489,14 @@ export function bakeTaggedPartsAsset(
 
   const subdivideEdgeM = options.subdivideMaxEdgeM ?? 0;
   const willSubdivide = subdivideEdgeM > 0;
+  const { texelsPerMeter, minAtlasSize, maxAtlasSize, paddingPx } =
+    resolveAdaptiveHiFiTexelsPerMeter(parts, options);
 
   const unwrapped = unwrapPixelAligned(parts, {
-    texelsPerMeter: options.texelsPerMeter ?? 32,
-    paddingPx: options.paddingPx ?? 3,
-    minAtlasSize: options.minAtlasSize ?? 64,
-    maxAtlasSize: options.maxAtlasSize ?? 1024,
+    texelsPerMeter,
+    paddingPx,
+    minAtlasSize,
+    maxAtlasSize,
     islandChartCosThreshold: options.islandChartCosThreshold ?? 0.91,
     sewChamfersToParentChart: options.sewChamfersToParentChart ?? true,
     computeTangents: !willSubdivide,
@@ -1590,9 +2505,12 @@ export function bakeTaggedPartsAsset(
 
   const aoStrength = options.aoStrength ?? 0.55;
   const gtaoStrength = options.gtaoStrength ?? Math.min(0.85, aoStrength);
-  const normalStrength = options.normalStrength ?? 0.36;
+  const normalStrength =
+    options.pixelArtSampling === true
+      ? (options.normalStrength ?? 0.36)
+      : Math.max(options.normalStrength ?? 0.48, 0.36);
   const effectiveCacheKey = options.cacheKey
-    ? `${options.cacheKey}:s${seed}:g${Math.round(gtaoStrength * 20)}:n${Math.round(normalStrength * 20)}:${options.rarityTier ?? 'normal'}`
+    ? `${options.cacheKey}:s${seed}:p${unwrapped.texWidth}x${unwrapped.texHeight}:g${Math.round(gtaoStrength * 20)}:n${Math.round(normalStrength * 20)}:${options.rarityTier ?? 'normal'}:${options.pixelArtSampling ? 'px' : 'hf'}`
     : undefined;
   const isCacheHit = Boolean(
     options.usePool && effectiveCacheKey && MATERIAL_TEXTURE_POOL.has(effectiveCacheKey)
@@ -1683,7 +2601,7 @@ export function bakeTaggedPartsAsset(
   const textures = synthesizeAtlasTextures(unwrapped, {
     seed,
     gtaoStrength,
-    gtaoRadiusPx: options.gtaoRadiusPx ?? 3,
+    gtaoRadiusPx: options.gtaoRadiusPx ?? (unwrapped.texWidth >= 512 ? 4 : 3),
     normalStrength,
     curvatureMap,
     rarityTier: options.rarityTier ?? 'normal',
@@ -1694,6 +2612,8 @@ export function bakeTaggedPartsAsset(
     emissiveRuneHex: options.emissiveRuneHex,
     usePool: Boolean(options.usePool && effectiveCacheKey),
     cacheKey: effectiveCacheKey,
+    pixelArtSampling: options.pixelArtSampling,
+    dilationPx: Math.max(4, options.dilationPx ?? paddingPx),
   });
 
   const triCount = Math.floor((outGeo.getAttribute('position')?.count ?? 0) / 3);
@@ -1749,7 +2669,8 @@ export function bakeTaggedPartsAsset(
 
 /**
  * Creates a `PixelizerMaterial` pre-configured for a `BakedAssetResult`, automatically wiring
- * `albedoMap`, `normalMap`, `useVertexTangents`, `emissionMap`, and safe linear vertex tints.
+ * `albedoMap`, `normalMap`, `useVertexTangents`, `emissionMap`, and safe linear vertex tints
+ * (plus attaching `roughnessMap`, `aoMap`, `metalnessMap` in `userData` for PBR/GLB consumers).
  */
 export function createPixelizerMaterialFromBaked(
   baked: BakedAssetResult,
@@ -1764,10 +2685,10 @@ export function createPixelizerMaterialFromBaked(
     diffuseVertexColorWeight: 1.0,
     edgeHighlight: 0.42,
     edgeBevelWeight: 0.6,
-    smoothness: 0.25,
+    smoothness: 0.35,
     albedoMap: baked.textures?.albedoMap ?? null,
     normalMap: baked.textures?.normalMap ?? null,
-    normalScale: hasTex ? 0.85 : 1.0,
+    normalScale: hasTex ? 0.92 : 1.0,
     useVertexTangents: Boolean(baked.hasTangents && baked.textures?.normalMap),
     emissionMap: hasEmission ? (baked.textures?.emissionMap ?? null) : null,
     emissionColor: hasEmission ? '#ffffff' : '#000000',
@@ -1777,7 +2698,211 @@ export function createPixelizerMaterialFromBaked(
 
   const mat = new PixelizerMaterial(opts, sharedResources);
   mat.vertexColors = true;
+  if (baked.textures) {
+    mat.userData = {
+      ...mat.userData,
+      roughnessMap: baked.textures.roughnessMap,
+      aoMap: baked.textures.aoMap,
+      metalnessMap: baked.textures.metalnessMap,
+    };
+  }
   return mat;
+}
+
+// ---------------------------------------------------------------------------
+// Stylized Alpha Leaf Cluster Texture Generator (Jabami leave_tree_05_tex regime)
+// ---------------------------------------------------------------------------
+
+export interface LeafClusterTextureOptions {
+  size?: number;
+  seed?: number;
+  sunlitHex?: string;
+  shadedHex?: string;
+  clusterCount?: number;
+  pixelArtSampling?: boolean;
+}
+
+export interface LeafClusterTextureResult {
+  albedoMap: THREE.DataTexture;
+  normalMap: THREE.DataTexture;
+  roughnessMap: THREE.DataTexture;
+  alphaCoverage: number;
+  dispose: () => void;
+}
+
+/**
+ * Generates a crisp alpha-cutout leaf cluster texture matching `leave_tree_05_tex.png`:
+ * ~27%–36% opaque leaf-lobe clusters, ~0.5px AA alpha boundary, two-tier sunlit/shaded greens,
+ * 4px+ RGB edge dilation into transparent texels, and OpenGL tangent-space normals.
+ */
+export function generateLeafClusterTexture(
+  options: LeafClusterTextureOptions = {}
+): LeafClusterTextureResult {
+  const size = Math.max(64, Math.min(1024, Math.round(options.size ?? 512)));
+  const seed = Math.floor(options.seed ?? 505);
+  const rng = createSeededRng(seed);
+  const sunlitRgb = hexToRgb255(options.sunlitHex ?? '#47f379');
+  const shadedRgb = hexToRgb255(options.shadedHex ?? '#2a8f47');
+  const clusterCount = Math.max(8, Math.min(48, Math.round(options.clusterCount ?? 24)));
+
+  interface LeafLobe {
+    cx: number;
+    cy: number;
+    rx: number;
+    ry: number;
+    rot: number;
+    sunlit: number;
+    depth: number;
+  }
+
+  const lobes: LeafLobe[] = [];
+  for (let c = 0; c < clusterCount; c++) {
+    const gx = (0.14 + 0.72 * rng()) * size;
+    const gy = (0.14 + 0.72 * rng()) * size;
+    const subLobes = 2 + Math.floor(rng() * 2);
+    for (let s = 0; s < subLobes; s++) {
+      const ang = rng() * Math.PI * 2;
+      const dist = rng() * size * 0.045;
+      const baseR = size * (0.042 + rng() * 0.032);
+      lobes.push({
+        cx: gx + Math.cos(ang) * dist,
+        cy: gy + Math.sin(ang) * dist,
+        rx: baseR,
+        ry: baseR * (0.76 + rng() * 0.34),
+        rot: rng() * Math.PI,
+        sunlit: clamp01(0.25 + (gy / size) * 0.55 + (rng() - 0.5) * 0.45),
+        depth: c * 0.01 + s * 0.002,
+      });
+    }
+  }
+
+  const count = size * size;
+  const albedoRgba = new Uint8Array(count * 4);
+  const roughnessRgba = new Uint8Array(count * 4);
+  const heightField = new Float32Array(count).fill(0.25);
+  const coverageMask = new Uint8Array(count);
+  const alphaField = new Float32Array(count);
+
+  let opaqueCount = 0;
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      let bestScore = -1;
+      let bestSunlit = 0.5;
+      let bestNormDist = 2.0;
+
+      for (const l of lobes) {
+        const dx = x - l.cx;
+        const dy = y - l.cy;
+        const cos = Math.cos(l.rot);
+        const sin = Math.sin(l.rot);
+        const lx = (dx * cos + dy * sin) / l.rx;
+        const ly = (-dx * sin + dy * cos) / l.ry;
+        const theta = Math.atan2(ly, lx);
+        // Scalloped 5-lobe botanical contour
+        const scallop = 1.0 + 0.14 * Math.cos(theta * 5.0 + l.rot);
+        const d = Math.hypot(lx, ly) / scallop;
+        if (d <= 1.06) {
+          const score = 1.0 - d + l.depth;
+          if (score > bestScore) {
+            bestScore = score;
+            bestSunlit = l.sunlit;
+            bestNormDist = d;
+          }
+        }
+      }
+
+      const idx = y * size + x;
+      const o4 = idx * 4;
+      if (bestScore > -0.5) {
+        // Crisp ~0.5px AA alpha cutout boundary matching Jabami leave_tree_05_tex
+        const edgePx = bestNormDist * size * 0.045;
+        const aa = clamp01(1.0 - smoothstep(size * 0.045 - 0.65, size * 0.045 + 0.35, edgePx));
+        alphaField[idx] = aa;
+        if (aa > 0.05) {
+          coverageMask[idx] = 1;
+          if (aa > 0.5) opaqueCount++;
+          const dome = Math.max(0, 1 - bestNormDist * bestNormDist);
+          heightField[idx] = 0.45 + dome * 0.45;
+          const col = mixRgb(shadedRgb, sunlitRgb, clamp01(bestSunlit * 0.75 + dome * 0.35));
+          albedoRgba[o4 + 0] = col[0];
+          albedoRgba[o4 + 1] = col[1];
+          albedoRgba[o4 + 2] = col[2];
+          albedoRgba[o4 + 3] = Math.round(aa * 255);
+
+          const rByte = clampByte((0.68 - bestSunlit * 0.14) * 255, 24, 245);
+          roughnessRgba[o4 + 0] = rByte;
+          roughnessRgba[o4 + 1] = rByte;
+          roughnessRgba[o4 + 2] = rByte;
+          roughnessRgba[o4 + 3] = 255;
+        }
+      }
+    }
+  }
+
+  const fakeIsland: Pick<UvIslandMeta, 'pxBounds' | 'materialKind'> = {
+    pxBounds: { x: 0, y: 0, w: size, h: size },
+    materialKind: 'foliage_leaf',
+  };
+  const normalRgba = computeIslandNormalsFromHeight(
+    heightField,
+    coverageMask,
+    size,
+    size,
+    [fakeIsland],
+    0.45
+  );
+
+  // Dilate RGB & normals into transparent gutters while preserving alpha channel
+  dilateAtlasByEdt(
+    coverageMask,
+    size,
+    size,
+    albedoRgba,
+    normalRgba,
+    null,
+    roughnessRgba,
+    null,
+    null,
+    true
+  );
+
+  const enforceSampling =
+    options.pixelArtSampling === true
+      ? enforcePixelArtTextureSampling
+      : enforceHiFiTextureSampling;
+
+  const albedoMap = enforceSampling(
+    new THREE.DataTexture(albedoRgba, size, size, THREE.RGBAFormat),
+    'albedo'
+  );
+  albedoMap.flipY = false;
+  albedoMap.needsUpdate = true;
+
+  const normalMap = enforceSampling(
+    new THREE.DataTexture(normalRgba, size, size, THREE.RGBAFormat),
+    'normal'
+  );
+  normalMap.flipY = false;
+  normalMap.needsUpdate = true;
+
+  const roughnessMap = enforceSampling(
+    new THREE.DataTexture(roughnessRgba, size, size, THREE.RGBAFormat),
+    'normal'
+  );
+  roughnessMap.flipY = false;
+  roughnessMap.needsUpdate = true;
+
+  return {
+    albedoMap,
+    normalMap,
+    roughnessMap,
+    alphaCoverage: Number((opaqueCount / count).toFixed(4)),
+    dispose: () => {
+      albedoMap.dispose();
+      normalMap.dispose();
+      roughnessMap.dispose();
+    },
+  };
 }
 
 const BAYER4_THRESH = [

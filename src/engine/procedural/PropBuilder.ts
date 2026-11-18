@@ -4,15 +4,20 @@ import { PixelizerMaterial, type PixelizerMaterialResources } from '../Pixelizer
 import { voxelizeObject3D, buildVoxelMeshGroup } from '../Voxelizer';
 import { createSeededRng } from './SdfVoxelPrimitives';
 import {
+  makeAnatomicalTorsoGeometry,
   makeAxeHeadGeometry,
   makeBeveledBox,
   makeDomeShieldGeometry,
   makeLatheProfile,
+  makePauldronShellGeometry,
+  makeSculptedLimbGeometry,
   makeSdfOrganicMesh,
+  makeSplineLoftGeometry,
   makeSwordBladeGeometry,
   sdEllipsoid,
   sminPoly,
   sdfHashNoise3D,
+  subdivideGeometryLoop,
   tagPart,
   type FinishMode,
   type TaggedGeometryPart,
@@ -150,21 +155,49 @@ export function buildProceduralProp(
           [0.022, 0.14],
           [0.025, 0.22],
         ],
-        8,
-        cSecondary
+        12,
+        cSecondary,
+        { smoothRadialNormals: true }
       );
       grip.rotateX(Math.PI * 0.5);
       grip.translate(0, 0, -0.13);
       taggedParts.push(tagPart(grip, 'sword_grip', 'stitched_leather', cSecondary, { lockVertical: false }));
 
-      const pommel = makeBeveledBox(0.064, 0.056, 0.064, 0.016, cAccent, {
-        offset: [0, 0, -0.155],
-      });
+      const pommel = makeLatheProfile(
+        [
+          [0.012, -0.035],
+          [0.036, -0.01],
+          [0.036, 0.015],
+          [0.016, 0.035],
+        ],
+        12,
+        cAccent,
+        { smoothRadialNormals: true }
+      );
+      pommel.rotateX(Math.PI * 0.5);
+      pommel.translate(0, 0, -0.155);
       taggedParts.push(tagPart(pommel, 'sword_pommel', 'brushed_gold', cAccent, { lockVertical: false }));
 
-      const guard = makeBeveledBox(0.25 + rng() * 0.06, 0.044, 0.056, 0.012, cAccent, {
-        offset: [0, 0, 0.1],
-      });
+      const guardW = 0.25 + rng() * 0.06;
+      const guard = makeSplineLoftGeometry(
+        [
+          [-guardW * 0.5, 0, 0.125],
+          [-guardW * 0.25, 0, 0.105],
+          [0, 0, 0.1],
+          [guardW * 0.25, 0, 0.105],
+          [guardW * 0.5, 0, 0.125],
+        ],
+        [
+          [0.012, 0.016],
+          [0.02, 0.024],
+          [0.024, 0.028],
+          [0.02, 0.024],
+          [0.012, 0.016],
+        ],
+        10,
+        12,
+        { colorHex: cAccent }
+      );
       taggedParts.push(tagPart(guard, 'sword_guard', 'brushed_gold', cAccent, { lockVertical: false }));
 
       const blade = makeSwordBladeGeometry(bladeW, 0.032, len * 0.68, 0.17, cPrimary);
@@ -191,16 +224,26 @@ export function buildProceduralProp(
           [0.022, len * 0.65],
           [0.028, len],
         ],
-        8,
-        cSecondary
+        12,
+        cSecondary,
+        { smoothRadialNormals: true }
       );
       shaft.rotateX(Math.PI * 0.5);
       shaft.translate(0, 0, -0.12);
       taggedParts.push(tagPart(shaft, 'axe_shaft', 'wood_planks', cSecondary, { lockVertical: false }));
 
-      const collar = makeBeveledBox(0.065, 0.065, 0.12, 0.012, cAccent, {
-        offset: [0, 0, len * 0.72 - 0.12],
-      });
+      const collar = makeLatheProfile(
+        [
+          [0.034, -0.055],
+          [0.04, 0],
+          [0.034, 0.055],
+        ],
+        12,
+        cAccent,
+        { smoothRadialNormals: true }
+      );
+      collar.rotateX(Math.PI * 0.5);
+      collar.translate(0, 0, len * 0.72 - 0.12);
       taggedParts.push(tagPart(collar, 'axe_collar', 'brushed_gold', cAccent, { lockVertical: false }));
 
       const head = makeAxeHeadGeometry(0.25 + rng() * 0.06, 0.28, 0.052, false, cPrimary);
@@ -232,14 +275,24 @@ export function buildProceduralProp(
         })
       );
 
-      const trimBar = makeBeveledBox(0.045, diam * 0.92, 0.08, 0.01, cSecondary, {
+      const trimBar = makeBeveledBox(0.045, diam * 0.88, 0.08, 0.01, cSecondary, {
         offset: [0.05, 0.02, 0.04],
       });
       taggedParts.push(tagPart(trimBar, 'shield_brace', 'wood_planks', cSecondary, { lockVertical: true }));
 
-      const boss = makeBeveledBox(0.052, 0.14, 0.14, 0.018, cAccent, {
-        offset: [0.115, 0.04, 0.04],
-      });
+      const boss = makeLatheProfile(
+        [
+          [0.078, 0],
+          [0.064, 0.03],
+          [0.02, 0.052],
+          [0.004, 0.06],
+        ],
+        14,
+        cAccent,
+        { smoothRadialNormals: true }
+      );
+      boss.rotateZ(-Math.PI * 0.5);
+      boss.translate(0.115, 0.04, 0.04);
       taggedParts.push(tagPart(boss, 'shield_boss', 'brushed_gold', cAccent, { lockVertical: false }));
       break;
     }
@@ -257,23 +310,35 @@ export function buildProceduralProp(
           [0.036, len * 0.88],
           [0.056, len * 0.96],
         ],
-        8,
-        cPrimary
+        12,
+        cPrimary,
+        { smoothRadialNormals: true }
       );
       shaft.rotateX(Math.PI * 0.5);
       shaft.translate(0, 0, -0.2);
       taggedParts.push(tagPart(shaft, 'staff_shaft', 'timber_frame', cPrimary, { lockVertical: false }));
 
       const crownZ = len * 0.96 - 0.2;
-      const cradle = makeBeveledBox(0.14, 0.14, 0.1, 0.022, cSecondary, {
-        offset: [0, 0, crownZ + 0.04],
-      });
+      const cradle = makeLatheProfile(
+        [
+          [0.036, 0],
+          [0.075, 0.04],
+          [0.055, 0.09],
+        ],
+        12,
+        cSecondary,
+        { smoothRadialNormals: true }
+      );
+      cradle.rotateX(Math.PI * 0.5);
+      cradle.translate(0, 0, crownZ + 0.01);
       taggedParts.push(tagPart(cradle, 'staff_cradle', 'brushed_gold', cSecondary, { lockVertical: false }));
 
       const orb = makeBeveledBox(0.11, 0.11, 0.13, 0.028, cAccent, {
         offset: [0, 0, crownZ + 0.14],
       });
-      taggedParts.push(tagPart(orb, 'staff_crystal', 'runic_glow', cAccent, { lockVertical: false }));
+      const smoothOrb = subdivideGeometryLoop(orb, 1, { defaultHex: cAccent });
+      orb.dispose();
+      taggedParts.push(tagPart(smoothOrb, 'staff_crystal', 'runic_glow', cAccent, { lockVertical: false }));
       break;
     }
 
@@ -287,8 +352,9 @@ export function buildProceduralProp(
           [0.025, 0.35],
           [0.034, 0.54],
         ],
-        8,
-        cPrimary
+        12,
+        cPrimary,
+        { smoothRadialNormals: true }
       );
       handle.rotateX(Math.PI * 0.5);
       handle.translate(0, 0, -0.06);
@@ -300,16 +366,25 @@ export function buildProceduralProp(
           [0.072, 0.07],
           [0.064, 0.1],
         ],
-        8,
-        cSecondary
+        12,
+        cSecondary,
+        { smoothRadialNormals: true }
       );
       cup.rotateX(Math.PI * 0.5);
       cup.translate(0, 0, 0.48);
       taggedParts.push(tagPart(cup, 'torch_cup', 'forged_steel', cSecondary, { lockVertical: false }));
 
-      const flame = makeBeveledBox(0.1, 0.1, 0.16, 0.03, cAccent, {
-        offset: [0, 0, 0.62],
-      });
+      const flame = makeSplineLoftGeometry(
+        [
+          [0, 0, 0.55],
+          [0, 0.01, 0.64],
+          [0, 0, 0.74],
+        ],
+        [0.048, 0.056, 0.012],
+        10,
+        8,
+        { colorHex: cAccent }
+      );
       taggedParts.push(tagPart(flame, 'torch_flame', 'runic_glow', cAccent, { lockVertical: false }));
       break;
     }
@@ -320,37 +395,96 @@ export function buildProceduralProp(
       const d = 0.66 * scaleVar;
       emblemHex = cAccent;
 
-      const base = makeBeveledBox(w, h * 0.58, d, 0.026, cPrimary, {
-        offset: [0, h * 0.29, 0],
+      const base = makeBeveledBox(w, h * 0.56, d, 0.028, cPrimary, {
+        offset: [0, h * 0.28, 0],
       });
       taggedParts.push(tagPart(base, 'chest_base', 'wood_planks', cPrimary, { lockVertical: true }));
 
-      const lidLower = makeBeveledBox(w * 0.98, h * 0.24, d * 0.96, 0.032, cPrimary, {
-        offset: [0, h * 0.68, 0],
-      });
-      taggedParts.push(tagPart(lidLower, 'chest_lid_lower', 'wood_planks', cPrimary, { lockVertical: true }));
+      // Arched barrel-vaulted wooden chest lid along X axis
+      const lidVault = makeSplineLoftGeometry(
+        [
+          [-w * 0.49, h * 0.56, 0],
+          [0, h * 0.56, 0],
+          [w * 0.49, h * 0.56, 0],
+        ],
+        [[d * 0.49, h * 0.36]],
+        14,
+        10,
+        { colorHex: cPrimary, bellyFlatten: 0.45 }
+      );
+      taggedParts.push(tagPart(lidVault, 'chest_lid_vault', 'wood_planks', cPrimary, { lockVertical: true }));
 
-      const lidCrown = makeBeveledBox(w * 0.94, h * 0.14, d * 0.76, 0.03, cPrimary, {
-        offset: [0, h * 0.85, 0],
-      });
-      taggedParts.push(tagPart(lidCrown, 'chest_lid_crown', 'wood_planks', cPrimary, { lockVertical: true }));
-
-      for (const [bIdx, sx] of [-w * 0.36, w * 0.36].entries()) {
-        const band = makeBeveledBox(0.08, h * 0.92, d + 0.04, 0.014, cSecondary, {
-          offset: [sx, h * 0.46, 0],
+      // Contoured wrap-around iron straps + corner trim
+      for (const [bIdx, sx] of [-w * 0.36, 0, w * 0.36].entries()) {
+        if (bIdx === 1) {
+          // Central lid strap only (avoid blocking front lock)
+          const topStrap = makeSplineLoftGeometry(
+            [
+              [0, h * 0.58, -d * 0.49],
+              [0, h * 0.92, 0],
+              [0, h * 0.58, d * 0.49],
+            ],
+            [0.036, 0.036, 0.036],
+            8,
+            10,
+            { colorHex: cSecondary }
+          );
+          taggedParts.push(tagPart(topStrap, 'chest_center_strap', 'forged_steel', cSecondary, { lockVertical: true }));
+          continue;
+        }
+        const bandBody = makeBeveledBox(0.082, h * 0.58, d + 0.036, 0.014, cSecondary, {
+          offset: [sx, h * 0.29, 0],
         });
-        taggedParts.push(tagPart(band, `chest_band_${bIdx}`, 'forged_steel', cSecondary, { lockVertical: true }));
+        const bandArch = makeSplineLoftGeometry(
+          [
+            [sx, h * 0.55, -d * 0.5],
+            [sx, h * 0.92, 0],
+            [sx, h * 0.55, d * 0.5],
+          ],
+          [0.042, 0.042, 0.042],
+          8,
+          10,
+          { colorHex: cSecondary }
+        );
+        taggedParts.push(
+          tagPart(bandBody, `chest_band_${bIdx}`, 'forged_steel', cSecondary, { lockVertical: true }),
+          tagPart(bandArch, `chest_arch_${bIdx}`, 'forged_steel', cSecondary, { lockVertical: true })
+        );
       }
 
-      const lock = makeBeveledBox(0.16, 0.18, 0.06, 0.015, cAccent, {
-        offset: [0, h * 0.56, d * 0.5 + 0.015],
+      // Sculpted lock plate + protruding keyhole hasp + side carrying handles
+      const lockPlate = subdivideGeometryLoop(
+        makeBeveledBox(0.18, 0.19, 0.055, 0.016, cAccent, {
+          offset: [0, h * 0.54, d * 0.5 + 0.012],
+        }),
+        1,
+        { defaultHex: cAccent }
+      );
+      const lockHasp = makeBeveledBox(0.08, 0.11, 0.045, 0.01, cSecondary, {
+        offset: [0, h * 0.51, d * 0.5 + 0.034],
       });
       taggedParts.push(
-        tagPart(lock, 'chest_lock', 'brushed_gold', cAccent, {
+        tagPart(lockPlate, 'chest_lock', 'brushed_gold', cAccent, {
           landmarkKind: 'chest_crest',
           lockVertical: true,
-        })
+        }),
+        tagPart(lockHasp, 'chest_lock_hasp', 'forged_steel', cSecondary, { lockVertical: true })
       );
+      for (const [hIdx, sx] of [-1, 1].entries()) {
+        const handleRing = makeLatheProfile(
+          [
+            [0.075, -0.014],
+            [0.09, 0],
+            [0.075, 0.014],
+          ],
+          10,
+          cAccent,
+          { smoothRadialNormals: true }
+        );
+        handleRing.rotateZ(Math.PI * 0.5);
+        handleRing.translate(sx * (w * 0.5 + 0.015), h * 0.34, 0);
+        taggedParts.push(tagPart(handleRing, `chest_handle_${hIdx}`, 'brushed_gold', cAccent, { lockVertical: false }));
+      }
       break;
     }
 
@@ -360,34 +494,48 @@ export function buildProceduralProp(
 
       const body = makeLatheProfile(
         [
-          [r * 0.82, 0],
-          [r * 0.94, h * 0.22],
+          [r * 0.8, 0],
+          [r * 0.9, h * 0.14],
+          [r * 0.97, h * 0.32],
           [r, h * 0.5],
-          [r * 0.94, h * 0.78],
-          [r * 0.82, h],
+          [r * 0.97, h * 0.68],
+          [r * 0.9, h * 0.86],
+          [r * 0.8, h],
         ],
-        10,
+        16,
         cPrimary,
         { staveGrooveAmplitude: 0.045, smoothRadialNormals: false }
       );
       taggedParts.push(tagPart(body, 'barrel_staves', 'wood_planks', cPrimary, { lockVertical: true }));
 
-      for (const [hIdx, yFrac] of [0.18, 0.8].entries()) {
+      for (const [hIdx, [yFrac, rScale]] of [
+        [0.14, 0.93],
+        [0.32, 0.99],
+        [0.68, 0.99],
+        [0.86, 0.93],
+      ].entries()) {
         const hoop = makeLatheProfile(
           [
-            [r * 0.99, yFrac * h - 0.035],
-            [r * 1.03, yFrac * h],
-            [r * 0.99, yFrac * h + 0.035],
+            [r * rScale, yFrac * h - 0.028],
+            [r * (rScale + 0.045), yFrac * h],
+            [r * rScale, yFrac * h + 0.028],
           ],
-          10,
-          cSecondary
+          16,
+          cSecondary,
+          { smoothRadialNormals: true }
         );
         taggedParts.push(tagPart(hoop, `barrel_hoop_${hIdx}`, 'forged_steel', cSecondary, { lockVertical: true }));
       }
 
-      const bung = makeBeveledBox(r * 0.3, 0.04, r * 0.3, 0.008, cAccent, {
-        offset: [0, h + 0.005, 0],
-      });
+      const bung = makeLatheProfile(
+        [
+          [r * 0.14, h - 0.01],
+          [r * 0.12, h + 0.025],
+        ],
+        10,
+        cAccent,
+        { smoothRadialNormals: true }
+      );
       taggedParts.push(tagPart(bung, 'barrel_lid_cap', 'wood_planks', cAccent, { lockVertical: true }));
       break;
     }
@@ -423,9 +571,16 @@ export function buildProceduralProp(
 
     case 'pillar': {
       const h = 3.2 * scaleVar;
-      const base = makeBeveledBox(0.92, 0.34, 0.92, 0.04, cSecondary, {
-        offset: [0, 0.17, 0],
-      });
+      const base = makeLatheProfile(
+        [
+          [0.52, 0],
+          [0.52, 0.16],
+          [0.42, 0.34],
+        ],
+        14,
+        cSecondary,
+        { smoothRadialNormals: true }
+      );
       taggedParts.push(tagPart(base, 'pillar_base', 'stone_masonry', cSecondary, { lockVertical: true }));
 
       const shaft = makeLatheProfile(
@@ -435,15 +590,22 @@ export function buildProceduralProp(
           [0.29, h - 0.52],
           [0.34, h - 0.34],
         ],
-        10,
+        16,
         cPrimary,
         { staveGrooveAmplitude: 0.03 }
       );
       taggedParts.push(tagPart(shaft, 'pillar_shaft', 'stone_masonry', cPrimary, { lockVertical: true }));
 
-      const cap = makeBeveledBox(0.96, 0.34, 0.96, 0.04, cAccent, {
-        offset: [0, h - 0.17, 0],
-      });
+      const cap = makeLatheProfile(
+        [
+          [0.42, h - 0.34],
+          [0.54, h - 0.14],
+          [0.54, h],
+        ],
+        14,
+        cAccent,
+        { smoothRadialNormals: true }
+      );
       taggedParts.push(tagPart(cap, 'pillar_cap', 'mossy_cobble', cAccent, { lockVertical: true }));
       break;
     }
@@ -474,34 +636,71 @@ export function buildProceduralProp(
     }
 
     case 'tree': {
-      const trunkH = (1.45 + rng() * 0.35) * scaleVar;
-      const trunk = makeLatheProfile(
+      const trunkH = (1.55 + rng() * 0.35) * scaleVar;
+      // Sculpted slightly curved organic trunk + 3 root buttresses + 3 crown boughs
+      const trunk = makeSplineLoftGeometry(
         [
-          [0.34, 0],
-          [0.24, 0.25],
-          [0.18, trunkH * 0.72],
-          [0.14, trunkH + 0.15],
+          [0, 0, 0],
+          [0.03 * scaleVar, trunkH * 0.35, -0.02 * scaleVar],
+          [-0.02 * scaleVar, trunkH * 0.72, 0.03 * scaleVar],
+          [0, trunkH + 0.16 * scaleVar, 0],
         ],
-        8,
-        cPrimary,
-        { staveGrooveAmplitude: 0.05 }
+        [0.32 * scaleVar, 0.22 * scaleVar, 0.17 * scaleVar, 0.12 * scaleVar],
+        12,
+        14,
+        { colorHex: cPrimary }
       );
       taggedParts.push(tagPart(trunk, 'tree_trunk', 'timber_frame', cPrimary, { lockVertical: true }));
 
-      const rCan = 0.95 * scaleVar;
-      const yMid = trunkH + 0.65 * scaleVar;
+      for (let rIdx = 0; rIdx < 3; rIdx++) {
+        const ang = (rIdx / 3) * Math.PI * 2 + 0.35;
+        const cx = Math.cos(ang);
+        const cz = Math.sin(ang);
+        const root = makeSplineLoftGeometry(
+          [
+            [cx * 0.12 * scaleVar, 0.28 * scaleVar, cz * 0.12 * scaleVar],
+            [cx * 0.28 * scaleVar, 0.1 * scaleVar, cz * 0.28 * scaleVar],
+            [cx * 0.44 * scaleVar, 0.01 * scaleVar, cz * 0.44 * scaleVar],
+          ],
+          [0.1 * scaleVar, 0.075 * scaleVar, 0.035 * scaleVar],
+          8,
+          8,
+          { colorHex: cPrimary }
+        );
+        const bough = makeSplineLoftGeometry(
+          [
+            [0, trunkH * 0.76, 0],
+            [cx * 0.3 * scaleVar, trunkH * 0.96, cz * 0.3 * scaleVar],
+            [cx * 0.54 * scaleVar, trunkH + 0.25 * scaleVar, cz * 0.54 * scaleVar],
+          ],
+          [0.095 * scaleVar, 0.068 * scaleVar, 0.038 * scaleVar],
+          8,
+          8,
+          { colorHex: cPrimary }
+        );
+        taggedParts.push(
+          tagPart(root, `tree_root_${rIdx}`, 'timber_frame', cPrimary, { lockVertical: true }),
+          tagPart(bough, `tree_bough_${rIdx}`, 'timber_frame', cPrimary, { lockVertical: true })
+        );
+      }
+
+      // Multi-tiered foliage canopies (main organic SDF crown + tiered sunlit/shaded leaf bough clusters)
+      const rCan = 0.96 * scaleVar;
+      const yMid = trunkH + 0.68 * scaleVar;
       const canopyGeo = makeSdfOrganicMesh(
         (x, y, z) => {
-          const dMain = sdEllipsoid(x, y, z, 0, yMid, 0, rCan, rCan * 0.72, rCan);
-          const dTop = sdEllipsoid(x, y, z, 0.1 * scaleVar, yMid + 0.52 * scaleVar, -0.06 * scaleVar, rCan * 0.68, rCan * 0.56, rCan * 0.68);
-          const dSide = sdEllipsoid(x, y, z, -0.45 * scaleVar, yMid - 0.14 * scaleVar, 0.25 * scaleVar, rCan * 0.56, rCan * 0.45, rCan * 0.56);
-          const base = sminPoly(sminPoly(dMain, dTop, 0.22), dSide, 0.2);
-          return base + sdfHashNoise3D(x * 2.5, y * 2.5, z * 2.5, seed) * 0.08;
+          const dMain = sdEllipsoid(x, y, z, 0, yMid, 0, rCan, rCan * 0.68, rCan);
+          const dTop = sdEllipsoid(x, y, z, 0.1 * scaleVar, yMid + 0.54 * scaleVar, -0.06 * scaleVar, rCan * 0.68, rCan * 0.54, rCan * 0.68);
+          const dSideA = sdEllipsoid(x, y, z, -0.48 * scaleVar, yMid - 0.16 * scaleVar, 0.28 * scaleVar, rCan * 0.58, rCan * 0.44, rCan * 0.58);
+          const dSideB = sdEllipsoid(x, y, z, 0.46 * scaleVar, yMid - 0.12 * scaleVar, -0.24 * scaleVar, rCan * 0.54, rCan * 0.42, rCan * 0.54);
+          const base = sminPoly(sminPoly(dMain, dTop, 0.22), Math.min(dSideA, dSideB), 0.2);
+          return base + sdfHashNoise3D(x * 2.5, y * 2.5, z * 2.5, seed) * 0.075;
         },
-        [-rCan * 1.4, trunkH - 0.1, -rCan * 1.4],
-        [rCan * 1.4, yMid + rCan * 1.25, rCan * 1.4],
-        14,
-        cSecondary
+        [-rCan * 1.45, trunkH - 0.12, -rCan * 1.45],
+        [rCan * 1.45, yMid + rCan * 1.28, rCan * 1.45],
+        20,
+        cSecondary,
+        { flatShaded: false }
       );
       taggedParts.push(
         tagPart(canopyGeo, 'tree_canopy', 'foliage_leaf', cSecondary, {
@@ -509,6 +708,30 @@ export function buildProceduralProp(
           lockVertical: true,
         })
       );
+      // Secondary sunlit upper foliage tier & lower leaf cards
+      const tierSpecs: Array<[number, number, number, number, string]> = [
+        [0.42 * scaleVar, yMid + 0.36 * scaleVar, 0.26 * scaleVar, rCan * 0.48, cAccent],
+        [-0.36 * scaleVar, yMid + 0.3 * scaleVar, -0.32 * scaleVar, rCan * 0.44, cAccent],
+        [0.08 * scaleVar, yMid + 0.78 * scaleVar, 0.06 * scaleVar, rCan * 0.4, cAccent],
+      ];
+      tierSpecs.forEach(([tx, ty, tz, tr, col], tIdx) => {
+        const tierGeo = makeSdfOrganicMesh(
+          (x, y, z) =>
+            sdEllipsoid(x, y, z, tx, ty, tz, tr, tr * 0.65, tr) +
+            sdfHashNoise3D(x * 3.1, y * 3.1, z * 3.1, seed + tIdx * 17) * 0.05,
+          [tx - tr * 1.3, ty - tr * 0.9, tz - tr * 1.3],
+          [tx + tr * 1.3, ty + tr * 0.9, tz + tr * 1.3],
+          12,
+          col,
+          { flatShaded: false }
+        );
+        taggedParts.push(
+          tagPart(tierGeo, `tree_canopy_tier_${tIdx}`, 'foliage_leaf', col, {
+            accentHex: cSecondary,
+            lockVertical: true,
+          })
+        );
+      });
       break;
     }
 
@@ -516,23 +739,37 @@ export function buildProceduralProp(
       const base = makeLatheProfile(
         [
           [0.62, 0],
+          [0.66, 0.36],
           [0.64, 0.72],
           [0.52, 0.75],
           [0.5, 0.2],
         ],
-        10,
-        cPrimary
+        16,
+        cPrimary,
+        { smoothRadialNormals: true }
       );
       const water = makeLatheProfile(
         [
           [0, 0.45],
           [0.48, 0.45],
         ],
-        10,
+        14,
         cAccent
       );
-      const postL = makeBeveledBox(0.11, 1.5, 0.11, 0.015, cSecondary, { offset: [-0.54, 1.4, 0] });
-      const postR = makeBeveledBox(0.11, 1.5, 0.11, 0.015, cSecondary, { offset: [0.54, 1.4, 0] });
+      const postL = makeSculptedLimbGeometry(1.5, 0.06, 0.06, 0.052, 0.052, {
+        profile: 'taper',
+        radialSegs: 10,
+        heightSegs: 5,
+        hexColor: cSecondary,
+      });
+      postL.translate(-0.54, 0.65, 0);
+      const postR = makeSculptedLimbGeometry(1.5, 0.06, 0.06, 0.052, 0.052, {
+        profile: 'taper',
+        radialSegs: 10,
+        heightSegs: 5,
+        hexColor: cSecondary,
+      });
+      postR.translate(0.54, 0.65, 0);
       const roofA = makeBeveledBox(1.45, 0.12, 0.9, 0.02, cSecondary);
       roofA.rotateX(0.45);
       roofA.translate(0, 2.25, 0.25);
@@ -661,19 +898,21 @@ export function buildProceduralProp(
       const basin = makeLatheProfile(
         [
           [1.05, 0],
+          [1.12, 0.22],
           [1.1, 0.45],
           [0.95, 0.48],
           [0.9, 0.2],
         ],
-        12,
-        cPrimary
+        18,
+        cPrimary,
+        { smoothRadialNormals: true }
       );
       const water = makeLatheProfile(
         [
           [0, 0.36],
           [0.92, 0.36],
         ],
-        12,
+        16,
         cAccent
       );
       const spire = makeLatheProfile(
@@ -684,8 +923,9 @@ export function buildProceduralProp(
           [0.14, 1.75],
           [0.08, 2.2],
         ],
-        10,
-        cSecondary
+        16,
+        cSecondary,
+        { smoothRadialNormals: true }
       );
       taggedParts.push(
         tagPart(basin, 'fountain_basin', 'stone_masonry', cPrimary),
@@ -697,9 +937,16 @@ export function buildProceduralProp(
     }
 
     case 'hay_bale': {
-      const bale = makeBeveledBox(0.95, 0.62, 0.65, 0.06, cPrimary, { offset: [0, 0.31, 0] });
-      const tieA = makeBeveledBox(0.05, 0.65, 0.68, 0.01, cAccent, { offset: [-0.24, 0.31, 0] });
-      const tieB = makeBeveledBox(0.05, 0.65, 0.68, 0.01, cAccent, { offset: [0.24, 0.31, 0] });
+      const bale = makeSdfOrganicMesh(
+        (x, y, z) => sdEllipsoid(x, y, z, 0, 0.31, 0, 0.48, 0.32, 0.34) + sdfHashNoise3D(x * 4, y * 4, z * 4, seed) * 0.03,
+        [-0.56, -0.02, -0.42],
+        [0.56, 0.68, 0.42],
+        14,
+        cPrimary,
+        { flatShaded: false }
+      );
+      const tieA = makeBeveledBox(0.05, 0.62, 0.66, 0.01, cAccent, { offset: [-0.24, 0.31, 0] });
+      const tieB = makeBeveledBox(0.05, 0.62, 0.66, 0.01, cAccent, { offset: [0.24, 0.31, 0] });
       taggedParts.push(
         tagPart(bale, 'hay_body', 'woven_cloth', cPrimary),
         tagPart(tieA, 'hay_tie_a', 'stitched_leather', cAccent),
@@ -712,20 +959,24 @@ export function buildProceduralProp(
       const body = makeLatheProfile(
         [
           [0.26, 0],
-          [0.32, 0.28],
+          [0.33, 0.2],
+          [0.31, 0.36],
           [0.14, 0.58],
-          [0.2, 0.72],
+          [0.21, 0.72],
         ],
-        8,
-        cPrimary
+        14,
+        cPrimary,
+        { smoothRadialNormals: true }
       );
       const tie = makeLatheProfile(
         [
-          [0.16, 0.56],
-          [0.16, 0.61],
+          [0.155, 0.56],
+          [0.17, 0.585],
+          [0.155, 0.61],
         ],
-        8,
-        cAccent
+        14,
+        cAccent,
+        { smoothRadialNormals: true }
       );
       taggedParts.push(
         tagPart(body, 'sack_body', 'woven_cloth', cPrimary),
@@ -740,10 +991,16 @@ export function buildProceduralProp(
           [0.28, 0],
           [0.18, 0.14],
         ],
-        8,
-        cPrimary
+        12,
+        cPrimary,
+        { smoothRadialNormals: true }
       );
-      const pole = makeBeveledBox(0.07, 2.5, 0.07, 0.01, cPrimary, { offset: [0, 1.3, 0] });
+      const pole = makeSculptedLimbGeometry(2.5, 0.038, 0.038, 0.032, 0.032, {
+        profile: 'taper',
+        radialSegs: 10,
+        heightSegs: 4,
+        hexColor: cPrimary,
+      });
       const bar = makeBeveledBox(0.82, 0.06, 0.06, 0.01, cAccent, { offset: [0, 2.45, 0] });
       const cloth = makeBeveledBox(0.72, 1.35, 0.04, 0.008, cSecondary, { offset: [0, 1.72, 0.04] });
       taggedParts.push(
@@ -756,7 +1013,14 @@ export function buildProceduralProp(
     }
 
     case 'crystal_cluster': {
-      const rock = makeBeveledBox(0.78, 0.28, 0.72, 0.06, cPrimary, { offset: [0, 0.14, 0] });
+      const rock = makeSdfOrganicMesh(
+        (x, y, z) => sdEllipsoid(x, y, z, 0, 0.14, 0, 0.42, 0.18, 0.38) + sdfHashNoise3D(x * 4, y * 4, z * 4, seed) * 0.03,
+        [-0.5, -0.02, -0.45],
+        [0.5, 0.36, 0.45],
+        14,
+        cPrimary,
+        { flatShaded: false }
+      );
       taggedParts.push(tagPart(rock, 'crystal_base', 'stone_masonry', cPrimary));
       const offsets: Array<[number, number, number, number, number]> = [
         [0, 0.78, 0, 0.18, 1.35],
@@ -765,7 +1029,7 @@ export function buildProceduralProp(
         [0.08, 0.45, 0.22, 0.11, 0.72],
       ];
       offsets.forEach(([ox, oy, oz, rad, h], idx) => {
-        const shard = new THREE.ConeGeometry(rad, h, 5);
+        const shard = new THREE.ConeGeometry(rad, h, 6);
         const pos = shard.attributes.position;
         const col = new Float32Array(pos.count * 3);
         const c = new THREE.Color(idx % 2 === 0 ? cSecondary : cAccent);
@@ -785,15 +1049,46 @@ export function buildProceduralProp(
     }
 
     case 'statue_knight': {
-      const ped = makeBeveledBox(0.95, 0.72, 0.95, 0.03, cSecondary, { offset: [0, 0.36, 0] });
-      const legs = makeBeveledBox(0.44, 0.78, 0.32, 0.025, cPrimary, { offset: [0, 1.11, 0] });
-      const torso = makeBeveledBox(0.56, 0.65, 0.36, 0.03, cPrimary, { offset: [0, 1.82, 0] });
-      const head = makeBeveledBox(0.28, 0.32, 0.28, 0.025, cPrimary, { offset: [0, 2.34, 0] });
-      const sword = makeBeveledBox(0.12, 1.25, 0.06, 0.01, cAccent, { offset: [0, 1.55, 0.28] });
+      const ped = makeBeveledBox(0.95, 0.72, 0.95, 0.04, cSecondary, { offset: [0, 0.36, 0] });
+      const legs = makeSculptedLimbGeometry(0.78, 0.22, 0.16, 0.2, 0.15, {
+        profile: 'armor_limb',
+        radialSegs: 14,
+        heightSegs: 6,
+        hexColor: cPrimary,
+      });
+      legs.translate(0, 0.72, 0);
+      const torso = makeAnatomicalTorsoGeometry(0.65, 0.22, 0.15, 0.28, 0.18, {
+        isArmored: true,
+        radialSegs: 16,
+        heightSegs: 6,
+        hexColor: cPrimary,
+      });
+      torso.translate(0, 1.5, 0);
+      const pauldronL = makePauldronShellGeometry(0.18, 0.15, 0.19, 0.03, cPrimary);
+      pauldronL.translate(0.29, 2.02, 0);
+      const pauldronR = makePauldronShellGeometry(0.18, 0.15, 0.19, 0.03, cPrimary);
+      pauldronR.rotateY(Math.PI);
+      pauldronR.translate(-0.29, 2.02, 0);
+      const head = makeLatheProfile(
+        [
+          [0.14, 2.18],
+          [0.15, 2.34],
+          [0.11, 2.48],
+          [0.01, 2.52],
+        ],
+        14,
+        cPrimary,
+        { smoothRadialNormals: true }
+      );
+      const sword = makeSwordBladeGeometry(0.12, 0.04, 1.05, 0.22, cAccent);
+      sword.rotateX(Math.PI);
+      sword.translate(0, 2.05, 0.28);
       taggedParts.push(
         tagPart(ped, 'statue_ped', 'stone_masonry', cSecondary),
         tagPart(legs, 'statue_legs', 'stone_masonry', cPrimary),
         tagPart(torso, 'statue_torso', 'stone_masonry', cPrimary),
+        tagPart(pauldronL, 'statue_pauldron_l', 'stone_masonry', cPrimary),
+        tagPart(pauldronR, 'statue_pauldron_r', 'stone_masonry', cPrimary),
         tagPart(head, 'statue_head', 'stone_masonry', cPrimary),
         tagPart(sword, 'statue_sword', 'forged_steel', cAccent)
       );

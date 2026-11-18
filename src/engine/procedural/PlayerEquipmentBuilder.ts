@@ -29,15 +29,19 @@ import {
   type UnwrapMetricsSummary,
 } from './PixelMaterialSynth';
 import {
-  makeBeveledBoneSegmentBox,
+  makeAnatomicalTorsoGeometry,
+  makeAxeHeadGeometry,
   makeBeveledBox,
+  makeCurvedHornGeometry,
   makeDomeShieldGeometry,
   makeLatheProfile,
   makePauldronShellGeometry,
   makePleatedTabardGeometry,
   makeRecurveBowGeometry,
-  makeSegmentedBeveledBox,
+  makeSculptedLimbGeometry,
+  makeSplineLoftGeometry,
   makeSwordBladeGeometry,
+  subdivideGeometryLoop,
   tagPart,
   type FinishMode,
   type TaggedGeometryPart,
@@ -376,14 +380,13 @@ function buildBaseShellSpecs(
 
   bakeShellBone('Shell_Pelvis', 'pelvis', [
     tagPart(
-      makeBeveledBoneSegmentBox(
+      makeAnatomicalTorsoGeometry(
         pelvisLen * 1.05,
         0.135,
         0.095,
         0.13,
         0.09,
-        0.012,
-        SHELL_COLORS.undershirtDark
+        { radialSegs: 10, heightSegs: 4, hexColor: SHELL_COLORS.undershirtDark, musculature: 0.6 }
       ),
       'shell_pelvis',
       'woven_cloth',
@@ -393,14 +396,13 @@ function buildBaseShellSpecs(
 
   bakeShellBone('Shell_Spine1', 'spine_01', [
     tagPart(
-      makeBeveledBoneSegmentBox(
+      makeAnatomicalTorsoGeometry(
         spine1Len * 1.05,
         0.125,
         0.088,
         0.135,
         0.092,
-        0.012,
-        SHELL_COLORS.undershirt
+        { radialSegs: 10, heightSegs: 4, hexColor: SHELL_COLORS.undershirt, musculature: 0.85 }
       ),
       'shell_spine1',
       'woven_cloth',
@@ -410,14 +412,13 @@ function buildBaseShellSpecs(
 
   bakeShellBone('Shell_Spine2', 'spine_02', [
     tagPart(
-      makeBeveledBoneSegmentBox(
+      makeAnatomicalTorsoGeometry(
         spine2Len * 1.06,
         0.138,
         0.095,
         0.152,
         0.105,
-        0.013,
-        SHELL_COLORS.undershirt
+        { radialSegs: 10, heightSegs: 4, hexColor: SHELL_COLORS.undershirt, musculature: 0.9 }
       ),
       'shell_spine2',
       'woven_cloth',
@@ -427,14 +428,13 @@ function buildBaseShellSpecs(
 
   bakeShellBone('Shell_Spine3', 'spine_03', [
     tagPart(
-      makeBeveledBoneSegmentBox(
+      makeAnatomicalTorsoGeometry(
         spine3Len * 0.9,
         0.155,
         0.105,
         0.165,
         0.11,
-        0.014,
-        SHELL_COLORS.undershirt
+        { radialSegs: 10, heightSegs: 4, hexColor: SHELL_COLORS.undershirt, musculature: 1.0 }
       ),
       'shell_spine3',
       'woven_cloth',
@@ -444,18 +444,25 @@ function buildBaseShellSpecs(
 
   bakeShellBone('Shell_Neck', 'neck_01', [
     tagPart(
-      makeBeveledBoneSegmentBox(neckLen * 1.1, 0.05, 0.05, 0.048, 0.048, 0.008, SHELL_COLORS.skinShadow),
+      makeSculptedLimbGeometry(neckLen * 1.1, 0.05, 0.05, 0.048, 0.048, {
+        profile: 'taper',
+        radialSegs: 10,
+        heightSegs: 4,
+        hexColor: SHELL_COLORS.skinShadow,
+      }),
       'shell_neck',
       'human_skin',
       SHELL_COLORS.skinShadow
     ),
   ]);
 
-  // Head + textured semantic eyes/brows + beveled short hair (no protruding faceBand cuboid!)
-  const headBox = makeBeveledBox(0.21, 0.23, 0.21, 0.02, SHELL_COLORS.skin, {
+  // Head + textured semantic eyes/brows + sculpted rounded hair (preserves head_front landmark)
+  const rawHeadBox = makeBeveledBox(0.214, 0.234, 0.214, 0.036, SHELL_COLORS.skin, {
     offset: [0, 0.11, 0],
   });
-  const hairCap = makeBeveledBox(0.22, 0.075, 0.22, 0.015, SHELL_COLORS.hair, {
+  const headBox = subdivideGeometryLoop(rawHeadBox, 1, { defaultHex: SHELL_COLORS.skin });
+  rawHeadBox.dispose();
+  const hairCap = makeBeveledBox(0.224, 0.082, 0.224, 0.022, SHELL_COLORS.hair, {
     offset: [0, 0.2, -0.01],
   });
   bakeShellBone(
@@ -476,7 +483,12 @@ function buildBaseShellSpecs(
   for (const side of ['l', 'r'] as const) {
     bakeShellBone(`Shell_UpperArm_${side}`, `upperarm_${side}`, [
       tagPart(
-        makeBeveledBoneSegmentBox(uArm * 0.94, 0.054, 0.054, 0.046, 0.046, 0.009, SHELL_COLORS.undershirt),
+        makeSculptedLimbGeometry(uArm * 0.94, 0.054, 0.054, 0.046, 0.046, {
+          profile: 'bicep',
+          radialSegs: 10,
+          heightSegs: 4,
+          hexColor: SHELL_COLORS.undershirt,
+        }),
         `shell_ua_${side}`,
         'woven_cloth',
         SHELL_COLORS.undershirt
@@ -484,7 +496,12 @@ function buildBaseShellSpecs(
     ]);
     bakeShellBone(`Shell_LowerArm_${side}`, `lowerarm_${side}`, [
       tagPart(
-        makeBeveledBoneSegmentBox(lArm * 0.94, 0.045, 0.045, 0.038, 0.038, 0.008, SHELL_COLORS.skinShadow),
+        makeSculptedLimbGeometry(lArm * 0.94, 0.045, 0.045, 0.038, 0.038, {
+          profile: 'forearm',
+          radialSegs: 10,
+          heightSegs: 4,
+          hexColor: SHELL_COLORS.skinShadow,
+        }),
         `shell_la_${side}`,
         'human_skin',
         SHELL_COLORS.skinShadow
@@ -492,7 +509,12 @@ function buildBaseShellSpecs(
     ]);
     bakeShellBone(`Shell_Hand_${side}`, `hand_${side}`, [
       tagPart(
-        makeBeveledBoneSegmentBox(0.1, 0.038, 0.035, 0.034, 0.03, 0.007, SHELL_COLORS.skin),
+        makeSculptedLimbGeometry(0.1, 0.038, 0.035, 0.034, 0.03, {
+          profile: 'taper',
+          radialSegs: 8,
+          heightSegs: 4,
+          hexColor: SHELL_COLORS.skin,
+        }),
         `shell_hand_${side}`,
         'human_skin',
         SHELL_COLORS.skin
@@ -500,15 +522,12 @@ function buildBaseShellSpecs(
     ]);
     bakeShellBone(`Shell_Thigh_${side}`, `thigh_${side}`, [
       tagPart(
-        makeBeveledBoneSegmentBox(
-          thigh * 0.94,
-          0.072,
-          0.072,
-          0.056,
-          0.056,
-          0.011,
-          SHELL_COLORS.undershirtDark
-        ),
+        makeSculptedLimbGeometry(thigh * 0.94, 0.072, 0.072, 0.056, 0.056, {
+          profile: 'thigh',
+          radialSegs: 10,
+          heightSegs: 4,
+          hexColor: SHELL_COLORS.undershirtDark,
+        }),
         `shell_thigh_${side}`,
         'woven_cloth',
         SHELL_COLORS.undershirtDark
@@ -516,15 +535,12 @@ function buildBaseShellSpecs(
     ]);
     bakeShellBone(`Shell_Calf_${side}`, `calf_${side}`, [
       tagPart(
-        makeBeveledBoneSegmentBox(
-          calf * 0.94,
-          0.056,
-          0.056,
-          0.044,
-          0.044,
-          0.009,
-          SHELL_COLORS.undershirtDark
-        ),
+        makeSculptedLimbGeometry(calf * 0.94, 0.056, 0.056, 0.044, 0.044, {
+          profile: 'calf',
+          radialSegs: 10,
+          heightSegs: 4,
+          hexColor: SHELL_COLORS.undershirtDark,
+        }),
         `shell_calf_${side}`,
         'stitched_leather',
         SHELL_COLORS.undershirtDark
@@ -532,7 +548,12 @@ function buildBaseShellSpecs(
     ]);
     bakeShellBone(`Shell_Foot_${side}`, `foot_${side}`, [
       tagPart(
-        makeBeveledBoneSegmentBox(0.14, 0.046, 0.054, 0.04, 0.045, 0.008, SHELL_COLORS.undershirtDark),
+        makeSculptedLimbGeometry(0.14, 0.046, 0.054, 0.04, 0.045, {
+          profile: 'taper',
+          radialSegs: 8,
+          heightSegs: 4,
+          hexColor: SHELL_COLORS.undershirtDark,
+        }),
         `shell_foot_${side}`,
         'stitched_leather',
         SHELL_COLORS.undershirtDark
@@ -649,50 +670,116 @@ function applyWeaponGripPivotAndClamp(
     const parts: TaggedGeometryPart[] = [];
     const hw = SHELL_CLEARANCE.headW + SHELL_CLEARANCE.plateMargin * 2.2;
     const hh = SHELL_CLEARANCE.headH + SHELL_CLEARANCE.plateMargin * 1.4;
+    const hr = hw * 0.54;
 
     if (hStyle === 'full_helm' || hStyle === 'winged_helm') {
-      const dome = makeBeveledBox(hw, hh, hw, 0.025, pal.primary, { offset: [0, 0.135, 0] });
-      const visor = makeBeveledBox(hw * 0.85, 0.068, 0.075, 0.012, '#141013', {
-        offset: [0, 0.11, hw * 0.44],
+      const dome = makeLatheProfile(
+        [
+          [hr * 0.94, 0.015],
+          [hr * 1.04, 0.08],
+          [hr * 1.02, 0.16],
+          [hr * 0.78, 0.235],
+          [hr * 0.36, 0.268],
+          [0.008, 0.278],
+        ],
+        14,
+        pal.primary,
+        { smoothRadialNormals: true, capBottom: false, capTop: false }
+      );
+      const visor = makeBeveledBox(hw * 0.84, 0.058, 0.082, 0.014, '#141013', {
+        offset: [0, 0.11, hw * 0.43],
       });
-      const trimBand = makeBeveledBox(hw + 0.014, 0.044, hw + 0.014, 0.01, pal.trim, {
-        offset: [0, 0.19, 0.008],
-      });
+      const browGuard = makeLatheProfile(
+        [
+          [hr * 1.02, 0.155],
+          [hr * 1.1, 0.178],
+          [hr * 1.02, 0.2],
+        ],
+        14,
+        pal.trim,
+        { smoothRadialNormals: true, capBottom: false, capTop: false }
+      );
       parts.push(
         tagPart(dome, 'helm_dome', 'rarity_armor', pal.primary, { accentHex: pal.trim }),
         tagPart(visor, 'helm_visor', 'forged_steel', '#141013'),
-        tagPart(trimBand, 'helm_trim', 'brushed_gold', pal.trim)
+        tagPart(browGuard, 'helm_trim', 'brushed_gold', pal.trim)
       );
       if (tier >= 2 || hStyle === 'winged_helm') {
-        const crest = makeBeveledBox(0.056, 0.1 + tier * 0.015, hw * 0.92, 0.012, pal.secondary, {
-          offset: [0, 0.285, -0.01],
-        });
+        const crest = makeSplineLoftGeometry(
+          [
+            [0, 0.25, 0.09],
+            [0, 0.31 + tier * 0.008, 0.01],
+            [0, 0.275, -0.09],
+            [0, 0.18, -0.16],
+          ],
+          [
+            [0.016, 0.022],
+            [0.022, 0.032],
+            [0.02, 0.028],
+            [0.012, 0.018],
+          ],
+          8,
+          10,
+          { colorHex: pal.secondary }
+        );
         parts.push(tagPart(crest, 'helm_crest', 'rarity_armor', pal.secondary, { accentHex: pal.trim }));
       }
       if (hStyle === 'winged_helm' || tier >= 4) {
         for (const [wIdx, sx] of [-1, 1].entries()) {
-          const wing = makeBeveledBox(0.052, 0.16, 0.1, 0.01, pal.trim);
-          wing.rotateZ(sx * -0.38);
-          wing.translate(sx * (hw * 0.56), 0.25, -0.01);
-          parts.push(tagPart(wing, `helm_wing_${wIdx}`, 'brushed_gold', pal.trim));
+          const wing = makeCurvedHornGeometry(
+            6,
+            0.032,
+            0.008,
+            0.18,
+            sx * 0.05,
+            -0.04,
+            8,
+            pal.trim
+          );
+          wing.rotateZ(sx * -0.42);
+          wing.translate(sx * (hr * 0.98), 0.19, -0.01);
+          parts.push(tagPart(wing, `helm_wing_${wIdx}`, 'brushed_gold', pal.trim, { lockVertical: false }));
         }
       }
       bakeBoneParts('Head', parts, hStyle, { isMetal: true, inspectUvs: true });
     } else if (hStyle === 'open_helm') {
       // Barbuta: open face (+Z) so semantic eyes/brows stay cleanly visible
-      const crown = makeBeveledBox(hw, 0.11, hw, 0.02, pal.primary, { offset: [0, 0.21, -0.005] });
-      const backPlate = makeBeveledBox(hw, 0.19, 0.085, 0.014, pal.primary, {
-        offset: [0, 0.115, -hw * 0.36],
+      const crown = makeLatheProfile(
+        [
+          [hr * 1.02, 0.165],
+          [hr * 0.96, 0.22],
+          [hr * 0.62, 0.26],
+          [0.008, 0.274],
+        ],
+        16,
+        pal.primary,
+        { smoothRadialNormals: true }
+      );
+      const backRaw = makeBeveledBox(hw, 0.185, 0.088, 0.02, pal.primary, {
+        offset: [0, 0.11, -hw * 0.35],
       });
-      const cheekL = makeBeveledBox(0.052, 0.16, 0.14, 0.01, pal.secondary, {
-        offset: [hw * 0.42, 0.10, 0.02],
+      const backPlate = subdivideGeometryLoop(backRaw, 1, { defaultHex: pal.primary });
+      backRaw.dispose();
+      const cheekLRaw = makeBeveledBox(0.052, 0.155, 0.145, 0.014, pal.secondary, {
+        offset: [hw * 0.42, 0.098, 0.02],
       });
-      const cheekR = makeBeveledBox(0.052, 0.16, 0.14, 0.01, pal.secondary, {
-        offset: [-hw * 0.42, 0.10, 0.02],
+      const cheekL = subdivideGeometryLoop(cheekLRaw, 1, { defaultHex: pal.secondary });
+      cheekLRaw.dispose();
+      const cheekRRaw = makeBeveledBox(0.052, 0.155, 0.145, 0.014, pal.secondary, {
+        offset: [-hw * 0.42, 0.098, 0.02],
       });
-      const brow = makeBeveledBox(hw + 0.012, 0.04, 0.065, 0.01, pal.trim, {
-        offset: [0, 0.185, hw * 0.42],
-      });
+      const cheekR = subdivideGeometryLoop(cheekRRaw, 1, { defaultHex: pal.secondary });
+      cheekRRaw.dispose();
+      const brow = makeLatheProfile(
+        [
+          [hr * 1.02, 0.162],
+          [hr * 1.09, 0.182],
+          [hr * 1.02, 0.202],
+        ],
+        16,
+        pal.trim,
+        { smoothRadialNormals: true }
+      );
       parts.push(
         tagPart(crown, 'open_helm_crown', 'rarity_armor', pal.primary, { accentHex: pal.trim }),
         tagPart(backPlate, 'open_helm_back', 'rarity_armor', pal.primary),
@@ -702,75 +789,149 @@ function applyWeaponGripPivotAndClamp(
       );
       bakeBoneParts('Head', parts, hStyle, { isMetal: true, inspectUvs: true });
     } else if (hStyle === 'hood') {
-      const hood = makeBeveledBox(hw, hh * 0.9, hw + 0.02, 0.024, pal.primary, {
-        offset: [0, 0.14, -0.022],
+      const hoodRaw = makeBeveledBox(hw * 1.02, hh * 0.92, hw + 0.025, 0.036, pal.primary, {
+        offset: [0, 0.138, -0.022],
       });
-      const cowlRim = makeBeveledBox(hw + 0.01, 0.052, 0.085, 0.012, pal.trim, {
-        offset: [0, 0.215, 0.095],
-      });
+      const hood = subdivideGeometryLoop(hoodRaw, 1, { defaultHex: pal.primary });
+      hoodRaw.dispose();
+      const cowlRim = makeSplineLoftGeometry(
+        [
+          [-hw * 0.44, 0.08, 0.08],
+          [-hw * 0.36, 0.22, 0.115],
+          [0, 0.245, 0.125],
+          [hw * 0.36, 0.22, 0.115],
+          [hw * 0.44, 0.08, 0.08],
+        ],
+        [0.024, 0.028, 0.032, 0.028, 0.024],
+        10,
+        14,
+        { colorHex: pal.trim }
+      );
       parts.push(
         tagPart(hood, 'archer_hood', 'stitched_leather', pal.primary, { accentHex: pal.trim }),
         tagPart(cowlRim, 'archer_cowl', 'stitched_leather', pal.trim)
       );
       if (tier >= 2) {
-        const feather = makeBeveledBox(0.042, 0.18 + tier * 0.02, 0.065, 0.008, pal.secondary);
-        feather.rotateZ(-0.28);
-        feather.rotateX(-0.2);
-        feather.translate(0.145, 0.255, -0.04);
+        const feather = makeSplineLoftGeometry(
+          [
+            [0.12, 0.18, -0.01],
+            [0.155, 0.26, -0.04],
+            [0.185, 0.34 + tier * 0.015, -0.09],
+          ],
+          [
+            [0.012, 0.018],
+            [0.018, 0.032],
+            [0.006, 0.012],
+          ],
+          8,
+          10,
+          { colorHex: pal.secondary }
+        );
         parts.push(tagPart(feather, 'archer_feather', 'woven_cloth', pal.secondary));
       }
       bakeBoneParts('Head', parts, hStyle, { isMetal: false, inspectUvs: true });
     } else if (hStyle === 'circlet') {
-      const band = makeBeveledBox(hw * 0.94, 0.045, hw * 0.94, 0.008, pal.trim, {
-        offset: [0, 0.19, 0],
-      });
+      const band = makeLatheProfile(
+        [
+          [hr * 0.9, 0.172],
+          [hr * 0.96, 0.192],
+          [hr * 0.9, 0.212],
+        ],
+        16,
+        pal.trim,
+        { smoothRadialNormals: true }
+      );
       const gem = prepareColoredPart(new THREE.OctahedronGeometry(0.042, 0), pal.glow);
-      gem.translate(0, 0.205, hw * 0.48);
+      gem.translate(0, 0.205, hr * 0.95);
       parts.push(
         tagPart(band, 'circlet_band', 'brushed_gold', pal.trim),
         tagPart(gem, 'circlet_gem', 'runic_glow', pal.glow, { lockVertical: false })
       );
       if (tier >= 3) {
         for (const [sIdx, sx] of [-1, 0, 1].entries()) {
-          const spire = makeBeveledBox(0.032, sx === 0 ? 0.09 : 0.065, 0.032, 0.006, pal.trim, {
-            offset: [sx * 0.075, 0.235, hw * 0.44],
-          });
+          const spire = makeCurvedHornGeometry(5, 0.016, 0.003, sx === 0 ? 0.09 : 0.065, 0, -0.01, 6, pal.trim);
+          spire.translate(sx * 0.072, 0.205, hr * 0.88);
           parts.push(tagPart(spire, `circlet_spire_${sIdx}`, 'brushed_gold', pal.trim));
         }
       }
       bakeBoneParts('Head', parts, hStyle, { isMetal: true, inspectUvs: true });
     } else if (hStyle === 'horned_viking') {
-      const dome = makeBeveledBox(hw, hh * 0.72, hw, 0.025, pal.primary, { offset: [0, 0.175, 0] });
-      const noseGuard = makeBeveledBox(0.036, 0.11, 0.036, 0.008, pal.trim, {
+      const dome = makeLatheProfile(
+        [
+          [hr * 0.98, 0.135],
+          [hr * 1.0, 0.19],
+          [hr * 0.72, 0.245],
+          [0.008, 0.262],
+        ],
+        16,
+        pal.primary,
+        { smoothRadialNormals: true }
+      );
+      const noseGuard = makeBeveledBox(0.036, 0.11, 0.036, 0.01, pal.trim, {
         offset: [0, 0.115, hw * 0.48],
       });
-      const brow = makeBeveledBox(hw + 0.015, 0.044, hw + 0.015, 0.01, pal.trim, {
-        offset: [0, 0.155, 0],
-      });
+      const brow = makeLatheProfile(
+        [
+          [hr * 1.0, 0.132],
+          [hr * 1.07, 0.155],
+          [hr * 1.0, 0.178],
+        ],
+        16,
+        pal.trim,
+        { smoothRadialNormals: true }
+      );
       parts.push(
         tagPart(dome, 'viking_dome', 'rarity_armor', pal.primary, { accentHex: pal.trim }),
         tagPart(noseGuard, 'viking_nose', 'brushed_gold', pal.trim),
         tagPart(brow, 'viking_brow', 'brushed_gold', pal.trim)
       );
       for (const [hIdx, sx] of [-1, 1].entries()) {
-        const hornBase = prepareColoredPart(new THREE.ConeGeometry(0.045, 0.22, 6), '#e5dcc5');
-        hornBase.rotateZ(sx * -0.95);
-        hornBase.rotateY(sx * 0.25);
-        hornBase.translate(sx * (hw * 0.62), 0.24, 0.01);
+        const hornBase = makeCurvedHornGeometry(9, 0.042, 0.006, 0.24, sx * 0.08, -0.04, 10, '#e5dcc5');
+        hornBase.rotateZ(sx * -0.92);
+        hornBase.rotateY(sx * 0.2);
+        hornBase.translate(sx * (hr * 0.92), 0.18, 0.01);
         parts.push(tagPart(hornBase, `viking_horn_${hIdx}`, 'bone_ivory', '#e5dcc5', { lockVertical: false }));
       }
       bakeBoneParts('Head', parts, hStyle, { isMetal: true, inspectUvs: true });
     } else if (hStyle === 'plumed_knight') {
-      const dome = makeBeveledBox(hw, hh, hw, 0.025, pal.primary, { offset: [0, 0.135, 0] });
-      const visor = makeBeveledBox(hw * 0.86, 0.064, 0.075, 0.012, '#141013', {
-        offset: [0, 0.11, hw * 0.44],
+      const dome = makeLatheProfile(
+        [
+          [hr * 0.94, 0.015],
+          [hr * 1.04, 0.08],
+          [hr * 1.02, 0.16],
+          [hr * 0.78, 0.235],
+          [hr * 0.36, 0.268],
+          [0.008, 0.278],
+        ],
+        16,
+        pal.primary,
+        { smoothRadialNormals: true }
+      );
+      const visorRaw = makeBeveledBox(hw * 0.85, 0.056, 0.08, 0.014, '#141013', {
+        offset: [0, 0.11, hw * 0.43],
       });
-      const plumeHolder = makeBeveledBox(0.048, 0.06, 0.08, 0.01, pal.trim, {
-        offset: [0, 0.275, -0.02],
+      const visor = subdivideGeometryLoop(visorRaw, 1, { defaultHex: '#141013' });
+      visorRaw.dispose();
+      const plumeHolder = makeBeveledBox(0.048, 0.06, 0.08, 0.012, pal.trim, {
+        offset: [0, 0.27, -0.02],
       });
-      const plume = makeBeveledBox(0.056, 0.16, 0.24, 0.022, pal.secondary, {
-        offset: [0, 0.34, -0.07],
-      });
+      const plume = makeSplineLoftGeometry(
+        [
+          [0, 0.295, 0.03],
+          [0, 0.365, -0.05],
+          [0, 0.31, -0.16],
+          [0, 0.18, -0.22],
+        ],
+        [
+          [0.02, 0.035],
+          [0.036, 0.065],
+          [0.032, 0.055],
+          [0.015, 0.025],
+        ],
+        10,
+        14,
+        { colorHex: pal.secondary }
+      );
       parts.push(
         tagPart(dome, 'plumed_dome', 'rarity_armor', pal.primary, { accentHex: pal.trim }),
         tagPart(visor, 'plumed_visor', 'forged_steel', '#141013'),
@@ -779,22 +940,25 @@ function applyWeaponGripPivotAndClamp(
       );
       bakeBoneParts('Head', parts, hStyle, { isMetal: true, inspectUvs: true });
     } else if (hStyle === 'plague_mask') {
-      const hood = makeBeveledBox(hw, hh * 0.9, hw + 0.02, 0.024, pal.secondary, {
+      const hoodRaw = makeBeveledBox(hw, hh * 0.9, hw + 0.02, 0.032, pal.secondary, {
         offset: [0, 0.14, -0.015],
       });
+      const hood = subdivideGeometryLoop(hoodRaw, 1, { defaultHex: pal.secondary });
+      hoodRaw.dispose();
       const brim = makeLatheProfile(
         [
-          [0.14, 0.22],
-          [0.27, 0.23],
-          [0.26, 0.25],
-          [0.14, 0.255],
+          [0.135, 0.22],
+          [0.275, 0.23],
+          [0.265, 0.25],
+          [0.135, 0.256],
         ],
-        8,
-        pal.secondary
+        16,
+        pal.secondary,
+        { smoothRadialNormals: true }
       );
-      const beak = prepareColoredPart(new THREE.ConeGeometry(0.052, 0.18, 6), '#d8cfb8');
+      const beak = makeCurvedHornGeometry(8, 0.048, 0.008, 0.19, 0, -0.04, 8, '#d8cfb8');
       beak.rotateX(Math.PI * 0.56);
-      beak.translate(0, 0.095, hw * 0.62);
+      beak.translate(0, 0.105, hw * 0.48);
       parts.push(
         tagPart(hood, 'plague_hood', 'stitched_leather', pal.secondary),
         tagPart(brim, 'plague_brim', 'stitched_leather', pal.secondary),
@@ -802,15 +966,26 @@ function applyWeaponGripPivotAndClamp(
       );
       bakeBoneParts('Head', parts, hStyle, { isMetal: false, inspectUvs: true });
     } else if (hStyle === 'assassin_cowl') {
-      const cowl = makeBeveledBox(hw, hh * 0.92, hw + 0.02, 0.024, pal.secondary, {
+      const cowlRaw = makeBeveledBox(hw, hh * 0.92, hw + 0.02, 0.032, pal.secondary, {
         offset: [0, 0.14, -0.018],
       });
-      const mask = makeBeveledBox(hw * 0.88, 0.095, 0.08, 0.014, '#18181b', {
+      const cowl = subdivideGeometryLoop(cowlRaw, 1, { defaultHex: pal.secondary });
+      cowlRaw.dispose();
+      const maskRaw = makeBeveledBox(hw * 0.88, 0.095, 0.08, 0.018, '#18181b', {
         offset: [0, 0.075, hw * 0.41],
       });
-      const scarf = makeBeveledBox(hw * 0.96, 0.06, hw * 0.96, 0.012, pal.primary, {
-        offset: [0, 0.025, 0],
-      });
+      const mask = subdivideGeometryLoop(maskRaw, 1, { defaultHex: '#18181b' });
+      maskRaw.dispose();
+      const scarf = makeLatheProfile(
+        [
+          [hr * 1.04, 0.005],
+          [hr * 1.1, 0.032],
+          [hr * 0.98, 0.06],
+        ],
+        16,
+        pal.primary,
+        { smoothRadialNormals: true }
+      );
       parts.push(
         tagPart(cowl, 'assassin_cowl', 'woven_cloth', pal.secondary, { accentHex: pal.trim }),
         tagPart(mask, 'assassin_mask', 'stitched_leather', '#18181b'),
@@ -818,70 +993,90 @@ function applyWeaponGripPivotAndClamp(
       );
       bakeBoneParts('Head', parts, hStyle, { isMetal: false, inspectUvs: true });
     } else if (hStyle === 'samurai_kabuto') {
-      const bowl = makeBeveledBox(hw, hh * 0.62, hw, 0.025, pal.primary, { offset: [0, 0.185, 0] });
-      const shikoro = makeBeveledBox(hw + 0.055, 0.11, hw + 0.03, 0.014, pal.secondary, {
-        offset: [0, 0.105, -0.03],
+      const bowl = makeLatheProfile(
+        [
+          [hr * 1.04, 0.145],
+          [hr * 1.02, 0.2],
+          [hr * 0.7, 0.252],
+          [0.008, 0.268],
+        ],
+        16,
+        pal.primary,
+        { smoothRadialNormals: true }
+      );
+      const shikoro = makePleatedTabardGeometry(hw * 0.96, hw * 1.24, 0.13, 0.032, 3, pal.secondary, {
+        offset: [0, 0.1, -hr * 0.72],
+        flareZ: -0.04,
       });
-      const crestL = makeBeveledBox(0.036, 0.16, 0.03, 0.008, pal.trim);
+      const crestL = makeCurvedHornGeometry(6, 0.018, 0.005, 0.16, -0.03, 0.02, 6, pal.trim);
       crestL.rotateZ(0.45);
-      crestL.translate(-0.065, 0.27, hw * 0.5);
-      const crestR = makeBeveledBox(0.036, 0.16, 0.03, 0.008, pal.trim);
+      crestL.translate(-0.045, 0.21, hr * 0.92);
+      const crestR = makeCurvedHornGeometry(6, 0.018, 0.005, 0.16, 0.03, 0.02, 6, pal.trim);
       crestR.rotateZ(-0.45);
-      crestR.translate(0.065, 0.27, hw * 0.5);
+      crestR.translate(0.045, 0.21, hr * 0.92);
       parts.push(
         tagPart(bowl, 'kabuto_bowl', 'rarity_armor', pal.primary, { accentHex: pal.trim }),
         tagPart(shikoro, 'kabuto_shikoro', 'rarity_armor', pal.secondary),
-        tagPart(crestL, 'kabuto_crest_l', 'brushed_gold', pal.trim),
-        tagPart(crestR, 'kabuto_crest_r', 'brushed_gold', pal.trim)
+        tagPart(crestL, 'kabuto_crest_l', 'brushed_gold', pal.trim, { lockVertical: false }),
+        tagPart(crestR, 'kabuto_crest_r', 'brushed_gold', pal.trim, { lockVertical: false })
       );
       bakeBoneParts('Head', parts, hStyle, { isMetal: true, inspectUvs: true });
     } else if (hStyle === 'crown_king') {
-      const band = makeBeveledBox(hw * 0.96, 0.052, hw * 0.96, 0.008, pal.trim, {
-        offset: [0, 0.205, 0],
-      });
+      const band = makeLatheProfile(
+        [
+          [hr * 0.92, 0.18],
+          [hr * 0.98, 0.205],
+          [hr * 0.92, 0.232],
+        ],
+        16,
+        pal.trim,
+        { smoothRadialNormals: true }
+      );
       parts.push(tagPart(band, 'crown_band', 'brushed_gold', pal.trim));
       for (const [pIdx, angle] of [0, 1, 2, 3, 4, 5].entries()) {
         const rad = (angle / 6) * Math.PI * 2;
-        const spire = makeBeveledBox(0.032, pIdx % 2 === 0 ? 0.095 : 0.065, 0.032, 0.006, pal.trim, {
-          offset: [Math.sin(rad) * (hw * 0.43), 0.255, Math.cos(rad) * (hw * 0.43)],
-        });
+        const spire = makeCurvedHornGeometry(5, 0.016, 0.003, pIdx % 2 === 0 ? 0.095 : 0.065, 0, 0, 6, pal.trim);
+        spire.translate(Math.sin(rad) * (hr * 0.92), 0.228, Math.cos(rad) * (hr * 0.92));
         parts.push(tagPart(spire, `crown_spire_${pIdx}`, 'brushed_gold', pal.trim));
       }
       const gem = prepareColoredPart(new THREE.OctahedronGeometry(0.038, 0), pal.glow);
-      gem.translate(0, 0.215, hw * 0.49);
+      gem.translate(0, 0.215, hr * 0.96);
       parts.push(tagPart(gem, 'crown_gem', 'runic_glow', pal.glow, { lockVertical: false }));
       bakeBoneParts('Head', parts, hStyle, { isMetal: true, inspectUvs: true });
     } else {
       // wizard_hat
       const brim = makeLatheProfile(
         [
-          [0.148, 0.215],
-          [0.29 + tier * 0.012, 0.224],
-          [0.28 + tier * 0.012, 0.248],
-          [0.148, 0.252],
+          [0.138, 0.215],
+          [0.29 + tier * 0.01, 0.224],
+          [0.28 + tier * 0.01, 0.246],
+          [0.138, 0.252],
         ],
-        8,
-        pal.primary
+        16,
+        pal.primary,
+        { smoothRadialNormals: true }
       );
       const band = makeLatheProfile(
         [
-          [0.168, 0.248],
-          [0.162, 0.3],
+          [0.168, 0.246],
+          [0.16, 0.295],
         ],
-        8,
-        pal.trim
+        16,
+        pal.trim,
+        { smoothRadialNormals: true }
       );
-      const cone = makeLatheProfile(
+      const cone = makeSplineLoftGeometry(
         [
-          [0.155, 0.0],
-          [0.09, 0.16],
-          [0.012, 0.31 + tier * 0.02],
+          [0, 0.285, 0],
+          [0, 0.4, -0.03],
+          [0, 0.51 + tier * 0.01, -0.1],
+          [0, 0.54 + tier * 0.012, -0.17],
         ],
-        8,
-        pal.secondary
+        [0.155, 0.1, 0.048, 0.01],
+        14,
+        14,
+        { colorHex: pal.secondary }
       );
-      cone.rotateX(-0.18);
-      cone.translate(0, 0.285, -0.02);
       parts.push(
         tagPart(brim, 'mage_hat_brim', 'woven_cloth', pal.primary, { accentHex: pal.trim }),
         tagPart(band, 'mage_hat_band', 'brushed_gold', pal.trim),
@@ -912,14 +1107,13 @@ function applyWeaponGripPivotAndClamp(
 
     const beltParts: TaggedGeometryPart[] = [
       tagPart(
-        makeBeveledBoneSegmentBox(
+        makeAnatomicalTorsoGeometry(
           0.078,
           SHELL_CLEARANCE.pelvisHalfW + margin + 0.015,
           SHELL_CLEARANCE.pelvisHalfD + margin + 0.015,
           SHELL_CLEARANCE.pelvisHalfW + margin + 0.012,
           SHELL_CLEARANCE.pelvisHalfD + margin + 0.012,
-          0.012,
-          pal.secondary
+          { radialSegs: 16, heightSegs: 4, hexColor: pal.secondary, musculature: 0.3 }
         ),
         'belt_strap',
         'stitched_leather',
@@ -927,9 +1121,13 @@ function applyWeaponGripPivotAndClamp(
         { accentHex: pal.trim }
       ),
       tagPart(
-        makeBeveledBox(0.095, 0.082, 0.05, 0.012, pal.trim, {
-          offset: [0, 0.05, SHELL_CLEARANCE.pelvisHalfD + margin + 0.014],
-        }),
+        subdivideGeometryLoop(
+          makeBeveledBox(0.095, 0.082, 0.05, 0.014, pal.trim, {
+            offset: [0, 0.05, SHELL_CLEARANCE.pelvisHalfD + margin + 0.014],
+          }),
+          1,
+          { defaultHex: pal.trim }
+        ),
         'belt_buckle',
         'brushed_gold',
         pal.trim,
@@ -989,14 +1187,13 @@ function applyWeaponGripPivotAndClamp(
       'spine_01',
       [
         tagPart(
-          makeBeveledBoneSegmentBox(
+          makeAnatomicalTorsoGeometry(
             spine1Len * 1.05,
             SHELL_CLEARANCE.spine1HalfW + margin * 0.6,
             SHELL_CLEARANCE.spine1HalfD + margin * 0.6,
             SHELL_CLEARANCE.spine2HalfW + margin * 0.6,
             SHELL_CLEARANCE.spine2HalfD + margin * 0.6,
-            0.014,
-            pal.secondary
+            { isArmored: isChestMetal, radialSegs: 16, heightSegs: 5, hexColor: pal.secondary }
           ),
           'chest_lower',
           chestRecipe,
@@ -1010,26 +1207,34 @@ function applyWeaponGripPivotAndClamp(
 
     const midW = (SHELL_CLEARANCE.spine2HalfW + margin) * 2.02;
     const midD = (SHELL_CLEARANCE.spine2HalfD + margin) * 1.98;
-    const midCuirass = makeSegmentedBeveledBox(
-      midW,
+    const midCuirass = makeAnatomicalTorsoGeometry(
       spine2Len * 1.1,
-      midD,
-      0.016,
-      2,
-      2,
-      2,
-      (x, y, z) => {
-        const vNorm = spine2Len > 1e-4 ? y / (spine2Len * 0.55) : 0;
-        const vTaper = 1.0 + vNorm * 0.1;
-        const sternalKeel =
-          isChestMetal && z > 0 && Math.abs(x) < 0.06 ? 0.014 * (1 - Math.abs(x) / 0.06) : 0;
-        return [x * vTaper, y + spine2Len * 0.52, z + sternalKeel];
-      },
-      pal.primary
+      SHELL_CLEARANCE.spine2HalfW + margin * 0.9,
+      SHELL_CLEARANCE.spine2HalfD + margin * 0.9,
+      SHELL_CLEARANCE.spine2HalfW + margin * 1.08,
+      SHELL_CLEARANCE.spine2HalfD + margin * 1.05,
+      { isArmored: isChestMetal, radialSegs: 18, heightSegs: 6, hexColor: pal.primary }
     );
-    const crossBelt = makeBeveledBox(midW + 0.012, 0.044, midD + 0.012, 0.01, pal.trim);
-    crossBelt.rotateZ(0.32);
-    crossBelt.translate(0, spine2Len * 0.54, 0);
+    const midBand = makeAnatomicalTorsoGeometry(
+      0.048,
+      midW * 0.49,
+      midD * 0.5,
+      midW * 0.49,
+      midD * 0.5,
+      { radialSegs: 16, heightSegs: 4, hexColor: pal.trim, musculature: 0.25 }
+    );
+    midBand.translate(0, spine2Len * 0.14, 0);
+    const crossBelt = makeSplineLoftGeometry(
+      [
+        [-midW * 0.48, spine2Len * 0.15, midD * 0.46],
+        [0, spine2Len * 0.54, midD * 0.54],
+        [midW * 0.48, spine2Len * 0.92, midD * 0.44],
+      ],
+      [0.022, 0.024, 0.022],
+      8,
+      10,
+      { colorHex: pal.trim }
+    );
 
     bakeBoneParts(
       'spine_02',
@@ -1038,14 +1243,7 @@ function applyWeaponGripPivotAndClamp(
           accentHex: pal.trim,
           landmarkKind: 'chest_crest',
         }),
-        tagPart(
-          makeBeveledBox(midW - 0.02, 0.05, midD, 0.01, pal.trim, {
-            offset: [0, spine2Len * 0.22, 0],
-          }),
-          'chest_band',
-          'brushed_gold',
-          pal.trim
-        ),
+        tagPart(midBand, 'chest_band', 'brushed_gold', pal.trim),
         tagPart(crossBelt, 'chest_cross_strap', 'stitched_leather', pal.trim),
       ],
       `${cStyle}`,
@@ -1054,37 +1252,44 @@ function applyWeaponGripPivotAndClamp(
 
     const upW = (SHELL_CLEARANCE.spine3HalfW + margin) * 2.08;
     const upD = (SHELL_CLEARANCE.spine3HalfD + margin) * 2.08;
-    const upperCuirass = makeSegmentedBeveledBox(
-      upW,
+    const upperCuirass = makeAnatomicalTorsoGeometry(
       spine3Len * 0.96,
-      upD,
-      0.018,
-      2,
-      2,
-      2,
-      (x, y, z) => {
-        const vNorm = spine3Len > 1e-4 ? y / (spine3Len * 0.48) : 0;
-        const shoulderFlare = 1.0 + vNorm * 0.09;
-        const pecSwell = z > 0 ? 0.012 * Math.cos((x / 0.2) * Math.PI * 0.5) : 0;
-        return [x * shoulderFlare, y + spine3Len * 0.48, z + pecSwell];
-      },
-      pal.primary
+      SHELL_CLEARANCE.spine2HalfW + margin * 1.04,
+      SHELL_CLEARANCE.spine2HalfD + margin * 1.02,
+      SHELL_CLEARANCE.spine3HalfW + margin * 1.12,
+      SHELL_CLEARANCE.spine3HalfD + margin * 1.06,
+      { isArmored: isChestMetal, radialSegs: 18, heightSegs: 7, hexColor: pal.primary }
     );
-    const gorgetCollar = makeBeveledBox(0.25, 0.068, 0.21, 0.014, pal.trim, {
-      offset: [0, spine3Len * 0.92, -0.005],
-    });
+    const gorgetCollar = makeLatheProfile(
+      [
+        [0.108, spine3Len * 0.85],
+        [0.132, spine3Len * 0.92],
+        [0.114, spine3Len * 1.0],
+      ],
+      16,
+      pal.trim,
+      { smoothRadialNormals: true }
+    );
     const topParts: TaggedGeometryPart[] = [
       tagPart(upperCuirass, 'chest_upper', chestRecipe, pal.primary, { accentHex: pal.trim }),
       tagPart(gorgetCollar, 'chest_gorget_collar', 'brushed_gold', pal.trim),
     ];
 
     if (cStyle === 'plate_cuirass' || cStyle === 'royal_tabard') {
-      const crest = makeBeveledBox(0.125, 0.125, 0.048, 0.012, pal.secondary, {
-        offset: [0, spine3Len * 0.48, upD * 0.52],
-      });
-      const backGuard = makeBeveledBox(0.24, 0.16, 0.045, 0.012, pal.secondary, {
-        offset: [0, spine3Len * 0.52, -upD * 0.52],
-      });
+      const crest = subdivideGeometryLoop(
+        makeBeveledBox(0.125, 0.125, 0.048, 0.014, pal.secondary, {
+          offset: [0, spine3Len * 0.48, upD * 0.51],
+        }),
+        1,
+        { defaultHex: pal.secondary }
+      );
+      const backGuard = subdivideGeometryLoop(
+        makeBeveledBox(0.24, 0.16, 0.045, 0.014, pal.secondary, {
+          offset: [0, spine3Len * 0.52, -upD * 0.5],
+        }),
+        1,
+        { defaultHex: pal.secondary }
+      );
       topParts.push(
         tagPart(crest, 'chest_crest', 'rarity_armor', pal.secondary, {
           landmarkKind: 'chest_crest',
@@ -1097,11 +1302,13 @@ function applyWeaponGripPivotAndClamp(
     } else if (cStyle === 'ranger_coat') {
       const quiver = makeLatheProfile(
         [
-          [0.044, -0.18],
-          [0.056, 0.18],
+          [0.042, -0.18],
+          [0.056, 0.16],
+          [0.06, 0.18],
         ],
-        7,
-        pal.secondary
+        12,
+        pal.secondary,
+        { smoothRadialNormals: true }
       );
       quiver.rotateZ(-0.42);
       quiver.translate(-0.08, 0.08, -upD * 0.56);
@@ -1113,9 +1320,16 @@ function applyWeaponGripPivotAndClamp(
         tagPart(arrows, 'archer_fletching', 'woven_cloth', pal.trim)
       );
     } else if (cStyle === 'arcane_robe' || cStyle === 'necromancer_vest') {
-      const mantle = makeBeveledBox(upW + 0.03, 0.072, upD, 0.015, pal.trim, {
-        offset: [0, spine3Len * 0.78, -0.01],
-      });
+      const mantle = makeLatheProfile(
+        [
+          [upW * 0.5, spine3Len * 0.72],
+          [upW * 0.56, spine3Len * 0.8],
+          [upW * 0.46, spine3Len * 0.88],
+        ],
+        16,
+        pal.trim,
+        { smoothRadialNormals: true }
+      );
       const rune = prepareColoredPart(new THREE.OctahedronGeometry(0.052, 0), pal.glow);
       rune.translate(0, spine3Len * 0.48, upD * 0.53);
       topParts.push(
@@ -1123,21 +1337,28 @@ function applyWeaponGripPivotAndClamp(
         tagPart(rune, 'mage_chest_rune', 'runic_glow', pal.glow, { lockVertical: false })
       );
       if (cStyle === 'necromancer_vest') {
-        const collar = makeBeveledBox(upW + 0.04, 0.09, upD * 0.65, 0.014, pal.secondary, {
-          offset: [0, spine3Len * 0.92, -upD * 0.25],
+        const collar = makePleatedTabardGeometry(upW * 0.9, upW * 1.15, 0.12, 0.028, 3, pal.secondary, {
+          offset: [0, spine3Len * 0.94, -upD * 0.35],
+          flareZ: -0.04,
         });
         topParts.push(tagPart(collar, 'necro_collar', 'woven_cloth', pal.secondary));
       }
     } else if (cStyle === 'paladin_breastplate' || cStyle === 'scale_mail' || cStyle === 'samurai_do') {
-      const crest = makeBeveledBox(0.11, 0.12, 0.04, 0.01, pal.trim, {
-        offset: [0, spine3Len * 0.5, upD * 0.52],
+      const crest = makeBeveledBox(0.11, 0.12, 0.04, 0.012, pal.trim, {
+        offset: [0, spine3Len * 0.5, upD * 0.51],
       });
       topParts.push(tagPart(crest, `${cStyle}_crest`, 'brushed_gold', pal.trim));
       if (cStyle === 'samurai_do') {
         for (const rIdx of [0, 1]) {
-          const lame = makeBeveledBox(upW + 0.02, 0.036, upD + 0.02, 0.008, pal.secondary, {
-            offset: [0, spine3Len * (0.28 + rIdx * 0.36), 0],
-          });
+          const lame = makeAnatomicalTorsoGeometry(
+            0.036,
+            upW * 0.51,
+            upD * 0.51,
+            upW * 0.52,
+            upD * 0.52,
+            { isArmored: true, radialSegs: 16, heightSegs: 4, hexColor: pal.secondary }
+          );
+          lame.translate(0, spine3Len * (0.28 + rIdx * 0.36), 0);
           topParts.push(tagPart(lame, `samurai_lame_${rIdx}`, 'rarity_armor', pal.secondary));
         }
       }
@@ -1163,8 +1384,9 @@ function applyWeaponGripPivotAndClamp(
           [0.042, -0.18],
           [0.058, 0.2],
         ],
-        7,
-        '#5c3a28'
+        12,
+        '#5c3a28',
+        { smoothRadialNormals: true }
       );
       quiver.rotateZ(-0.4);
       quiver.translate(-0.07, 0.09, -(upD * 0.58));
@@ -1176,7 +1398,7 @@ function applyWeaponGripPivotAndClamp(
         tagPart(arrows, 'back_quiver_arrows', 'woven_cloth', pal.trim)
       );
     } else if (bStyle === 'adventurer_backpack') {
-      const pack = makeBeveledBox(0.26, 0.3, 0.16, 0.02, '#6d4b36', {
+      const pack = makeBeveledBox(0.26, 0.3, 0.16, 0.025, '#6d4b36', {
         offset: [0, spine3Len * 0.45, -(upD * 0.5 + 0.085)],
       });
       const bedroll = makeLatheProfile(
@@ -1184,8 +1406,9 @@ function applyWeaponGripPivotAndClamp(
           [0.055, -0.14],
           [0.055, 0.14],
         ],
-        7,
-        pal.secondary
+        12,
+        pal.secondary,
+        { smoothRadialNormals: true }
       );
       bedroll.rotateZ(Math.PI * 0.5);
       bedroll.translate(0, spine3Len * 0.92, -(upD * 0.5 + 0.08));
@@ -1199,14 +1422,36 @@ function applyWeaponGripPivotAndClamp(
       );
     } else if (bStyle === 'wings_valkyrie') {
       for (const [wIdx, sx] of [-1, 1].entries()) {
-        const wingMain = makeBeveledBox(0.32, 0.46, 0.036, 0.01, pal.trim);
-        wingMain.rotateZ(sx * -0.42);
-        wingMain.rotateY(sx * 0.28);
-        wingMain.translate(sx * 0.22, spine3Len * 0.82, -(upD * 0.58));
-        const wingInner = makeBeveledBox(0.22, 0.32, 0.03, 0.008, pal.glow);
-        wingInner.rotateZ(sx * -0.35);
-        wingInner.rotateY(sx * 0.28);
-        wingInner.translate(sx * 0.16, spine3Len * 0.65, -(upD * 0.56));
+        const wingMain = makeSplineLoftGeometry(
+          [
+            [sx * 0.06, spine3Len * 0.7, -(upD * 0.52)],
+            [sx * 0.2, spine3Len * 1.1, -(upD * 0.6)],
+            [sx * 0.36, spine3Len * 1.45, -(upD * 0.7)],
+          ],
+          [
+            [0.025, 0.045],
+            [0.04, 0.09],
+            [0.015, 0.035],
+          ],
+          10,
+          12,
+          { colorHex: pal.trim }
+        );
+        const wingInner = makeSplineLoftGeometry(
+          [
+            [sx * 0.05, spine3Len * 0.62, -(upD * 0.5)],
+            [sx * 0.16, spine3Len * 0.86, -(upD * 0.56)],
+            [sx * 0.25, spine3Len * 1.04, -(upD * 0.62)],
+          ],
+          [
+            [0.02, 0.035],
+            [0.03, 0.065],
+            [0.01, 0.025],
+          ],
+          8,
+          10,
+          { colorHex: pal.glow }
+        );
         topParts.push(
           tagPart(wingMain, `back_wing_main_${wIdx}`, 'brushed_gold', pal.trim),
           tagPart(wingInner, `back_wing_inner_${wIdx}`, 'runic_glow', pal.glow)
@@ -1218,15 +1463,16 @@ function applyWeaponGripPivotAndClamp(
           [0.016, -0.05],
           [0.016, 0.72],
         ],
-        6,
+        10,
         '#4f3428'
       );
       pole.translate(0, spine3Len * 0.5, -(upD * 0.58));
       const crossbar = makeBeveledBox(0.26, 0.028, 0.028, 0.006, pal.trim, {
         offset: [0, spine3Len * 0.5 + 0.68, -(upD * 0.58)],
       });
-      const cloth = makeBeveledBox(0.22, 0.46, 0.018, 0.005, pal.primary, {
+      const cloth = makePleatedTabardGeometry(0.22, 0.26, 0.46, 0.022, 3, pal.primary, {
         offset: [0, spine3Len * 0.5 + 0.44, -(upD * 0.6)],
+        flareZ: -0.02,
       });
       topParts.push(
         tagPart(pole, 'back_banner_pole', 'wood_planks', '#4f3428'),
@@ -1237,12 +1483,17 @@ function applyWeaponGripPivotAndClamp(
 
     bakeBoneParts('spine_03', topParts, `${cStyle}_${bStyle}`, { isMetal: isChestMetal });
 
-    // Upper arms + decoupled Shoulder Pauldron style
+    // Upper arms + decoupled Sculpted Pauldron style
     for (const side of ['l', 'r'] as const) {
       const armR = SHELL_CLEARANCE.upperArmR + margin;
       const armParts: TaggedGeometryPart[] = [
         tagPart(
-          makeBeveledBoneSegmentBox(uArm * 0.88, armR, armR, armR - 0.008, armR - 0.008, 0.01, pal.secondary),
+          makeSculptedLimbGeometry(uArm * 0.88, armR, armR, armR - 0.008, armR - 0.008, {
+            profile: isChestMetal ? 'armor_limb' : 'bicep',
+            radialSegs: 10,
+            heightSegs: 5,
+            hexColor: pal.secondary,
+          }),
           `arm_sleeve_${side}`,
           chestRecipe,
           pal.secondary,
@@ -1274,14 +1525,22 @@ function applyWeaponGripPivotAndClamp(
           )
         );
         if (tier >= 2 || sStyle === 'arcane_mantle') {
-          const rim = makeBeveledBox(pW + 0.025, 0.038, pW + 0.025, 0.008, pal.trim, {
-            offset: [side === 'l' ? 0.012 : -0.012, 0.008, 0],
-          });
+          const rim = makeLatheProfile(
+            [
+              [pW * 0.48, -0.014],
+              [pW * 0.56, 0.004],
+              [pW * 0.48, 0.022],
+            ],
+            10,
+            pal.trim,
+            { smoothRadialNormals: true }
+          );
+          rim.translate(side === 'l' ? 0.014 : -0.014, 0.004, 0);
           armParts.push(tagPart(rim, `pauldron_rim_${side}`, 'brushed_gold', pal.trim));
         }
         if (sStyle === 'heavy_pauldrons' && tier >= 4) {
-          const spike = prepareColoredPart(new THREE.ConeGeometry(0.042, 0.11, 5), pal.trim);
-          spike.translate(side === 'l' ? 0.05 : -0.05, 0.1, 0);
+          const spike = makeCurvedHornGeometry(6, 0.034, 0.005, 0.12, side === 'l' ? 0.03 : -0.03, 0, 8, pal.trim);
+          spike.translate(side === 'l' ? 0.045 : -0.045, 0.06, 0);
           armParts.push(tagPart(spike, `pauldron_spike_${side}`, 'brushed_gold', pal.trim));
         }
       }
@@ -1301,7 +1560,12 @@ function applyWeaponGripPivotAndClamp(
       const botR = topR - 0.016;
       const parts: TaggedGeometryPart[] = [
         tagPart(
-          makeBeveledBoneSegmentBox(thigh * 0.88, topR, topR, botR, botR, 0.013, pal.primary),
+          makeSculptedLimbGeometry(thigh * 0.88, topR, topR, botR, botR, {
+            profile: isMetal ? 'armor_limb' : 'thigh',
+            radialSegs: 10,
+            heightSegs: 5,
+            hexColor: pal.primary,
+          }),
           `thigh_guard_${side}`,
           recipe,
           pal.primary,
@@ -1331,11 +1595,12 @@ function applyWeaponGripPivotAndClamp(
       }
 
       if (lStyle === 'plate_cuisses' || tier >= 2) {
+        const kneecap = makeBeveledBox(0.145, 0.092, 0.15, 0.02, pal.trim, {
+          offset: [0, thigh * 0.86, 0.02],
+        });
         parts.push(
           tagPart(
-            makeBeveledBox(0.145, 0.092, 0.15, 0.016, pal.trim, {
-              offset: [0, thigh * 0.86, 0.02],
-            }),
+            kneecap,
             `kneecap_${side}`,
             isMetal ? 'brushed_gold' : 'stitched_leather',
             pal.trim
@@ -1343,7 +1608,7 @@ function applyWeaponGripPivotAndClamp(
         );
       }
       if (isMetal && tier >= 3) {
-        const kneeFin = makeBeveledBox(0.06, 0.11, 0.075, 0.012, pal.primary, {
+        const kneeFin = makeBeveledBox(0.06, 0.11, 0.075, 0.014, pal.primary, {
           offset: [sx * 0.07, thigh * 0.86, 0.025],
         });
         parts.push(
@@ -1360,29 +1625,51 @@ function applyWeaponGripPivotAndClamp(
 
     for (const side of ['l', 'r'] as const) {
       const cR = SHELL_CLEARANCE.calfR + margin;
+      const cuff = makeLatheProfile(
+        [
+          [cR * 0.96, calf * 0.3],
+          [cR * 1.12, calf * 0.34],
+          [cR * 0.96, calf * 0.38],
+        ],
+        10,
+        pal.trim,
+        { smoothRadialNormals: true }
+      );
       const calfParts: TaggedGeometryPart[] = [
         tagPart(
-          makeBeveledBoneSegmentBox(calf * 0.74, cR - 0.004, cR - 0.004, cR + 0.006, cR + 0.006, 0.012, pal.secondary),
+          makeSculptedLimbGeometry(calf * 0.74, cR - 0.004, cR - 0.004, cR + 0.006, cR + 0.006, {
+            profile: isMetal ? 'armor_limb' : 'calf',
+            radialSegs: 10,
+            heightSegs: 5,
+            hexColor: pal.secondary,
+          }),
           `greave_${side}`,
           recipe,
           pal.secondary,
           { accentHex: pal.trim }
         ),
         tagPart(
-          makeBeveledBox(cR * 2.1, bStyle === 'cuffed_boots' ? 0.082 : 0.064, cR * 2.1, 0.012, pal.trim, {
-            offset: [0, calf * 0.34, 0],
-          }),
+          cuff,
           `boot_cuff_${side}`,
           isMetal ? 'brushed_gold' : 'stitched_leather',
           pal.trim
         ),
       ];
       if (bStyle === 'steel_sabatons' || bStyle === 'light_greaves') {
+        const shinCrest = makeSplineLoftGeometry(
+          [
+            [0, calf * 0.08, cR * 0.92],
+            [0, calf * 0.36, cR * 1.12],
+            [0, calf * 0.64, cR * 0.94],
+          ],
+          [0.018, 0.026, 0.016],
+          6,
+          6,
+          { colorHex: pal.trim }
+        );
         calfParts.push(
           tagPart(
-            makeBeveledBox(0.062, calf * 0.56, 0.048, 0.01, pal.trim, {
-              offset: [0, calf * 0.36, cR],
-            }),
+            shinCrest,
             `greave_shin_crest_${side}`,
             isMetal ? 'brushed_gold' : 'stitched_leather',
             pal.trim
@@ -1394,7 +1681,12 @@ function applyWeaponGripPivotAndClamp(
       const fR = SHELL_CLEARANCE.footR + margin * 0.7;
       const footParts: TaggedGeometryPart[] = [
         tagPart(
-          makeBeveledBoneSegmentBox(0.175, fR, fR + 0.008, fR - 0.005, fR, 0.01, pal.primary),
+          makeSculptedLimbGeometry(0.175, fR, fR + 0.008, fR - 0.005, fR, {
+            profile: isMetal ? 'armor_limb' : 'taper',
+            radialSegs: 10,
+            heightSegs: 4,
+            hexColor: pal.primary,
+          }),
           `sabaton_${side}`,
           recipe,
           pal.primary,
@@ -1402,7 +1694,7 @@ function applyWeaponGripPivotAndClamp(
         ),
       ];
       if (isMetal && tier >= 3) {
-        const toe = makeBeveledBox(0.11, 0.052, 0.065, 0.01, pal.trim, {
+        const toe = makeBeveledBox(0.11, 0.052, 0.065, 0.012, pal.trim, {
           offset: [0, 0.15, 0.02],
         });
         footParts.push(tagPart(toe, `sabaton_toe_${side}`, 'brushed_gold', pal.trim));
@@ -1418,27 +1710,40 @@ function applyWeaponGripPivotAndClamp(
     for (const side of ['l', 'r'] as const) {
       const sx = side === 'l' ? 1 : -1;
       const aR = SHELL_CLEARANCE.lowerArmR + margin;
+      const elbowCop = makeBeveledBox(0.115, 0.078, 0.115, 0.016, pal.trim, {
+        offset: [sx * 0.018, 0.04, -0.022],
+      });
       const bracerParts: TaggedGeometryPart[] = [
         tagPart(
-          makeBeveledBoneSegmentBox(lArm * 0.64, aR, aR, aR + 0.006, aR + 0.006, 0.01, pal.primary),
+          makeSculptedLimbGeometry(lArm * 0.64, aR, aR, aR + 0.006, aR + 0.006, {
+            profile: isMetal ? 'armor_limb' : 'forearm',
+            radialSegs: 10,
+            heightSegs: 4,
+            hexColor: pal.primary,
+          }),
           `bracer_${side}`,
           recipe,
           pal.primary,
           { accentHex: pal.trim }
         ),
         tagPart(
-          makeBeveledBox(0.115, 0.078, 0.115, 0.014, pal.trim, {
-            offset: [sx * 0.018, 0.04, -0.022],
-          }),
+          elbowCop,
           `elbow_cop_${side}`,
           isMetal ? 'brushed_gold' : 'stitched_leather',
           pal.trim
         ),
       ];
       if (tier >= 2 || gStyle === 'arcane_cuffs') {
-        const rim = makeBeveledBox(aR * 2.1, 0.05, aR * 2.1, 0.01, pal.trim, {
-          offset: [0, lArm * 0.56, 0],
-        });
+        const rim = makeLatheProfile(
+          [
+            [aR * 0.98, lArm * 0.52],
+            [aR * 1.14, lArm * 0.56],
+            [aR * 0.98, lArm * 0.6],
+          ],
+          10,
+          pal.trim,
+          { smoothRadialNormals: true }
+        );
         bracerParts.push(tagPart(rim, `bracer_cuff_${side}`, 'brushed_gold', pal.trim));
       }
       bakeBoneParts(`lowerarm_${side}`, bracerParts, gStyle, { isMetal });
@@ -1448,7 +1753,12 @@ function applyWeaponGripPivotAndClamp(
         `hand_${side}`,
         [
           tagPart(
-            makeBeveledBoneSegmentBox(0.115, hR, hR, hR - 0.006, hR - 0.006, 0.008, pal.secondary),
+            makeSculptedLimbGeometry(0.115, hR, hR, hR - 0.006, hR - 0.006, {
+              profile: 'armor_limb',
+              radialSegs: 8,
+              heightSegs: 4,
+              hexColor: pal.secondary,
+            }),
             `gauntlet_${side}`,
             recipe,
             pal.secondary,
@@ -1492,21 +1802,50 @@ function applyWeaponGripPivotAndClamp(
       const grip = makeLatheProfile(
         [
           [0.024, -gripLen],
+          [0.02, -gripLen * 0.2],
           [0.022, gripLen * 0.8],
         ],
-        7,
-        '#3b1725'
+        12,
+        '#3b1725',
+        { smoothRadialNormals: true }
       );
       grip.rotateX(Math.PI * 0.5);
       grip.translate(0, gY, gZ);
 
-      const pommel = makeBeveledBox(0.07, 0.062, 0.07, 0.015, pal.trim, {
-        offset: [0, gY, gZ - gripLen - 0.02],
-      });
+      const pommel = makeLatheProfile(
+        [
+          [0.012, -0.04],
+          [0.038, -0.015],
+          [0.036, 0.015],
+          [0.018, 0.035],
+        ],
+        12,
+        pal.trim,
+        { smoothRadialNormals: true }
+      );
+      pommel.rotateX(Math.PI * 0.5);
+      pommel.translate(0, gY, gZ - gripLen - 0.02);
+
       const guardW = isHeavy ? 0.36 + tier * 0.02 : isDagger ? 0.16 : 0.26 + tier * 0.015;
-      const guard = makeBeveledBox(guardW, 0.05, 0.065, 0.012, pal.trim, {
-        offset: [0, gY, gZ + gripLen * 0.85],
-      });
+      const guard = makeSplineLoftGeometry(
+        [
+          [-guardW * 0.5, gY, gZ + gripLen * 0.88 + 0.025],
+          [-guardW * 0.25, gY, gZ + gripLen * 0.85],
+          [0, gY, gZ + gripLen * 0.84],
+          [guardW * 0.25, gY, gZ + gripLen * 0.85],
+          [guardW * 0.5, gY, gZ + gripLen * 0.88 + 0.025],
+        ],
+        [
+          [0.014, 0.018],
+          [0.022, 0.028],
+          [0.028, 0.034],
+          [0.022, 0.028],
+          [0.014, 0.018],
+        ],
+        10,
+        12,
+        { colorHex: pal.trim }
+      );
       const bladeLen = isHeavy ? 1.08 + tier * 0.05 : isDagger ? 0.38 + tier * 0.02 : 0.72 + tier * 0.04;
       const bladeW = isHeavy ? 0.135 + tier * 0.01 : isDagger ? 0.065 : 0.102 + tier * 0.008;
       const blade = makeSwordBladeGeometry(bladeW, 0.04, bladeLen * 0.82, bladeLen * 0.22, pal.primary);
@@ -1530,33 +1869,40 @@ function applyWeaponGripPivotAndClamp(
     } else if (mainStyle === 'battleaxe') {
       const haft = makeLatheProfile(
         [
-          [0.024, -0.22],
+          [0.028, -0.22],
+          [0.022, 0.05],
           [0.028, 0.58],
         ],
-        7,
-        '#4f3428'
+        12,
+        '#4f3428',
+        { smoothRadialNormals: true }
       );
       haft.rotateX(Math.PI * 0.5);
       haft.translate(0, gY, gZ + 0.06);
-      const collar = makeBeveledBox(0.085, 0.085, 0.12, 0.012, pal.trim, {
-        offset: [0, gY, gZ + 0.48],
-      });
-      const bladeL = makeBeveledBox(0.22 + tier * 0.015, 0.04, 0.26 + tier * 0.015, 0.012, pal.primary, {
-        offset: [0.13, gY, gZ + 0.49],
-      });
-      const bladeR = makeBeveledBox(0.18 + tier * 0.01, 0.04, 0.22, 0.012, pal.primary, {
-        offset: [-0.11, gY, gZ + 0.49],
-      });
+      const collar = makeLatheProfile(
+        [
+          [0.042, -0.06],
+          [0.048, 0],
+          [0.042, 0.06],
+        ],
+        12,
+        pal.trim,
+        { smoothRadialNormals: true }
+      );
+      collar.rotateX(Math.PI * 0.5);
+      collar.translate(0, gY, gZ + 0.48);
+      const axeHead = makeAxeHeadGeometry(0.24 + tier * 0.014, 0.28 + tier * 0.014, 0.052, true, pal.primary);
+      axeHead.rotateX(Math.PI * 0.5);
+      axeHead.translate(0, gY, gZ + 0.49);
       bakeBoneParts(
         'hand_r',
         [
           tagPart(haft, 'axe_haft', 'wood_planks', '#4f3428', { lockVertical: false }),
           tagPart(collar, 'axe_collar', 'brushed_gold', pal.trim, { lockVertical: false }),
-          tagPart(bladeL, 'axe_blade_l', 'rarity_armor', pal.primary, {
+          tagPart(axeHead, 'axe_blade_double', 'rarity_armor', pal.primary, {
             accentHex: pal.glow,
             lockVertical: false,
           }),
-          tagPart(bladeR, 'axe_blade_r', 'rarity_armor', pal.primary, { lockVertical: false }),
         ],
         mainStyle,
         { isMetal: true }
@@ -1564,20 +1910,35 @@ function applyWeaponGripPivotAndClamp(
     } else if (mainStyle === 'warhammer') {
       const haft = makeLatheProfile(
         [
-          [0.024, -0.22],
+          [0.028, -0.22],
+          [0.022, 0.05],
           [0.028, 0.56],
         ],
-        7,
-        '#4f3428'
+        12,
+        '#4f3428',
+        { smoothRadialNormals: true }
       );
       haft.rotateX(Math.PI * 0.5);
       haft.translate(0, gY, gZ + 0.06);
-      const head = makeBeveledBox(0.32 + tier * 0.02, 0.16, 0.17, 0.02, pal.primary, {
-        offset: [0, gY, gZ + 0.52],
-      });
-      const bands = makeBeveledBox(0.34 + tier * 0.02, 0.175, 0.06, 0.01, pal.trim, {
-        offset: [0, gY, gZ + 0.52],
-      });
+      const head = subdivideGeometryLoop(
+        makeBeveledBox(0.32 + tier * 0.02, 0.16, 0.17, 0.024, pal.primary, {
+          offset: [0, gY, gZ + 0.52],
+        }),
+        1,
+        { defaultHex: pal.primary }
+      );
+      const bands = makeLatheProfile(
+        [
+          [0.095, -0.032],
+          [0.105, 0],
+          [0.095, 0.032],
+        ],
+        12,
+        pal.trim,
+        { smoothRadialNormals: true }
+      );
+      bands.rotateX(Math.PI * 0.5);
+      bands.translate(0, gY, gZ + 0.52);
       bakeBoneParts(
         'hand_r',
         [
@@ -1597,14 +1958,24 @@ function applyWeaponGripPivotAndClamp(
           [0.024, -0.45],
           [0.026, 0.92],
         ],
-        7,
-        '#6d4b36'
+        12,
+        '#6d4b36',
+        { smoothRadialNormals: true }
       );
       pole.rotateX(Math.PI * 0.5);
       pole.translate(0, gY, gZ + 0.08);
-      const collar = makeBeveledBox(0.09, 0.08, 0.09, 0.012, pal.trim, {
-        offset: [0, gY, gZ + 0.96],
-      });
+      const collar = makeLatheProfile(
+        [
+          [0.04, -0.04],
+          [0.048, 0],
+          [0.036, 0.04],
+        ],
+        12,
+        pal.trim,
+        { smoothRadialNormals: true }
+      );
+      collar.rotateX(Math.PI * 0.5);
+      collar.translate(0, gY, gZ + 0.96);
       const tip = makeSwordBladeGeometry(0.11, 0.042, 0.24, 0.18, pal.primary);
       tip.rotateX(Math.PI * 0.5);
       tip.translate(0, gY, gZ + 0.98);
@@ -1622,15 +1993,19 @@ function applyWeaponGripPivotAndClamp(
         { isMetal: true }
       );
     } else if (mainStyle === 'crossbow') {
-      const stock = makeBeveledBox(0.068, 0.085, 0.52, 0.012, '#4f3428', {
-        offset: [0, gY + 0.01, gZ + 0.14],
-      });
-      const prod = makeBeveledBox(0.56, 0.042, 0.065, 0.01, pal.primary, {
-        offset: [0, gY + 0.02, gZ + 0.36],
-      });
-      const bolt = makeBeveledBox(0.028, 0.028, 0.34, 0.005, pal.trim, {
-        offset: [0, gY + 0.06, gZ + 0.22],
-      });
+      const stock = subdivideGeometryLoop(
+        makeBeveledBox(0.068, 0.085, 0.52, 0.014, '#4f3428', {
+          offset: [0, gY + 0.01, gZ + 0.14],
+        }),
+        1,
+        { defaultHex: '#4f3428' }
+      );
+      const prod = makeRecurveBowGeometry(0.58, 0.12, 0.038, pal.primary);
+      prod.rotateZ(Math.PI * 0.5);
+      prod.translate(0, gY + 0.02, gZ + 0.36);
+      const bolt = makeSwordBladeGeometry(0.034, 0.02, 0.26, 0.08, pal.trim);
+      bolt.rotateX(Math.PI * 0.5);
+      bolt.translate(0, gY + 0.06, gZ + 0.08);
       bakeBoneParts(
         'hand_r',
         [
@@ -1647,20 +2022,21 @@ function applyWeaponGripPivotAndClamp(
           [0.024, -0.45],
           [0.028, 0.98],
         ],
-        7,
-        '#4f3428'
+        12,
+        '#4f3428',
+        { smoothRadialNormals: true }
       );
       pole.rotateX(Math.PI * 0.5);
       pole.translate(0, gY, gZ + 0.08);
-      const axeBlade = makeBeveledBox(0.24, 0.036, 0.28, 0.01, pal.primary, {
-        offset: [0.12, gY, gZ + 0.88],
-      });
+      const axeBlade = makeAxeHeadGeometry(0.24, 0.28, 0.038, false, pal.primary);
+      axeBlade.rotateX(Math.PI * 0.5);
+      axeBlade.translate(0, gY, gZ + 0.88);
       const spike = makeSwordBladeGeometry(0.085, 0.036, 0.22, 0.16, pal.primary);
       spike.rotateX(Math.PI * 0.5);
       spike.translate(0, gY, gZ + 1.04);
-      const hook = makeBeveledBox(0.11, 0.036, 0.06, 0.008, pal.trim, {
-        offset: [-0.07, gY, gZ + 0.92],
-      });
+      const hook = makeCurvedHornGeometry(6, 0.022, 0.004, 0.12, -0.04, 0.02, 6, pal.trim);
+      hook.rotateZ(Math.PI * 0.5);
+      hook.translate(-0.02, gY, gZ + 0.92);
       bakeBoneParts(
         'hand_r',
         [
@@ -1673,33 +2049,52 @@ function applyWeaponGripPivotAndClamp(
         { isMetal: true }
       );
     } else if (mainStyle === 'scythe') {
-      const pole = makeLatheProfile(
+      const pole = makeSplineLoftGeometry(
         [
-          [0.024, -0.42],
-          [0.028, 0.96],
+          [0, gY, gZ - 0.34],
+          [0, gY + 0.02, gZ + 0.3],
+          [0, gY, gZ + 0.96],
         ],
-        7,
-        '#3b2820'
+        [0.024, 0.026, 0.028],
+        12,
+        14,
+        { colorHex: '#3b2820' }
       );
-      pole.rotateX(Math.PI * 0.5);
-      pole.translate(0, gY, gZ + 0.08);
-      const collar = makeBeveledBox(0.08, 0.08, 0.12, 0.012, pal.trim, {
-        offset: [0, gY, gZ + 0.98],
-      });
-      const bladeA = makeBeveledBox(0.38, 0.032, 0.12, 0.01, pal.primary, {
-        offset: [0.18, gY, gZ + 0.98],
-      });
-      const bladeB = makeSwordBladeGeometry(0.09, 0.028, 0.24, 0.14, pal.primary);
-      bladeB.rotateZ(Math.PI * 0.5);
-      bladeB.rotateY(-0.35);
-      bladeB.translate(0.36, gY, gZ + 0.9);
+      const collar = makeLatheProfile(
+        [
+          [0.04, -0.06],
+          [0.046, 0],
+          [0.04, 0.06],
+        ],
+        10,
+        pal.trim,
+        { smoothRadialNormals: true }
+      );
+      collar.rotateX(Math.PI * 0.5);
+      collar.translate(0, gY, gZ + 0.98);
+      const scytheBlade = makeSplineLoftGeometry(
+        [
+          [0, gY, gZ + 0.98],
+          [0.2, gY, gZ + 0.99],
+          [0.36, gY, gZ + 0.9],
+          [0.44, gY, gZ + 0.72],
+        ],
+        [
+          [0.048, 0.014],
+          [0.045, 0.013],
+          [0.032, 0.01],
+          [0.008, 0.004],
+        ],
+        8,
+        14,
+        { colorHex: pal.primary }
+      );
       bakeBoneParts(
         'hand_r',
         [
           tagPart(pole, 'scythe_pole', 'wood_planks', '#3b2820', { lockVertical: false }),
           tagPart(collar, 'scythe_collar', 'brushed_gold', pal.trim, { lockVertical: false }),
-          tagPart(bladeA, 'scythe_blade_a', 'forged_steel', pal.primary, { accentHex: pal.glow, lockVertical: false }),
-          tagPart(bladeB, 'scythe_blade_b', 'forged_steel', pal.primary, { accentHex: pal.glow, lockVertical: false }),
+          tagPart(scytheBlade, 'scythe_blade_a', 'forged_steel', pal.primary, { accentHex: pal.glow, lockVertical: false }),
         ],
         mainStyle,
         { isMetal: true }
@@ -1710,15 +2105,24 @@ function applyWeaponGripPivotAndClamp(
           [0.024, -0.18],
           [0.026, 0.36],
         ],
-        7,
-        '#4f3428'
+        10,
+        '#4f3428',
+        { smoothRadialNormals: true }
       );
       haft.rotateX(Math.PI * 0.5);
       haft.translate(0, gY, gZ + 0.05);
-      const chain = makeBeveledBox(0.036, 0.036, 0.24, 0.008, pal.trim, {
-        offset: [0, gY - 0.04, gZ + 0.52],
-      });
-      const ball = prepareColoredPart(new THREE.OctahedronGeometry(0.115, 1), pal.primary);
+      const chain = makeSplineLoftGeometry(
+        [
+          [0, gY, gZ + 0.41],
+          [0, gY - 0.03, gZ + 0.54],
+          [0, gY - 0.06, gZ + 0.66],
+        ],
+        [0.016, 0.014, 0.016],
+        8,
+        10,
+        { colorHex: pal.trim }
+      );
+      const ball = prepareColoredPart(new THREE.IcosahedronGeometry(0.115, 1), pal.primary);
       ball.translate(0, gY - 0.06, gZ + 0.68);
       bakeBoneParts(
         'hand_r',
@@ -1736,8 +2140,9 @@ function applyWeaponGripPivotAndClamp(
           [0.022, -0.16],
           [0.022, 0.14],
         ],
-        7,
-        '#1f2937'
+        10,
+        '#1f2937',
+        { smoothRadialNormals: true }
       );
       grip.rotateX(Math.PI * 0.5);
       grip.translate(0, gY, gZ);
@@ -1746,8 +2151,9 @@ function applyWeaponGripPivotAndClamp(
           [0.065, -0.012],
           [0.065, 0.012],
         ],
-        8,
-        pal.trim
+        14,
+        pal.trim,
+        { smoothRadialNormals: true }
       );
       tsuba.rotateX(Math.PI * 0.5);
       tsuba.translate(0, gY, gZ + 0.14);
@@ -1770,8 +2176,9 @@ function applyWeaponGripPivotAndClamp(
           [0.024, -0.16],
           [0.024, 0.16],
         ],
-        7,
-        '#3b1725'
+        10,
+        '#3b1725',
+        { smoothRadialNormals: true }
       );
       grip.rotateX(Math.PI * 0.5);
       grip.translate(0, gY, gZ);
@@ -1797,17 +2204,31 @@ function applyWeaponGripPivotAndClamp(
           [0.028, -0.32],
           [0.032, 0.72],
         ],
-        7,
-        '#4f3428'
+        12,
+        '#4f3428',
+        { smoothRadialNormals: true }
       );
       haft.rotateX(Math.PI * 0.5);
       haft.translate(0, gY, gZ + 0.08);
-      const head = makeBeveledBox(0.42 + tier * 0.02, 0.22, 0.22, 0.025, pal.primary, {
-        offset: [0, gY, gZ + 0.68],
-      });
-      const bands = makeBeveledBox(0.44 + tier * 0.02, 0.24, 0.075, 0.012, pal.trim, {
-        offset: [0, gY, gZ + 0.68],
-      });
+      const head = subdivideGeometryLoop(
+        makeBeveledBox(0.42 + tier * 0.02, 0.22, 0.22, 0.028, pal.primary, {
+          offset: [0, gY, gZ + 0.68],
+        }),
+        1,
+        { defaultHex: pal.primary }
+      );
+      const bands = makeLatheProfile(
+        [
+          [0.125, -0.04],
+          [0.135, 0],
+          [0.125, 0.04],
+        ],
+        12,
+        pal.trim,
+        { smoothRadialNormals: true }
+      );
+      bands.rotateX(Math.PI * 0.5);
+      bands.translate(0, gY, gZ + 0.68);
       bakeBoneParts(
         'hand_r',
         [
@@ -1824,15 +2245,25 @@ function applyWeaponGripPivotAndClamp(
           [0.022, -0.14],
           [0.028, 0.48],
         ],
-        7,
-        pal.secondary
+        12,
+        pal.secondary,
+        { smoothRadialNormals: true }
       );
       shaft.rotateX(Math.PI * 0.5);
       shaft.translate(0, gY, gZ);
-      const cradle = makeBeveledBox(0.14, 0.14, 0.05, 0.012, pal.trim);
-      cradle.rotateZ(Math.PI * 0.25);
-      cradle.translate(0, gY, gZ + 0.52);
-      const orb = prepareColoredPart(new THREE.OctahedronGeometry(0.088, 1), pal.glow);
+      const cradle = makeLatheProfile(
+        [
+          [0.03, 0],
+          [0.085, 0.05],
+          [0.06, 0.09],
+        ],
+        12,
+        pal.trim,
+        { smoothRadialNormals: true }
+      );
+      cradle.rotateX(Math.PI * 0.5);
+      cradle.translate(0, gY, gZ + 0.49);
+      const orb = prepareColoredPart(new THREE.IcosahedronGeometry(0.088, 1), pal.glow);
       orb.translate(0, gY, gZ + 0.62);
       bakeBoneParts(
         'hand_r',
@@ -1858,23 +2289,27 @@ function applyWeaponGripPivotAndClamp(
               [0.03, 0.45],
               [0.036, 1.18],
             ],
-        7,
-        pal.secondary
+        12,
+        pal.secondary,
+        { smoothRadialNormals: true }
       );
       pole.rotateX(Math.PI * 0.5);
       pole.translate(0, gY, gZ + 0.02);
       const topZ = isWand ? gZ + 0.44 : gZ + 1.24;
-      const crown = makeBeveledBox(
-        (isWand ? 0.11 : 0.18) + tier * 0.015,
-        (isWand ? 0.11 : 0.18) + tier * 0.015,
-        0.082,
-        0.018,
-        pal.trim
+      const crown = makeLatheProfile(
+        [
+          [0.038, -0.04],
+          [(isWand ? 0.065 : 0.1) + tier * 0.008, 0.04],
+          [(isWand ? 0.045 : 0.07) + tier * 0.006, 0.08],
+        ],
+        12,
+        pal.trim,
+        { smoothRadialNormals: true }
       );
-      crown.rotateZ(Math.PI * 0.25);
-      crown.translate(0, gY, topZ);
+      crown.rotateX(Math.PI * 0.5);
+      crown.translate(0, gY, topZ - 0.02);
       const crystal = prepareColoredPart(
-        new THREE.OctahedronGeometry((isWand ? 0.062 : 0.095) + tier * 0.01, 0),
+        new THREE.OctahedronGeometry((isWand ? 0.062 : 0.095) + tier * 0.01, 1),
         pal.glow
       );
       crystal.translate(0, gY, topZ + 0.08);
@@ -1897,7 +2332,7 @@ function applyWeaponGripPivotAndClamp(
           [0.018, 0],
           [0.018, 0.65],
         ],
-        6,
+        10,
         '#6d758d'
       );
       shaft.rotateX(Math.PI * 0.5);
@@ -1944,15 +2379,25 @@ function applyWeaponGripPivotAndClamp(
                 ? 0.36
                 : 0.58 + tier * 0.02;
         const dome = makeDomeShieldGeometry(shieldW, shieldH, 0.065, pal.secondary);
-        const boss = makeBeveledBox(0.11, 0.12, 0.055, 0.016, pal.trim, {
-          offset: [0, 0.03, 0.095],
-        });
+        const boss = makeLatheProfile(
+          [
+            [0.085, 0],
+            [0.072, 0.032],
+            [0.025, 0.055],
+            [0.004, 0.064],
+          ],
+          14,
+          pal.trim,
+          { smoothRadialNormals: true }
+        );
+        boss.rotateX(Math.PI * 0.5);
+        boss.translate(0, 0.03, 0.088);
         const shieldGeos: THREE.BufferGeometry[] = [dome, boss];
         let spikeGeo: THREE.BufferGeometry | null = null;
         if (offStyle === 'spiked_buckler') {
-          spikeGeo = prepareColoredPart(new THREE.ConeGeometry(0.042, 0.14, 5), pal.trim);
+          spikeGeo = makeCurvedHornGeometry(6, 0.038, 0.004, 0.14, 0, 0, 8, pal.trim);
           spikeGeo.rotateX(Math.PI * 0.5);
-          spikeGeo.translate(0, 0.03, 0.16);
+          spikeGeo.translate(0, 0.03, 0.13);
           shieldGeos.push(spikeGeo);
         }
         for (const g of shieldGeos) {

@@ -1,6 +1,16 @@
 import * as THREE from 'three';
 
-export type PixelizationFilterMode = 'only_pixelized' | 'full_scene' | 'cel_hard';
+export type PixelizationFilterMode =
+  | 'hifi_stylized'
+  | 'only_pixelized'
+  | 'full_scene'
+  | 'cel_hard';
+
+export type VisualStylePresetId =
+  | 'hifi_stylized'
+  | 'stylized_crisp'
+  | 'nwl_snes'
+  | 'hades_lab';
 
 export type ResolutionMode =
   | 'world_space_pixel_size'
@@ -114,6 +124,8 @@ export interface PixelizerMaterialOptions {
   specularColor?: string;
   metallic?: number;
   smoothness?: number;
+  /** Optional PBR roughness [0..1] alias (mapped to smoothness = 1 - roughness when smoothness is omitted) */
+  roughness?: number;
   lightingRampRange?: number;
   lightingRampOffset?: number;
   shadowTint?: string;

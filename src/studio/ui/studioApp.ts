@@ -4,6 +4,7 @@ import {
   PixelizerPipeline,
   type VisualStylePresetId,
 } from '../../engine/PixelizerPipeline';
+import { findPresetById } from '../../engine/PresetRegistry';
 import {
   exportNwlIsometricSheet,
   type UnitySpriteAtlasMetadata,
@@ -92,11 +93,13 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
             <option value="nwl_knight">NWL: Herói Cavaleiro (1.79m · Shell)</option>
             <option value="nwl_archer">NWL: Herói Arqueiro (1.79m · Arco)</option>
             <option value="nwl_mage">NWL: Herói Mago (1.79m · Cajado)</option>
+            <option value="nwl_boss_demon">NWL: Boss Demônio Abissal (2.95m)</option>
+            <option value="boss.elder_wyvern">NWL: Boss Wyvern Ancião (4.20m)</option>
             <option value="nwl_starter_city">NWL: Cidade dos Portais (6 Casas + 9 NPCs)</option>
             <option value="nwl_bestiary">NWL: Bestiário (5 Inimigos + Boss Demônio)</option>
             <option value="nwl_dungeon_floor1">NWL: Ruínas Verdes · Andar 1</option>
             <option value="nwl_tileset_ruins">NWL: Tileset Modular 1.5m</option>
-            <option value="nwl_spells_vfx">NWL: Magias &amp; VFX 3D Pixelados</option>
+            <option value="nwl_spells_vfx">NWL: Magias &amp; VFX 3D</option>
           </optgroup>
           <optgroup label="Referência Visual">
             <option value="char_fox">Ref: Wild Fox (SNES Dark Fantasy 3×3)</option>
@@ -116,8 +119,9 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
             <option value="char_soldier">Legacy GLB: Tactical Soldier</option>
           </optgroup>
         </select>
-        <select id="sel-style-preset" class="select-ctrl" aria-label="Visual Style Preset" title="Preset Visual Oficial vs Teste Experimental">
-          <option value="stylized_crisp" selected>Estilo: Form-First Crisp (1:1 Limpo)</option>
+        <select id="sel-style-preset" class="select-ctrl" aria-label="Visual Style Preset" title="Preset Visual Oficial vs Legado Pixelizado">
+          <option value="hifi_stylized" selected>Estilo: Hi-Fi Stylized 3D (Padrão)</option>
+          <option value="stylized_crisp">Estilo: Form-First Crisp (1:1 s/ Dither)</option>
           <option value="nwl_snes">Legado: NWL SNES Dark Fantasy (3×3)</option>
           <option value="hades_lab">Lab: Hades Graphic Ink v2 (2px + Rim)</option>
         </select>
@@ -204,9 +208,9 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
               ${ICONS.pause}
             </button>
             <select id="sel-step-fps" class="select-ctrl select-ctrl-sm" aria-label="Stepped FPS">
-              <option value="0">Smooth (60+ FPS)</option>
+              <option value="0" selected>Smooth (60+ FPS)</option>
               <option value="6">Stepped 6 FPS</option>
-              <option value="8" selected>Stepped 8 FPS</option>
+              <option value="8">Stepped 8 FPS</option>
               <option value="12">Stepped 12 FPS</option>
               <option value="16">Stepped 16 FPS</option>
               <option value="24">Stepped 24 FPS</option>
@@ -263,25 +267,27 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
 
   const renderer = new THREE.WebGLRenderer({
     canvas,
-    antialias: false, // ProPixelizer strictly requires disabling MSAA on pixelized targets
+    antialias: false,
     alpha: true,
     powerPreference: 'high-performance',
   });
   renderer.setPixelRatio(1);
   renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.BasicShadowMap;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
   const pipeline = new PixelizerPipeline(
     renderer,
     {
-      filterMode: 'only_pixelized',
-      usePixelExpansion: true,
-      backgroundColor: '#13161f',
+      filterMode: 'hifi_stylized',
+      usePixelExpansion: false,
+      backgroundColor: '#1a2030',
     },
     {
       orthographic: true,
       orthoHeight: 5.8,
-      worldSpacePixelSize: 0.024,
+      resolutionMode: 'fixed_downscale_ratio',
+      downscaleRatio: 1,
+      snapCameraPosition: false,
     }
   );
 
@@ -309,6 +315,8 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
   controls.target.copy(orbitTarget);
 
   const animCtrl = new SteppedAnimationController();
+  animCtrl.config.enabled = false;
+  animCtrl.config.fps = 0;
   const overlayScene = new THREE.Scene();
 
   const ctx: StudioContext = {
@@ -701,13 +709,32 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
     });
   });
 
+  const loadStudioPreset = async (presetId: string): Promise<void> => {
+    const regEntry =
+      findPresetById(presetId) ??
+      findPresetById(`boss.${presetId}`) ??
+      findPresetById(`quad.${presetId}`) ??
+      findPresetById(`monster.${presetId}`);
+    if (regEntry && !regEntry.stagePresetKey && ctx.generatorHandle?.spawnRegistryPreset) {
+      await ctx.generatorHandle.spawnRegistryPreset(regEntry);
+      return;
+    }
+    await stageMgr.loadPresetSelection(regEntry?.stagePresetKey ?? presetId);
+  };
+
   // Topbar & Dock Event Bindings
   events.listen(selDemo, 'change', () => {
-    void stageMgr.loadPresetSelection(selDemo.value);
+    void loadStudioPreset(selDemo.value);
   });
 
   const applyStylePresetFromUi = (preset: VisualStylePresetId) => {
     selStylePreset.value = preset;
+    const isLegacyPix = preset === 'nwl_snes' || preset === 'hades_lab';
+    const targetShadowType = isLegacyPix ? THREE.BasicShadowMap : THREE.PCFSoftShadowMap;
+    if (renderer.shadowMap.type !== targetShadowType) {
+      renderer.shadowMap.type = targetShadowType;
+      renderer.shadowMap.needsUpdate = true;
+    }
     pipeline.applyVisualStylePreset(preset, scene);
     dirLight.color.set(pipeline.pipelineConfig.lightColor);
     dirLight.intensity = pipeline.pipelineConfig.lightIntensity;
@@ -835,8 +862,10 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
   // Headless CLI & Automation Bridge (pure browser, zero Node dependencies)
   window.__PIXELIZER_STUDIO__ = {
     loadPreset: async (presetId: string) => {
-      selDemo.value = presetId;
-      await stageMgr.loadPresetSelection(presetId);
+      if (Array.from(selDemo.options).some((o) => o.value === presetId)) {
+        selDemo.value = presetId;
+      }
+      await loadStudioPreset(presetId);
     },
     setStylePreset: (style: VisualStylePresetId) => {
       applyStylePresetFromUi(style);
@@ -913,10 +942,10 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
     },
   };
 
-  // Initialize Default NWL Scene & Official Style Preset
-  applyStylePresetFromUi('nwl_snes');
+  // Initialize Default NWL Scene & Clean Hi-Fi Stylized 3D Preset
+  applyStylePresetFromUi('hifi_stylized');
   selDemo.value = 'nwl_knight';
-  void stageMgr.loadPresetSelection('nwl_knight');
+  void loadStudioPreset('nwl_knight');
 
   // Animation & Render Loop
   let rafId = 0;

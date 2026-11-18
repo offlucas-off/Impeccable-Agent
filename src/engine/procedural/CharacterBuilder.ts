@@ -20,10 +20,14 @@ import {
   type UnwrapMetricsSummary,
 } from './PixelMaterialSynth';
 import {
-  makeBeveledBoneSegmentBox,
+  makeAnatomicalTorsoGeometry,
   makeBeveledBox,
   makeLatheProfile,
   makePauldronShellGeometry,
+  makePleatedTabardGeometry,
+  makeSculptedLimbGeometry,
+  makeSplineLoftGeometry,
+  subdivideGeometryLoop,
   tagPart,
   type FinishMode,
   type MaterialRecipeId,
@@ -278,35 +282,30 @@ export function buildProceduralUalCharacter(
 
   const boneGroups: BoneTaggedGroup[] = [];
 
-  // Pelvis & belt
+  // Pelvis & belt (anatomical sculpted pelvis + contoured belt & buckle)
+  const pelvisGeo = makeAnatomicalTorsoGeometry(
+    pelvisLen * 1.15,
+    0.155 * bulk,
+    0.115 * bulk,
+    0.145 * bulk,
+    0.105 * bulk,
+    { radialSegs: 16, heightSegs: 5, hexColor: pal.cloth, musculature: 0.7 }
+  );
+  const beltGeo = makeAnatomicalTorsoGeometry(
+    0.058,
+    0.165 * bulk,
+    0.125 * bulk,
+    0.165 * bulk,
+    0.125 * bulk,
+    { radialSegs: 16, heightSegs: 4, hexColor: pal.accent, musculature: 0.3 }
+  );
   boneGroups.push({
     name: 'Pelvis_Belt',
     boneName: 'pelvis',
     parts: [
+      tagPart(pelvisGeo, 'char_pelvis_skirt', clothRecipe, pal.cloth),
       tagPart(
-        makeBeveledBoneSegmentBox(
-          pelvisLen * 1.15,
-          0.155 * bulk,
-          0.115 * bulk,
-          0.145 * bulk,
-          0.105 * bulk,
-          0.013,
-          pal.cloth
-        ),
-        'char_pelvis_skirt',
-        clothRecipe,
-        pal.cloth
-      ),
-      tagPart(
-        makeBeveledBoneSegmentBox(
-          0.055,
-          0.165 * bulk,
-          0.125 * bulk,
-          0.165 * bulk,
-          0.125 * bulk,
-          0.01,
-          pal.accent
-        ),
+        beltGeo,
         'char_pelvis_belt',
         archetype === 'golem' ? 'runic_glow' : 'brushed_gold',
         pal.accent
@@ -314,20 +313,20 @@ export function buildProceduralUalCharacter(
     ],
   });
 
-  // Lower & mid torso
+  // Lower & mid torso (anatomical V-tapered waist & sculpted ribcage/breastplate)
+  const isArmoredChest = archetype === 'knight' || archetype === 'golem';
   boneGroups.push({
     name: 'Torso_Lower',
     boneName: 'spine_01',
     parts: [
       tagPart(
-        makeBeveledBoneSegmentBox(
+        makeAnatomicalTorsoGeometry(
           spine1Len * 1.1,
           0.14 * bulk,
           0.1 * bulk,
           0.155 * bulk,
           0.11 * bulk,
-          0.013,
-          pal.armorSecondary
+          { isArmored: isArmoredChest, radialSegs: 16, heightSegs: 5, hexColor: pal.armorSecondary }
         ),
         'char_spine1',
         armorSecRecipe,
@@ -342,14 +341,13 @@ export function buildProceduralUalCharacter(
     boneName: 'spine_02',
     parts: [
       tagPart(
-        makeBeveledBoneSegmentBox(
+        makeAnatomicalTorsoGeometry(
           spine2Len * 1.12,
           0.155 * bulk,
           0.11 * bulk,
           0.18 * bulk,
           0.125 * bulk,
-          0.014,
-          pal.armorPrimary
+          { isArmored: isArmoredChest, radialSegs: 18, heightSegs: 6, hexColor: pal.armorPrimary }
         ),
         'char_spine2',
         armorPrimRecipe,
@@ -359,17 +357,16 @@ export function buildProceduralUalCharacter(
     ],
   });
 
-  // Upper chest (+ back mantle integrated on spine_03 without separate cloth mesh objects)
+  // Upper chest (+ pleated back mantle integrated on spine_03 without separate cloth mesh objects)
   const chestParts: TaggedGeometryPart[] = [
     tagPart(
-      makeBeveledBoneSegmentBox(
-        spine3Len * 0.92,
+      makeAnatomicalTorsoGeometry(
+        spine3Len * 0.94,
         0.18 * bulk,
         0.125 * bulk,
         0.195 * bulk,
         0.13 * bulk,
-        0.015,
-        pal.armorPrimary
+        { isArmored: isArmoredChest, radialSegs: 18, heightSegs: 7, hexColor: pal.armorPrimary }
       ),
       'char_spine3',
       armorPrimRecipe,
@@ -378,8 +375,9 @@ export function buildProceduralUalCharacter(
     ),
   ];
   if (archetype === 'knight' || archetype === 'ranger') {
-    const mantleGeo = makeBeveledBox(0.32 * bulk, 0.56, 0.04, 0.01, pal.cloth, {
-      offset: [0, -0.14, -0.14 * bulk],
+    const mantleGeo = makePleatedTabardGeometry(0.26 * bulk, 0.38 * bulk, 0.54, 0.036, 4, pal.cloth, {
+      offset: [0, -0.13, -0.14 * bulk],
+      flareZ: -0.05,
     });
     chestParts.push(
       tagPart(mantleGeo, 'char_back_mantle', 'woven_cloth', pal.cloth, { accentHex: pal.accent })
@@ -393,14 +391,13 @@ export function buildProceduralUalCharacter(
     boneName: 'neck_01',
     parts: [
       tagPart(
-        makeBeveledBoneSegmentBox(
+        makeSculptedLimbGeometry(
           neckLen * 1.1,
-          0.055 * bulk,
-          0.055 * bulk,
+          0.056 * bulk,
+          0.056 * bulk,
           0.05 * bulk,
           0.05 * bulk,
-          0.008,
-          pal.skin
+          { profile: 'taper', radialSegs: 14, heightSegs: 4, hexColor: pal.skin }
         ),
         'char_neck',
         skinRecipe,
@@ -409,109 +406,120 @@ export function buildProceduralUalCharacter(
     ],
   });
 
-  // Head + Semantic Eyes/Brows + Beveled/Lathed Headgear
+  // Head + Semantic Eyes/Brows + Sculpted Headgear
+  const rawHead = makeBeveledBox(0.225 * bulk, 0.245 * bulk, 0.225 * bulk, 0.038 * bulk, pal.skin, {
+    offset: [0, 0.11 * bulk, 0],
+  });
+  const sculptedHead = subdivideGeometryLoop(rawHead, 1, { defaultHex: pal.skin });
+  rawHead.dispose();
   const headParts: TaggedGeometryPart[] = [
-    tagPart(
-      makeBeveledBox(0.22 * bulk, 0.24 * bulk, 0.22 * bulk, 0.02 * bulk, pal.skin, {
-        offset: [0, 0.11 * bulk, 0],
-      }),
-      'char_head',
-      skinRecipe,
-      pal.skin,
-      { landmarkKind: 'head_front', lockVertical: true }
-    ),
+    tagPart(sculptedHead, 'char_head', skinRecipe, pal.skin, {
+      landmarkKind: 'head_front',
+      lockVertical: true,
+    }),
   ];
   if (archetype === 'knight') {
+    const helmDome = makeLatheProfile(
+      [
+        [0.128 * bulk, 0.04 * bulk],
+        [0.145 * bulk, 0.13 * bulk],
+        [0.132 * bulk, 0.22 * bulk],
+        [0.08 * bulk, 0.268 * bulk],
+        [0.008 * bulk, 0.28 * bulk],
+      ],
+      16,
+      pal.armorPrimary,
+      { smoothRadialNormals: true }
+    );
+    const visorRaw = makeBeveledBox(0.2 * bulk, 0.058 * bulk, 0.08 * bulk, 0.014 * bulk, pal.armorSecondary, {
+      offset: [0, 0.115 * bulk, 0.105 * bulk],
+    });
+    const visor = subdivideGeometryLoop(visorRaw, 1, { defaultHex: pal.armorSecondary });
+    visorRaw.dispose();
+    const crest = makeSplineLoftGeometry(
+      [
+        [0, 0.255 * bulk, 0.08 * bulk],
+        [0, 0.315 * bulk, 0.0],
+        [0, 0.285 * bulk, -0.11 * bulk],
+        [0, 0.16 * bulk, -0.16 * bulk],
+      ],
+      [
+        [0.018 * bulk, 0.03 * bulk],
+        [0.028 * bulk, 0.05 * bulk],
+        [0.025 * bulk, 0.045 * bulk],
+        [0.012 * bulk, 0.022 * bulk],
+      ],
+      10,
+      14,
+      { colorHex: pal.cloth }
+    );
     headParts.push(
-      tagPart(
-        makeBeveledBox(0.25 * bulk, 0.25 * bulk, 0.25 * bulk, 0.024 * bulk, pal.armorPrimary, {
-          offset: [0, 0.14 * bulk, 0],
-        }),
-        'char_knight_helm',
-        'forged_steel',
-        pal.armorPrimary,
-        { accentHex: pal.accent }
-      ),
-      tagPart(
-        makeBeveledBox(0.21 * bulk, 0.068 * bulk, 0.075 * bulk, 0.012 * bulk, pal.armorSecondary, {
-          offset: [0, 0.11 * bulk, 0.11 * bulk],
-        }),
-        'char_knight_visor',
-        'forged_steel',
-        pal.armorSecondary
-      ),
-      tagPart(
-        makeBeveledBox(0.052 * bulk, 0.12 * bulk, 0.23 * bulk, 0.011 * bulk, pal.cloth, {
-          offset: [0, 0.28 * bulk, -0.02],
-        }),
-        'char_knight_crest',
-        'woven_cloth',
-        pal.cloth
-      )
+      tagPart(helmDome, 'char_knight_helm', 'forged_steel', pal.armorPrimary, { accentHex: pal.accent }),
+      tagPart(visor, 'char_knight_visor', 'forged_steel', pal.armorSecondary),
+      tagPart(crest, 'char_knight_crest', 'woven_cloth', pal.cloth)
     );
   } else if (archetype === 'mage') {
     const brim = makeLatheProfile(
       [
-        [0.14, 0.215 * bulk],
-        [0.275, 0.225 * bulk],
-        [0.265, 0.246 * bulk],
-        [0.14, 0.25 * bulk],
+        [0.135, 0.215 * bulk],
+        [0.285, 0.224 * bulk],
+        [0.275, 0.246 * bulk],
+        [0.135, 0.252 * bulk],
       ],
-      9,
-      pal.armorPrimary
+      16,
+      pal.armorPrimary,
+      { smoothRadialNormals: true }
     );
-    const cone = makeLatheProfile(
+    const cone = makeSplineLoftGeometry(
       [
-        [0.148, 0.24 * bulk],
-        [0.095, 0.39 * bulk],
-        [0.014, 0.54 * bulk],
+        [0, 0.24 * bulk, 0],
+        [0, 0.37 * bulk, -0.025],
+        [0, 0.49 * bulk, -0.09],
+        [0, 0.54 * bulk, -0.15],
       ],
-      9,
-      pal.cloth
+      [0.145, 0.095, 0.045, 0.012],
+      14,
+      14,
+      { colorHex: pal.cloth }
     );
     headParts.push(
       tagPart(brim, 'char_mage_brim', 'woven_cloth', pal.armorPrimary, { accentHex: pal.accent }),
       tagPart(cone, 'char_mage_cone', 'woven_cloth', pal.cloth, { accentHex: pal.accent })
     );
   } else if (archetype === 'ranger') {
+    const rawHood = makeBeveledBox(0.25 * bulk, 0.24 * bulk, 0.26 * bulk, 0.036 * bulk, pal.armorPrimary, {
+      offset: [0, 0.14 * bulk, -0.018],
+    });
+    const hood = subdivideGeometryLoop(rawHood, 1, { defaultHex: pal.armorPrimary });
+    rawHood.dispose();
     headParts.push(
-      tagPart(
-        makeBeveledBox(0.245 * bulk, 0.24 * bulk, 0.255 * bulk, 0.022 * bulk, pal.armorPrimary, {
-          offset: [0, 0.14 * bulk, -0.015],
-        }),
-        'char_ranger_hood',
-        'stitched_leather',
-        pal.armorPrimary,
-        { accentHex: pal.accent }
-      )
+      tagPart(hood, 'char_ranger_hood', 'stitched_leather', pal.armorPrimary, { accentHex: pal.accent })
     );
   } else {
+    const rawHair = makeBeveledBox(0.238 * bulk, 0.105 * bulk, 0.238 * bulk, 0.025 * bulk, pal.hair, {
+      offset: [0, 0.205 * bulk, -0.01],
+    });
+    const hair = subdivideGeometryLoop(rawHair, 1, { defaultHex: pal.hair });
+    rawHair.dispose();
     headParts.push(
-      tagPart(
-        makeBeveledBox(0.235 * bulk, 0.098 * bulk, 0.235 * bulk, 0.018 * bulk, pal.hair, {
-          offset: [0, 0.21 * bulk, -0.01],
-        }),
-        'char_hair',
-        archetype === 'golem' ? 'mossy_cobble' : 'woven_cloth',
-        pal.hair,
-        { accentHex: pal.accent }
-      )
+      tagPart(hair, 'char_hair', archetype === 'golem' ? 'mossy_cobble' : 'woven_cloth', pal.hair, {
+        accentHex: pal.accent,
+      })
     );
   }
   boneGroups.push({ name: 'Head_Unit', boneName: 'Head', parts: headParts, inspectUvs: true });
 
-  // Arms (Left & Right) + Curved Pauldrons
+  // Arms (Left & Right) + Curved Tiered Pauldrons
   const buildArm = (side: 'l' | 'r', uLen: number, lLen: number) => {
     const uParts: TaggedGeometryPart[] = [
       tagPart(
-        makeBeveledBoneSegmentBox(
+        makeSculptedLimbGeometry(
           uLen * 0.96,
           0.068 * bulk,
           0.068 * bulk,
           0.056 * bulk,
           0.056 * bulk,
-          0.011,
-          pal.armorSecondary
+          { profile: 'bicep', radialSegs: 14, heightSegs: 6, hexColor: pal.armorSecondary }
         ),
         `char_ua_${side}`,
         armorSecRecipe,
@@ -542,14 +550,18 @@ export function buildProceduralUalCharacter(
       boneName: `lowerarm_${side}`,
       parts: [
         tagPart(
-          makeBeveledBoneSegmentBox(
+          makeSculptedLimbGeometry(
             lLen * 0.96,
             0.056 * bulk,
             0.056 * bulk,
             0.046 * bulk,
             0.046 * bulk,
-            0.01,
-            pal.armorPrimary
+            {
+              profile: archetype === 'knight' ? 'armor_limb' : 'forearm',
+              radialSegs: 14,
+              heightSegs: 6,
+              hexColor: pal.armorPrimary,
+            }
           ),
           `char_la_${side}`,
           armorPrimRecipe,
@@ -563,14 +575,13 @@ export function buildProceduralUalCharacter(
       boneName: `hand_${side}`,
       parts: [
         tagPart(
-          makeBeveledBoneSegmentBox(
+          makeSculptedLimbGeometry(
             0.12,
             0.046 * bulk,
             0.042 * bulk,
             0.04 * bulk,
             0.036 * bulk,
-            0.008,
-            pal.skin
+            { profile: 'taper', radialSegs: 12, heightSegs: 4, hexColor: pal.skin }
           ),
           `char_hand_${side}`,
           skinRecipe,
@@ -582,21 +593,20 @@ export function buildProceduralUalCharacter(
   buildArm('l', upperArmL, lowerArmL);
   buildArm('r', upperArmR, lowerArmR);
 
-  // Legs & Boots
+  // Legs & Boots (Anatomical Thighs, Calves/Greaves & Boots)
   for (const side of ['l', 'r'] as const) {
     boneGroups.push({
       name: `Thigh_${side}`,
       boneName: `thigh_${side}`,
       parts: [
         tagPart(
-          makeBeveledBoneSegmentBox(
+          makeSculptedLimbGeometry(
             thighLen * 0.96,
             0.088 * bulk,
             0.088 * bulk,
             0.068 * bulk,
             0.068 * bulk,
-            0.012,
-            pal.cloth
+            { profile: 'thigh', radialSegs: 14, heightSegs: 7, hexColor: pal.cloth }
           ),
           `char_thigh_${side}`,
           clothRecipe,
@@ -609,14 +619,18 @@ export function buildProceduralUalCharacter(
       boneName: `calf_${side}`,
       parts: [
         tagPart(
-          makeBeveledBoneSegmentBox(
+          makeSculptedLimbGeometry(
             calfLen * 0.96,
             0.068 * bulk,
             0.068 * bulk,
             0.054 * bulk,
             0.054 * bulk,
-            0.011,
-            pal.boots
+            {
+              profile: archetype === 'knight' ? 'armor_limb' : 'calf',
+              radialSegs: 14,
+              heightSegs: 7,
+              hexColor: pal.boots,
+            }
           ),
           `char_calf_${side}`,
           bootsRecipe,
@@ -629,14 +643,13 @@ export function buildProceduralUalCharacter(
       boneName: `foot_${side}`,
       parts: [
         tagPart(
-          makeBeveledBoneSegmentBox(
+          makeSculptedLimbGeometry(
             0.18,
             0.058 * bulk,
             0.065 * bulk,
             0.05 * bulk,
             0.055 * bulk,
-            0.01,
-            pal.boots
+            { profile: 'taper', radialSegs: 12, heightSegs: 4, hexColor: pal.boots }
           ),
           `char_foot_${side}`,
           bootsRecipe,

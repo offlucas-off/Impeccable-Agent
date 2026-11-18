@@ -54,6 +54,41 @@ export function enforcePixelArtTextureSampling<T extends THREE.Texture>(
 }
 
 /**
+ * Enforces smooth Hi-Fi 3D texture sampling (LinearFilter mag, mipmapped trilinear min when > 1x1,
+ * calibrated colorSpace) without mutating flipY or wrap modes.
+ */
+export function enforceHiFiTextureSampling<T extends THREE.Texture>(
+  tex: T,
+  kind: 'albedo' | 'normal' | 'emission' = 'albedo'
+): T {
+  const targetSpace = kind === 'normal' ? THREE.NoColorSpace : THREE.SRGBColorSpace;
+  const img = tex.image as { width?: number; height?: number } | undefined;
+  const canMip = Boolean(img && (img.width ?? 0) > 1 && (img.height ?? 0) > 1);
+  const targetMin = canMip ? THREE.LinearMipmapLinearFilter : THREE.LinearFilter;
+  let changed = false;
+  if (tex.magFilter !== THREE.LinearFilter) {
+    tex.magFilter = THREE.LinearFilter;
+    changed = true;
+  }
+  if (tex.minFilter !== targetMin) {
+    tex.minFilter = targetMin;
+    changed = true;
+  }
+  if (tex.generateMipmaps !== canMip) {
+    tex.generateMipmaps = canMip;
+    changed = true;
+  }
+  if (tex.colorSpace !== targetSpace) {
+    tex.colorSpace = targetSpace;
+    changed = true;
+  }
+  if (changed) {
+    tex.needsUpdate = true;
+  }
+  return tex;
+}
+
+/**
  * Custom WebGL2 GLSL3 MRT Material replicating ProPixelizer's UberShader:
  * - Sparse Pixel Expansion seed clipping (Attempt #3, 1x1 up to 10x10)
  * - Cel shading via HSV Value sampled through 1D Lighting Ramp
@@ -70,19 +105,28 @@ export class PixelizerMaterial extends THREE.ShaderMaterial {
     sharedResources?: PixelizerMaterialResources
   ) {
     const white = getFallbackWhiteTexture();
+    const isPixelated = options.pixelated ?? false;
+    const resolvedSmoothness =
+      options.smoothness ??
+      (options.roughness !== undefined
+        ? Math.max(0, Math.min(1, 1 - options.roughness))
+        : 0.35);
+    const resolvedRoughness =
+      options.roughness ?? Math.max(0, Math.min(1, 1 - resolvedSmoothness));
+
     const resolved: Required<PixelizerMaterialOptions> = {
-      pixelated: options.pixelated ?? true,
+      pixelated: isPixelated,
       pixelSize: options.pixelSize ?? 1,
       objectId: options.objectId ?? 1,
       outlineColor: options.outlineColor ?? '#222736',
-      outlineAlpha: options.outlineAlpha ?? 0.22,
+      outlineAlpha: options.outlineAlpha ?? (isPixelated ? 0.22 : 0.0),
       outlineWidthSteps: options.outlineWidthSteps === 2 ? 2 : 1,
       edgeHighlight: options.edgeHighlight ?? 0.0,
-      edgeBevelWeight: options.edgeBevelWeight ?? 0.1,
+      edgeBevelWeight: options.edgeBevelWeight ?? (isPixelated ? 0.1 : 0.0),
       baseColor: options.baseColor ?? '#ffffff',
       alpha: options.alpha ?? 1.0,
       alphaClipThreshold: options.alphaClipThreshold ?? 0.1,
-      useDitheredTransparency: options.useDitheredTransparency ?? true,
+      useDitheredTransparency: options.useDitheredTransparency ?? isPixelated,
       albedoMap: options.albedoMap ?? null,
       normalMap: options.normalMap ?? null,
       normalScale: options.normalScale ?? 1.0,
@@ -95,13 +139,14 @@ export class PixelizerMaterial extends THREE.ShaderMaterial {
       workflow: options.workflow ?? 'specular',
       specularColor: options.specularColor ?? '#333333',
       metallic: options.metallic ?? 0.0,
-      smoothness: options.smoothness ?? 0.25,
+      smoothness: resolvedSmoothness,
+      roughness: resolvedRoughness,
       lightingRampRange: options.lightingRampRange ?? 1.0,
       lightingRampOffset: options.lightingRampOffset ?? 0.0,
       shadowTint: options.shadowTint ?? '#2e2b4f',
-      shadowTintAlpha: options.shadowTintAlpha ?? 0.25,
+      shadowTintAlpha: options.shadowTintAlpha ?? (isPixelated ? 0.25 : 0.18),
       ambientConstantColor: options.ambientConstantColor ?? '#485068',
-      ambientConstantWeight: options.ambientConstantWeight ?? 0.35,
+      ambientConstantWeight: options.ambientConstantWeight ?? (isPixelated ? 0.35 : 0.12),
       rimColor: options.rimColor ?? '#ffd8a8',
       rimIntensity: options.rimIntensity ?? 0.0,
       rimPower: options.rimPower ?? 3.2,
@@ -117,7 +162,7 @@ export class PixelizerMaterial extends THREE.ShaderMaterial {
       {
         uPixelated: { value: resolved.pixelated ? 1 : 0 },
         uPixelSize: { value: Math.max(1, Math.min(10, Math.round(resolved.pixelSize))) },
-        uUsePixelExpansion: { value: 1 },
+        uUsePixelExpansion: { value: resolved.pixelated ? 1 : 0 },
         uPixelGridOriginPx: { value: new THREE.Vector2(0, 0) },
         uObjectId: { value: resolved.objectId },
         uOutlineColorSrgb: { value: new THREE.Vector3(0.08, 0.06, 0.11) },
@@ -205,6 +250,11 @@ export class PixelizerMaterial extends THREE.ShaderMaterial {
 
   public updateOptions(patch: Partial<PixelizerMaterialOptions>): void {
     Object.assign(this.options, patch);
+    if (patch.roughness !== undefined && patch.smoothness === undefined) {
+      this.options.smoothness = Math.max(0, Math.min(1, 1 - patch.roughness));
+    } else if (patch.smoothness !== undefined && patch.roughness === undefined) {
+      this.options.roughness = Math.max(0, Math.min(1, 1 - patch.smoothness));
+    }
     this.syncUniforms();
   }
 
@@ -260,14 +310,14 @@ export class PixelizerMaterial extends THREE.ShaderMaterial {
         enforcePixelArtTextureSampling(o.emissionMap, 'emission');
       }
     } else {
-      if (o.albedoMap instanceof THREE.DataTexture) {
-        enforcePixelArtTextureSampling(o.albedoMap, 'albedo');
+      if (o.albedoMap) {
+        enforceHiFiTextureSampling(o.albedoMap, 'albedo');
       }
-      if (o.normalMap instanceof THREE.DataTexture) {
-        enforcePixelArtTextureSampling(o.normalMap, 'normal');
+      if (o.normalMap) {
+        enforceHiFiTextureSampling(o.normalMap, 'normal');
       }
-      if (o.emissionMap instanceof THREE.DataTexture) {
-        enforcePixelArtTextureSampling(o.emissionMap, 'emission');
+      if (o.emissionMap) {
+        enforceHiFiTextureSampling(o.emissionMap, 'emission');
       }
     }
 

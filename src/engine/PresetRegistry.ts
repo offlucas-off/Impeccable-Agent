@@ -1,3 +1,5 @@
+import type { VisualStylePresetId } from './types';
+
 export type PresetCategory =
   | 'heroes'
   | 'npcs'
@@ -32,8 +34,12 @@ export interface PresetEntry {
   isLargeStructure?: boolean;
   supports8DirSheet?: boolean;
   stagePresetKey?: string;
+  defaultStylePreset?: VisualStylePresetId;
+  defaultPixelated?: boolean;
   generatorSpec?: PresetGeneratorSpec;
 }
+
+export const DEFAULT_PRESET_STYLE: VisualStylePresetId = 'hifi_stylized';
 
 export const PRESET_CATEGORY_LABELS: Record<PresetCategory, string> = {
   heroes: 'Heróis & Classes',
@@ -58,6 +64,8 @@ export const UNIFIED_PRESET_REGISTRY: PresetEntry[] = [
     approxHeightM: 1.8,
     supports8DirSheet: true,
     stagePresetKey: 'nwl_knight',
+    defaultStylePreset: 'hifi_stylized',
+    defaultPixelated: false,
     generatorSpec: { kind: 'player', subId: 'knight' },
   },
   {
@@ -69,6 +77,8 @@ export const UNIFIED_PRESET_REGISTRY: PresetEntry[] = [
     approxHeightM: 1.78,
     supports8DirSheet: true,
     stagePresetKey: 'nwl_archer',
+    defaultStylePreset: 'hifi_stylized',
+    defaultPixelated: false,
     generatorSpec: { kind: 'player', subId: 'archer' },
   },
   {
@@ -80,6 +90,8 @@ export const UNIFIED_PRESET_REGISTRY: PresetEntry[] = [
     approxHeightM: 1.78,
     supports8DirSheet: true,
     stagePresetKey: 'nwl_mage',
+    defaultStylePreset: 'hifi_stylized',
+    defaultPixelated: false,
     generatorSpec: { kind: 'player', subId: 'mage' },
   },
 
@@ -319,6 +331,8 @@ export const UNIFIED_PRESET_REGISTRY: PresetEntry[] = [
     approxHeightM: 2.95,
     supports8DirSheet: true,
     stagePresetKey: 'nwl_boss_demon',
+    defaultStylePreset: 'hifi_stylized',
+    defaultPixelated: false,
     generatorSpec: { kind: 'monster', subId: 'boss_demon' },
   },
   {
@@ -329,6 +343,8 @@ export const UNIFIED_PRESET_REGISTRY: PresetEntry[] = [
     tags: ['boss', 'golem', 'colossus', 'giant'],
     approxHeightM: 3.6,
     supports8DirSheet: true,
+    defaultStylePreset: 'hifi_stylized',
+    defaultPixelated: false,
     generatorSpec: { kind: 'monster', subId: 'colossus_golem' },
   },
   {
@@ -339,6 +355,8 @@ export const UNIFIED_PRESET_REGISTRY: PresetEntry[] = [
     tags: ['boss', 'minotaur', 'warlord', 'giant'],
     approxHeightM: 3.2,
     supports8DirSheet: true,
+    defaultStylePreset: 'hifi_stylized',
+    defaultPixelated: false,
     generatorSpec: { kind: 'monster', subId: 'minotaur_warlord' },
   },
   {
@@ -349,6 +367,8 @@ export const UNIFIED_PRESET_REGISTRY: PresetEntry[] = [
     tags: ['boss', 'knight', 'dread', 'giant'],
     approxHeightM: 3.0,
     supports8DirSheet: true,
+    defaultStylePreset: 'hifi_stylized',
+    defaultPixelated: false,
     generatorSpec: { kind: 'monster', subId: 'dread_knight' },
   },
   {
@@ -359,6 +379,8 @@ export const UNIFIED_PRESET_REGISTRY: PresetEntry[] = [
     tags: ['boss', 'wyvern', 'dragon', 'quadruped', 'giant'],
     approxHeightM: 4.2,
     supports8DirSheet: true,
+    defaultStylePreset: 'hifi_stylized',
+    defaultPixelated: false,
     generatorSpec: { kind: 'quadruped', subId: 'elder_wyvern' },
   },
 
@@ -371,6 +393,8 @@ export const UNIFIED_PRESET_REGISTRY: PresetEntry[] = [
     tags: ['prop', 'chest', 'loot', 'dungeon'],
     approxHeightM: 0.9,
     stagePresetKey: 'nwl_chest',
+    defaultStylePreset: 'hifi_stylized',
+    defaultPixelated: false,
     generatorSpec: { kind: 'prop', subId: 'treasure_chest' },
   },
   {
@@ -573,6 +597,8 @@ export const UNIFIED_PRESET_REGISTRY: PresetEntry[] = [
     approxHeightM: 6.5,
     isLargeStructure: true,
     stagePresetKey: 'nwl_starter_city',
+    defaultStylePreset: 'hifi_stylized',
+    defaultPixelated: false,
   },
   {
     id: 'struct.medieval_house',
@@ -635,6 +661,8 @@ export const UNIFIED_PRESET_REGISTRY: PresetEntry[] = [
     approxHeightM: 3.2,
     isLargeStructure: true,
     stagePresetKey: 'nwl_dungeon_floor1',
+    defaultStylePreset: 'hifi_stylized',
+    defaultPixelated: false,
     generatorSpec: { kind: 'dungeon', subId: 'classic_ruins' },
   },
   {
@@ -735,4 +763,9 @@ export function searchPresets(
 
 export function findPresetById(id: string): PresetEntry | undefined {
   return UNIFIED_PRESET_REGISTRY.find((p) => p.id === id);
+}
+
+export function getPresetDefaultStyle(presetOrId: string | PresetEntry): VisualStylePresetId {
+  const entry = typeof presetOrId === 'string' ? findPresetById(presetOrId) : presetOrId;
+  return entry?.defaultStylePreset ?? DEFAULT_PRESET_STYLE;
 }

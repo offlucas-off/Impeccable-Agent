@@ -529,6 +529,11 @@ const GRIP_POLEARM: WeaponGripPivotSpec = {
   yawRad: -12 * DEG2RAD,
   maxRearOverhang: 0.22,
 };
+const GRIP_STAFF: WeaponGripPivotSpec = {
+  pitchRad: 42 * DEG2RAD,
+  yawRad: -18 * DEG2RAD,
+  maxRearOverhang: 0.16,
+};
 const GRIP_RANGED: WeaponGripPivotSpec = {
   pitchRad: 0,
   yawRad: 0,
@@ -541,12 +546,12 @@ export const WEAPON_GRIP_PIVOTS: Partial<Record<WeaponMainStyleId, WeaponGripPiv
   dagger: GRIP_1H,
   twin_blade: GRIP_1H,
   flail: GRIP_1H,
-  scepter_orb: GRIP_1H,
-  wand: GRIP_1H,
+  scepter_orb: GRIP_STAFF,
+  wand: GRIP_STAFF,
   greatsword: GRIP_2H,
   great_hammer: GRIP_2H,
   battleaxe: GRIP_2H,
-  arcane_staff: GRIP_2H,
+  arcane_staff: GRIP_STAFF,
   spear: GRIP_POLEARM,
   halberd: GRIP_POLEARM,
   scythe: GRIP_POLEARM,

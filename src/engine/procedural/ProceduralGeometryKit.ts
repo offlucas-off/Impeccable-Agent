@@ -644,6 +644,21 @@ export function makePleatedTabardGeometry(
     return [x, y, z];
   };
 
+  const sampleNormal = (iu: number, iv: number, isFront: boolean): [number, number, number] => {
+    const u = iu / uCols;
+    const v = iv / vRows;
+    const dzdu = Math.cos(u * nPleats * Math.PI * 2) * nPleats * Math.PI * 2 * pleatAmp * (0.35 + 0.65 * (1 - v));
+    const dxdu = bottomW * (1 - v) + topW * v;
+    const dzdv = -2 * (1 - v) * flareZ - Math.sin(u * nPleats * Math.PI * 2) * pleatAmp * 0.65;
+    const dydv = height;
+    const sign = isFront ? 1 : -1;
+    const nx = -dzdu / Math.max(1e-4, dxdu) * sign;
+    const ny = -dzdv / Math.max(1e-4, dydv) * sign;
+    const nz = sign;
+    const len = Math.hypot(nx, ny, nz) || 1;
+    return [nx / len, ny / len, nz / len];
+  };
+
   for (let iv = 0; iv < vRows; iv++) {
     const v0 = iv / vRows,
       v1 = (iv + 1) / vRows;
@@ -654,13 +669,45 @@ export function makePleatedTabardGeometry(
       const f10 = sampleGrid(iu + 1, iv, true);
       const f11 = sampleGrid(iu + 1, iv + 1, true);
       const f01 = sampleGrid(iu, iv + 1, true);
-      pushQuadWithHint(acc, f00, f10, f11, f01, [u0, v0], [u1, v0], [u1, v1], [u0, v1], [0, 0, 1]);
+      const nf00 = sampleNormal(iu, iv, true);
+      const nf10 = sampleNormal(iu + 1, iv, true);
+      const nf11 = sampleNormal(iu + 1, iv + 1, true);
+      const nf01 = sampleNormal(iu, iv + 1, true);
+      pushQuadWithHint(
+        acc,
+        f00,
+        f10,
+        f11,
+        f01,
+        [u0, v0],
+        [u1, v0],
+        [u1, v1],
+        [u0, v1],
+        [0, 0, 1],
+        [nf00, nf10, nf11, nf01]
+      );
 
       const b00 = sampleGrid(iu, iv, false);
       const b10 = sampleGrid(iu + 1, iv, false);
       const b11 = sampleGrid(iu + 1, iv + 1, false);
       const b01 = sampleGrid(iu, iv + 1, false);
-      pushQuadWithHint(acc, b10, b00, b01, b11, [u0, v0], [u1, v0], [u1, v1], [u0, v1], [0, 0, -1]);
+      const nb00 = sampleNormal(iu, iv, false);
+      const nb10 = sampleNormal(iu + 1, iv, false);
+      const nb11 = sampleNormal(iu + 1, iv + 1, false);
+      const nb01 = sampleNormal(iu, iv + 1, false);
+      pushQuadWithHint(
+        acc,
+        b10,
+        b00,
+        b01,
+        b11,
+        [u0, v0],
+        [u1, v0],
+        [u1, v1],
+        [u0, v1],
+        [0, 0, -1],
+        [nb10, nb00, nb01, nb11]
+      );
     }
   }
 
@@ -953,17 +1000,17 @@ export function makeLatheProfile(
  * Curved tapered horn / tusk / claw extruded smoothly along a quadratic bend along local +Y.
  */
 export function makeCurvedHornGeometry(
-  segments = 6,
+  segments = 10,
   baseRadius = 0.08,
   tipRadius = 0.01,
   length = 0.45,
   bendX = 0.14,
   bendZ = 0.1,
-  radialSegs = 6,
+  radialSegs = 10,
   hexColor = '#cbb68a'
 ): THREE.BufferGeometry {
-  const segCount = Math.max(2, segments);
-  const radCount = Math.max(4, radialSegs);
+  const segCount = Math.max(3, segments);
+  const radCount = Math.max(6, radialSegs);
   const acc = createAccum();
 
   const pts: THREE.Vector3[] = [];
@@ -974,10 +1021,12 @@ export function makeCurvedHornGeometry(
     const y = length * (t - 0.12 * t * t);
     const z = bendZ * (t * t * 1.35 + 0.1 * t);
     pts.push(new THREE.Vector3(x, y, z));
-    radii.push(baseRadius * (1 - t) + tipRadius * t);
+    const taper = Math.pow(1 - t, 0.85);
+    radii.push(baseRadius * taper + tipRadius * (1 - taper));
   }
 
   const rings: [number, number, number][][] = [];
+  const ringNormals: [number, number, number][][] = [];
   const upPrev = new THREE.Vector3(0, 1, 0);
   let refSide = new THREE.Vector3(1, 0, 0);
 
@@ -1000,15 +1049,21 @@ export function makeCurvedHornGeometry(
     const binormal = new THREE.Vector3().crossVectors(tangent, refSide).normalize();
     const r = radii[i];
     const ring: [number, number, number][] = [];
+    const rNrm: [number, number, number][] = [];
     for (let s = 0; s < radCount; s++) {
       const a = (s / radCount) * Math.PI * 2;
+      const cosA = Math.cos(a);
+      const sinA = Math.sin(a);
       const p = pts[i]
         .clone()
-        .addScaledVector(refSide, Math.cos(a) * r)
-        .addScaledVector(binormal, Math.sin(a) * r);
+        .addScaledVector(refSide, cosA * r)
+        .addScaledVector(binormal, sinA * r);
       ring.push([p.x, p.y, p.z]);
+      const n = refSide.clone().multiplyScalar(cosA).addScaledVector(binormal, sinA).normalize();
+      rNrm.push([n.x, n.y, n.z]);
     }
     rings.push(ring);
+    ringNormals.push(rNrm);
   }
 
   for (let i = 0; i < segCount; i++) {
@@ -1022,13 +1077,29 @@ export function makeCurvedHornGeometry(
       const b0 = rings[i][sNext];
       const a1 = rings[i + 1][s];
       const b1 = rings[i + 1][sNext];
+      const na0 = ringNormals[i][s];
+      const nb0 = ringNormals[i][sNext];
+      const na1 = ringNormals[i + 1][s];
+      const nb1 = ringNormals[i + 1][sNext];
       const midCenter = pts[i].clone().lerp(pts[i + 1], 0.5);
       const quadMid: [number, number, number] = [
         (a0[0] + b0[0] + a1[0] + b1[0]) * 0.25 - midCenter.x,
         (a0[1] + b0[1] + a1[1] + b1[1]) * 0.25 - midCenter.y,
         (a0[2] + b0[2] + a1[2] + b1[2]) * 0.25 - midCenter.z,
       ];
-      pushQuadWithHint(acc, a0, b0, b1, a1, [u0, v0], [u1, v0], [u1, v1], [u0, v1], quadMid);
+      pushQuadWithHint(
+        acc,
+        a0,
+        b0,
+        b1,
+        a1,
+        [u0, v0],
+        [u1, v0],
+        [u1, v1],
+        [u0, v1],
+        quadMid,
+        [na0, nb0, nb1, na1]
+      );
     }
   }
 
@@ -1077,21 +1148,39 @@ export function makePauldronShellGeometry(
   hexColor = '#8f9eb3'
 ): THREE.BufferGeometry {
   const acc = createAccum();
-  const uSegs = 4;
-  const vSegs = 4;
+  const uSegs = 6;
+  const vSegs = 6;
 
   const sample = (uIdx: number, vIdx: number, outer: boolean): [number, number, number] => {
-    const u = (uIdx / uSegs - 0.5) * Math.PI * 0.94; // forward-back wrap
-    const v = (vIdx / vSegs) * Math.PI * 0.56; // 0 = crest, 1 = flared outer rim
+    const u = (uIdx / uSegs - 0.5) * Math.PI * 0.96; // forward-back wrap
+    const v = (vIdx / vSegs) * Math.PI * 0.58; // 0 = crest, 1 = flared outer rim
     const baseScale = outer ? 1.0 : Math.max(0.55, 1.0 - thickness / Math.max(0.12, width));
-    // Tiered overlapping lame step + raised lower rim lip on outer shell
-    const lameStep = outer ? (vIdx === 2 ? 1.06 : vIdx === vSegs ? 1.08 : 1.0) : 1.0;
-    const ridgeSpine = outer && uIdx === uSegs / 2 ? 1.05 : 1.0;
+    // Tiered overlapping lame steps + raised lower rim lip on outer shell
+    const lameStep = outer
+      ? vIdx === 3
+        ? 1.05
+        : vIdx === 5
+          ? 1.07
+          : vIdx === vSegs
+            ? 1.09
+            : 1.0
+      : 1.0;
+    const ridgeSpine = outer ? 1.0 + 0.06 * Math.exp(-Math.pow((uIdx - uSegs * 0.5) / 1.4, 2)) : 1.0;
     const rScale = baseScale * lameStep * ridgeSpine;
     const x = Math.sin(v) * width * 0.56 * rScale;
-    const y = (Math.cos(v) - 0.45) * height * 0.74 * rScale - (outer && vIdx >= 3 ? 0.008 : 0);
+    const y = (Math.cos(v) - 0.45) * height * 0.74 * rScale - (outer && vIdx >= 6 ? 0.009 : 0);
     const z = Math.sin(u) * Math.max(0.36, Math.sin(v) * 0.86 + 0.32) * depth * 0.5 * rScale;
     return [x, y, z];
+  };
+
+  const sampleNormal = (uIdx: number, vIdx: number, outer: boolean): [number, number, number] => {
+    const p = sample(uIdx, vIdx, outer);
+    const sgn = outer ? 1 : -1;
+    const nx = p[0] * sgn;
+    const ny = (p[1] + height * 0.25) * sgn;
+    const nz = p[2] * sgn;
+    const len = Math.hypot(nx, ny, nz) || 1;
+    return [nx / len, ny / len, nz / len];
   };
 
   for (let vi = 0; vi < vSegs; vi++) {
@@ -1100,6 +1189,10 @@ export function makePauldronShellGeometry(
       const b = sample(ui + 1, vi, true);
       const c = sample(ui + 1, vi + 1, true);
       const d = sample(ui, vi + 1, true);
+      const na = sampleNormal(ui, vi, true);
+      const nb = sampleNormal(ui + 1, vi, true);
+      const nc = sampleNormal(ui + 1, vi + 1, true);
+      const nd = sampleNormal(ui, vi + 1, true);
       const outHint: [number, number, number] = [
         (a[0] + c[0]) * 0.5,
         (a[1] + c[1]) * 0.5 + 0.1,
@@ -1115,7 +1208,8 @@ export function makePauldronShellGeometry(
         [(ui + 1) / uSegs, vi / vSegs],
         [(ui + 1) / uSegs, (vi + 1) / vSegs],
         [ui / uSegs, (vi + 1) / vSegs],
-        outHint
+        outHint,
+        [na, nb, nc, nd]
       );
 
       const ai = sample(ui, vi, false);
@@ -1268,7 +1362,7 @@ export function makeAxeHeadGeometry(
 ): THREE.BufferGeometry {
   const acc = createAccum();
   const buildSide = (dir: 1 | -1) => {
-    const segs = 4;
+    const segs = 8;
     const xNeck = dir * 0.03;
     const xInner = dir * (reachX * 0.62);
     const xOuter = dir * reachX;
@@ -1341,7 +1435,7 @@ export function makeAxeHeadGeometry(
 }
 
 /**
- * Faceted curved heater/kite shield facing outward along +Z.
+ * Sculpted multi-ring curved heater/kite shield with embossed outer rim facing outward along +Z.
  */
 export function makeDomeShieldGeometry(
   width = 0.46,
@@ -1352,62 +1446,140 @@ export function makeDomeShieldGeometry(
   const acc = createAccum();
   const hw = width * 0.5;
   const hh = height * 0.5;
-  const bow = Math.min(0.08, width * 0.16);
+  const bow = Math.min(0.085, width * 0.17);
   const rimT = thickness;
 
-  // Outline ring (top-left, top-mid, top-right, waist-right, point-bot, waist-left)
-  const pts2d: [number, number, number][] = [
-    [-hw * 0.92, hh, -bow * 0.35],
-    [0, hh * 1.04, bow * 0.5],
-    [hw * 0.92, hh, -bow * 0.35],
-    [hw, 0.02 * hh, -bow * 0.42],
-    [hw * 0.54, -hh * 0.65, -bow * 0.2],
-    [0, -hh, bow * 0.2],
-    [-hw * 0.54, -hh * 0.65, -bow * 0.2],
-    [-hw, 0.02 * hh, -bow * 0.42],
+  // 16-point smooth heater/kite perimeter around shield face
+  const baseCtrl: [number, number][] = [
+    [-hw * 0.92, hh],
+    [-hw * 0.46, hh * 1.03],
+    [0, hh * 1.04],
+    [hw * 0.46, hh * 1.03],
+    [hw * 0.92, hh],
+    [hw * 0.98, hh * 0.52],
+    [hw, 0.02 * hh],
+    [hw * 0.82, -hh * 0.34],
+    [hw * 0.54, -hh * 0.65],
+    [hw * 0.28, -hh * 0.86],
+    [0, -hh],
+    [-hw * 0.28, -hh * 0.86],
+    [-hw * 0.54, -hh * 0.65],
+    [-hw * 0.82, -hh * 0.34],
+    [-hw, 0.02 * hh],
+    [-hw * 0.98, hh * 0.52],
   ];
-  const centerFront: [number, number, number] = [0, 0.06 * hh, bow + rimT * 0.5];
-  const centerBack: [number, number, number] = [0, 0.06 * hh, bow - rimT * 0.5];
+  const n = baseCtrl.length;
+  const cy = 0.06 * hh;
+  const ringRadii = [0.28, 0.62, 0.86, 1.0];
 
-  const frontRing = pts2d.map((pt) => [pt[0], pt[1], pt[2] + rimT * 0.5] as [number, number, number]);
-  const backRing = pts2d.map((pt) => [pt[0], pt[1], pt[2] - rimT * 0.5] as [number, number, number]);
+  const evalRingPt = (i: number, frac: number, zOff: number, emboss: number): [number, number, number] => {
+    const [bx, by] = baseCtrl[i];
+    const x = bx * frac;
+    const y = cy + (by - cy) * frac;
+    // Smooth spherical-parabolic dome curvature + raised rim lip at outer border
+    const curveZ = bow * (1 - frac * frac * 1.28) + emboss;
+    return [x, y, curveZ + zOff];
+  };
 
-  const n = pts2d.length;
+  const frontRings = ringRadii.map((f, rIdx) => {
+    const emboss = rIdx === 2 ? rimT * 0.14 : rIdx === 3 ? rimT * 0.1 : 0;
+    return baseCtrl.map((_, i) => evalRingPt(i, f, rimT * 0.5, emboss));
+  });
+  const backRings = ringRadii.map((f) =>
+    baseCtrl.map((_, i) => evalRingPt(i, f, -rimT * 0.5, 0))
+  );
+  const centerFront: [number, number, number] = [0, cy, bow + rimT * 0.52];
+  const centerBack: [number, number, number] = [0, cy, bow - rimT * 0.5];
+
+  const domeNormal = (pt: [number, number, number], sign: number): [number, number, number] => {
+    const nx = (pt[0] / Math.max(0.05, hw)) * 0.42 * sign;
+    const ny = ((pt[1] - cy) / Math.max(0.05, hh)) * 0.28 * sign;
+    const nz = sign;
+    const l = Math.hypot(nx, ny, nz) || 1;
+    return [nx / l, ny / l, nz / l];
+  };
+
+  const uvOf = (pt: [number, number, number]): [number, number] => [
+    Math.max(0, Math.min(1, pt[0] / width + 0.5)),
+    Math.max(0, Math.min(1, pt[1] / height + 0.5)),
+  ];
+
   for (let i = 0; i < n; i++) {
     const j = (i + 1) % n;
-    const u0 = (frontRing[i][0] / width) + 0.5;
-    const v0 = (frontRing[i][1] / height) + 0.5;
-    const u1 = (frontRing[j][0] / width) + 0.5;
-    const v1 = (frontRing[j][1] / height) + 0.5;
-
+    // Center fan to ring 0
     pushTriWithHint(
       acc,
       centerFront,
-      frontRing[i],
-      frontRing[j],
+      frontRings[0][j],
+      frontRings[0][i],
       [0.5, 0.53],
-      [u0, v0],
-      [u1, v1],
-      [0, 0, 1]
+      uvOf(frontRings[0][j]),
+      uvOf(frontRings[0][i]),
+      [0, 0, 1],
+      [domeNormal(centerFront, 1), domeNormal(frontRings[0][j], 1), domeNormal(frontRings[0][i], 1)]
     );
     pushTriWithHint(
       acc,
       centerBack,
-      backRing[j],
-      backRing[i],
+      backRings[0][i],
+      backRings[0][j],
       [0.5, 0.53],
-      [u1, v1],
-      [u0, v0],
-      [0, 0, -1]
+      uvOf(backRings[0][i]),
+      uvOf(backRings[0][j]),
+      [0, 0, -1],
+      [domeNormal(centerBack, -1), domeNormal(backRings[0][i], -1), domeNormal(backRings[0][j], -1)]
     );
-    const outX = (frontRing[i][0] + frontRing[j][0]) * 0.5;
-    const outY = (frontRing[i][1] + frontRing[j][1]) * 0.5;
+
+    // Concentric dome rings (0->1->2->3)
+    for (let r = 0; r < ringRadii.length - 1; r++) {
+      const f00 = frontRings[r][i];
+      const f10 = frontRings[r][j];
+      const f11 = frontRings[r + 1][j];
+      const f01 = frontRings[r + 1][i];
+      pushQuadWithHint(
+        acc,
+        f00,
+        f10,
+        f11,
+        f01,
+        uvOf(f00),
+        uvOf(f10),
+        uvOf(f11),
+        uvOf(f01),
+        [0, 0, 1],
+        [domeNormal(f00, 1), domeNormal(f10, 1), domeNormal(f11, 1), domeNormal(f01, 1)]
+      );
+
+      const b00 = backRings[r][i];
+      const b10 = backRings[r][j];
+      const b11 = backRings[r + 1][j];
+      const b01 = backRings[r + 1][i];
+      pushQuadWithHint(
+        acc,
+        b10,
+        b00,
+        b01,
+        b11,
+        uvOf(b10),
+        uvOf(b00),
+        uvOf(b01),
+        uvOf(b11),
+        [0, 0, -1],
+        [domeNormal(b10, -1), domeNormal(b00, -1), domeNormal(b01, -1), domeNormal(b11, -1)]
+      );
+    }
+
+    // Outer rim wall
+    const outerF = frontRings[ringRadii.length - 1];
+    const outerB = backRings[ringRadii.length - 1];
+    const outX = (outerF[i][0] + outerF[j][0]) * 0.5;
+    const outY = (outerF[i][1] + outerF[j][1]) * 0.5;
     pushQuadWithHint(
       acc,
-      frontRing[i],
-      backRing[i],
-      backRing[j],
-      frontRing[j],
+      outerF[i],
+      outerB[i],
+      outerB[j],
+      outerF[j],
       [i / n, 0],
       [i / n, 1],
       [(i + 1) / n, 1],
@@ -1428,7 +1600,8 @@ export function makeRecurveBowGeometry(
   thickness = 0.042,
   hexColor = '#7d522f'
 ): THREE.BufferGeometry {
-  const segs = 10;
+  const segs = 18;
+  const radSides = 6;
   const acc = createAccum();
   const hh = height * 0.5;
 
@@ -1446,45 +1619,65 @@ export function makeRecurveBowGeometry(
     };
   };
 
-  const ringPts = (s: { y: number; z: number; rx: number; rz: number }): [number, number, number][] => [
-    [s.rx, s.y, s.z],
-    [0, s.y, s.z + s.rz],
-    [-s.rx, s.y, s.z],
-    [0, s.y, s.z - s.rz],
-  ];
+  const ringPts = (s: { y: number; z: number; rx: number; rz: number }): [number, number, number][] => {
+    const ring: [number, number, number][] = [];
+    for (let k = 0; k < radSides; k++) {
+      const a = (k / radSides) * Math.PI * 2;
+      ring.push([Math.cos(a) * s.rx, s.y, s.z + Math.sin(a) * s.rz]);
+    }
+    return ring;
+  };
 
-  const rings = Array.from({ length: segs + 1 }, (_, i) => ringPts(spineAt(i / segs)));
+  const ringNormals = (s: { rx: number; rz: number }): [number, number, number][] => {
+    const nrms: [number, number, number][] = [];
+    for (let k = 0; k < radSides; k++) {
+      const a = (k / radSides) * Math.PI * 2;
+      const nx = Math.cos(a) / Math.max(1e-4, s.rx);
+      const nz = Math.sin(a) / Math.max(1e-4, s.rz);
+      const l = Math.hypot(nx, nz) || 1;
+      nrms.push([nx / l, 0, nz / l]);
+    }
+    return nrms;
+  };
+
+  const spines = Array.from({ length: segs + 1 }, (_, i) => spineAt(i / segs));
+  const rings = spines.map(ringPts);
+  const norms = spines.map(ringNormals);
+
   for (let i = 0; i < segs; i++) {
     const v0 = i / segs;
     const v1 = (i + 1) / segs;
-    for (let k = 0; k < 4; k++) {
-      const kNext = (k + 1) % 4;
+    for (let k = 0; k < radSides; k++) {
+      const kNext = (k + 1) % radSides;
       const a0 = rings[i][k],
         b0 = rings[i][kNext],
         a1 = rings[i + 1][k],
         b1 = rings[i + 1][kNext];
-      const outDir: [number, number, number] = [
-        k === 0 ? 1 : k === 2 ? -1 : 0,
-        0,
-        k === 1 ? 1 : k === 3 ? -1 : 0,
-      ];
-      pushQuadWithHint(acc, a0, b0, b1, a1, [k / 4, v0], [(k + 1) / 4, v0], [(k + 1) / 4, v1], [k / 4, v1], outDir);
+      const ang = ((k + 0.5) / radSides) * Math.PI * 2;
+      const outDir: [number, number, number] = [Math.cos(ang), 0, Math.sin(ang)];
+      pushQuadWithHint(
+        acc,
+        a0,
+        b0,
+        b1,
+        a1,
+        [k / radSides, v0],
+        [(k + 1) / radSides, v0],
+        [(k + 1) / radSides, v1],
+        [k / radSides, v1],
+        outDir,
+        [norms[i][k], norms[i][kNext], norms[i + 1][kNext], norms[i + 1][k]]
+      );
     }
   }
   // End caps
-  pushQuadWithHint(acc, rings[0][0], rings[0][1], rings[0][2], rings[0][3], [0, 0], [1, 0], [1, 1], [0, 1], [0, -1, 0]);
-  pushQuadWithHint(
-    acc,
-    rings[segs][0],
-    rings[segs][3],
-    rings[segs][2],
-    rings[segs][1],
-    [0, 0],
-    [1, 0],
-    [1, 1],
-    [0, 1],
-    [0, 1, 0]
-  );
+  const botC: [number, number, number] = [0, spines[0].y, spines[0].z];
+  const topC: [number, number, number] = [0, spines[segs].y, spines[segs].z];
+  for (let k = 0; k < radSides; k++) {
+    const kNext = (k + 1) % radSides;
+    pushTriWithHint(acc, botC, rings[0][k], rings[0][kNext], [0.5, 0.5], [0, 0], [1, 0], [0, -1, 0]);
+    pushTriWithHint(acc, topC, rings[segs][kNext], rings[segs][k], [0.5, 0.5], [1, 1], [0, 1], [0, 1, 0]);
+  }
 
   return finishAccumToGeometry(acc, hexColor);
 }
@@ -1825,14 +2018,14 @@ export function makeSdfOrganicMesh(
   evalSdf: (x: number, y: number, z: number) => number,
   boundsMin: [number, number, number],
   boundsMax: [number, number, number],
-  resolution = 16,
+  resolution = 22,
   hexColor = '#667788',
   options: {
     flatShaded?: boolean;
     shadeJitter?: number;
   } = {}
 ): THREE.BufferGeometry {
-  const n = Math.max(6, Math.min(36, Math.round(resolution)));
+  const n = Math.max(6, Math.min(48, Math.round(resolution)));
   const dx = (boundsMax[0] - boundsMin[0]) / n;
   const dy = (boundsMax[1] - boundsMin[1]) / n;
   const dz = (boundsMax[2] - boundsMin[2]) / n;
@@ -2101,6 +2294,10 @@ export interface SplineLoftOptions {
   flatShaded?: boolean;
   shadeJitter?: number;
   twistRad?: number;
+  /** Optional dorsal spine keel amplitude (applied near top angle sinT > 0.6). */
+  ridgeAmplitude?: number;
+  /** Optional ventral belly flattening factor (0..0.45). */
+  bellyFlatten?: number;
 }
 
 /**
@@ -2110,8 +2307,8 @@ export interface SplineLoftOptions {
 export function makeSplineLoftGeometry(
   points: ReadonlyArray<THREE.Vector3 | readonly [number, number, number]>,
   radii: ReadonlyArray<number | readonly [number, number]>,
-  radialSegs = 8,
-  tubularSegs = 16,
+  radialSegs = 14,
+  tubularSegs = 24,
   options: SplineLoftOptions = {}
 ): THREE.BufferGeometry {
   const colorHex = typeof options.colorHex === 'number'
@@ -2122,6 +2319,8 @@ export function makeSplineLoftGeometry(
   const flatShaded = options.flatShaded ?? false;
   const shadeJitter = options.shadeJitter ?? 0;
   const twistRad = options.twistRad ?? 0;
+  const ridgeAmp = options.ridgeAmplitude ?? 0;
+  const bellyFlatten = Math.max(0, Math.min(0.45, options.bellyFlatten ?? 0));
 
   if (points.length < 2) {
     return makeBeveledBox(0.1, 0.1, 0.1, 0.02, colorHex);
@@ -2211,15 +2410,25 @@ export function makeSplineLoftGeometry(
       const cosT = Math.cos(theta);
       const sinT = Math.sin(theta);
 
-      const px = c.x + (n.x * cosT * rx + b.x * sinT * ry);
-      const py = c.y + (n.y * cosT * rx + b.y * sinT * ry);
-      const pz = c.z + (n.z * cosT * rx + b.z * sinT * ry);
+      let effRx = rx;
+      let effRy = ry;
+      if (ridgeAmp > 0 && sinT > 0.5) {
+        const k = (sinT - 0.5) * 2;
+        effRy += ridgeAmp * k * k;
+      }
+      if (bellyFlatten > 0 && sinT < -0.35) {
+        effRy *= 1 - bellyFlatten * ((-sinT - 0.35) / 0.65);
+      }
+
+      const px = c.x + (n.x * cosT * effRx + b.x * sinT * effRy);
+      const py = c.y + (n.y * cosT * effRx + b.y * sinT * effRy);
+      const pz = c.z + (n.z * cosT * effRx + b.z * sinT * effRy);
       verts.push([px, py, pz]);
 
       // Elliptical normal: (cosT / rx, sinT / ry)
-      const nx = n.x * (cosT / Math.max(1e-4, rx)) + b.x * (sinT / Math.max(1e-4, ry));
-      const ny = n.y * (cosT / Math.max(1e-4, rx)) + b.y * (sinT / Math.max(1e-4, ry));
-      const nz = n.z * (cosT / Math.max(1e-4, rx)) + b.z * (sinT / Math.max(1e-4, ry));
+      const nx = n.x * (cosT / Math.max(1e-4, effRx)) + b.x * (sinT / Math.max(1e-4, effRy));
+      const ny = n.y * (cosT / Math.max(1e-4, effRx)) + b.y * (sinT / Math.max(1e-4, effRy));
+      const nz = n.z * (cosT / Math.max(1e-4, effRx)) + b.z * (sinT / Math.max(1e-4, effRy));
       const len = Math.hypot(nx, ny, nz) || 1;
       vNorms.push([nx / len, ny / len, nz / len]);
     }
@@ -2277,4 +2486,638 @@ export function makeSplineLoftGeometry(
   }
 
   return finishAccumToGeometry(acc, colorHex, shadeJitter);
+}
+
+// ---------------------------------------------------------------------------
+// 6. Loop Subdivision & Sculpted Anatomical Limb / Torso / Armor Builders
+// ---------------------------------------------------------------------------
+
+export interface LoopSubdivideOptions {
+  /** Recompute area-weighted smooth normals across welded vertices (default: true). */
+  smoothNormals?: boolean;
+  /** Optional vertex-color fallback hex if input geometry has no color attribute. */
+  defaultHex?: string;
+}
+
+/**
+ * Watertight Loop Subdivision for triangle BufferGeometries.
+ * Welds spatial positions for smooth C2 surface fairing while interpolating UVs and
+ * vertex colors strictly per-triangle so UV seams and material borders never smear.
+ */
+export function subdivideGeometryLoop(
+  geo: THREE.BufferGeometry,
+  iterations = 1,
+  options: LoopSubdivideOptions = {}
+): THREE.BufferGeometry {
+  const iters = Math.max(0, Math.min(3, Math.round(iterations)));
+  const smoothNormals = options.smoothNormals ?? true;
+  let current = geo.index ? geo.toNonIndexed() : geo.clone();
+  if (!current.getAttribute('normal')) {
+    current.computeVertexNormals();
+  }
+
+  for (let step = 0; step < iters; step++) {
+    const pos = current.getAttribute('position') as THREE.BufferAttribute | undefined;
+    if (!pos || pos.count < 3) break;
+
+    const uvAttr = current.getAttribute('uv') as THREE.BufferAttribute | undefined;
+    const colAttr = current.getAttribute('color') as THREE.BufferAttribute | undefined;
+    const nrmAttr = current.getAttribute('normal') as THREE.BufferAttribute | undefined;
+    const triCount = Math.floor(pos.count / 3);
+    if (triCount === 0 || triCount > 25000) break;
+
+    // 1. Weld spatial vertex coordinates
+    const spatialKeyToIdx = new Map<string, number>();
+    const spatialPos: [number, number, number][] = [];
+    const cornerSpatial = new Int32Array(triCount * 3);
+
+    for (let c = 0; c < triCount * 3; c++) {
+      const x = pos.getX(c);
+      const y = pos.getY(c);
+      const z = pos.getZ(c);
+      const key = `${Math.round(x * 1e5)},${Math.round(y * 1e5)},${Math.round(z * 1e5)}`;
+      let sIdx = spatialKeyToIdx.get(key);
+      if (sIdx === undefined) {
+        sIdx = spatialPos.length;
+        spatialKeyToIdx.set(key, sIdx);
+        spatialPos.push([x, y, z]);
+      }
+      cornerSpatial[c] = sIdx;
+    }
+
+    // 2. Build edge adjacency & vertex neighbors
+    interface EdgeInfo {
+      a: number;
+      b: number;
+      opposites: number[];
+    }
+    const edgeMap = new Map<string, EdgeInfo>();
+    const neighbors: Set<number>[] = Array.from({ length: spatialPos.length }, () => new Set<number>());
+
+    const edgeKey = (u: number, v: number) => (u < v ? `${u}_${v}` : `${v}_${u}`);
+    const registerEdge = (u: number, v: number, opp: number) => {
+      if (u === v) return;
+      neighbors[u].add(v);
+      neighbors[v].add(u);
+      const k = edgeKey(u, v);
+      let info = edgeMap.get(k);
+      if (!info) {
+        info = { a: Math.min(u, v), b: Math.max(u, v), opposites: [] };
+        edgeMap.set(k, info);
+      }
+      info.opposites.push(opp);
+    };
+
+    for (let t = 0; t < triCount; t++) {
+      const s0 = cornerSpatial[t * 3 + 0];
+      const s1 = cornerSpatial[t * 3 + 1];
+      const s2 = cornerSpatial[t * 3 + 2];
+      registerEdge(s0, s1, s2);
+      registerEdge(s1, s2, s0);
+      registerEdge(s2, s0, s1);
+    }
+
+    // 3. Compute new Loop vertex positions
+    const newSpatialPos: [number, number, number][] = new Array(spatialPos.length);
+    for (let v = 0; v < spatialPos.length; v++) {
+      const nbs = Array.from(neighbors[v]);
+      const k = nbs.length;
+      if (k === 0) {
+        newSpatialPos[v] = spatialPos[v];
+        continue;
+      }
+      const boundaryNbs: number[] = [];
+      for (const nb of nbs) {
+        const info = edgeMap.get(edgeKey(v, nb));
+        if (info && info.opposites.length === 1) {
+          boundaryNbs.push(nb);
+        }
+      }
+      const p = spatialPos[v];
+      if (boundaryNbs.length >= 2) {
+        const b0 = spatialPos[boundaryNbs[0]];
+        const b1 = spatialPos[boundaryNbs[1]];
+        newSpatialPos[v] = [
+          0.75 * p[0] + 0.125 * (b0[0] + b1[0]),
+          0.75 * p[1] + 0.125 * (b0[1] + b1[1]),
+          0.75 * p[2] + 0.125 * (b0[2] + b1[2]),
+        ];
+      } else {
+        const beta = k === 3 ? 3 / 16 : 3 / (8 * k);
+        const selfW = 1 - k * beta;
+        let sx = 0,
+          sy = 0,
+          sz = 0;
+        for (const nb of nbs) {
+          sx += spatialPos[nb][0];
+          sy += spatialPos[nb][1];
+          sz += spatialPos[nb][2];
+        }
+        newSpatialPos[v] = [selfW * p[0] + beta * sx, selfW * p[1] + beta * sy, selfW * p[2] + beta * sz];
+      }
+    }
+
+    // 4. Compute new Loop edge points
+    const edgeMidPos = new Map<string, [number, number, number]>();
+    for (const [k, info] of edgeMap.entries()) {
+      const pa = spatialPos[info.a];
+      const pb = spatialPos[info.b];
+      if (info.opposites.length === 2) {
+        const pc = spatialPos[info.opposites[0]];
+        const pd = spatialPos[info.opposites[1]];
+        edgeMidPos.set(k, [
+          0.375 * (pa[0] + pb[0]) + 0.125 * (pc[0] + pd[0]),
+          0.375 * (pa[1] + pb[1]) + 0.125 * (pc[1] + pd[1]),
+          0.375 * (pa[2] + pb[2]) + 0.125 * (pc[2] + pd[2]),
+        ]);
+      } else {
+        edgeMidPos.set(k, [0.5 * (pa[0] + pb[0]), 0.5 * (pa[1] + pb[1]), 0.5 * (pa[2] + pb[2])]);
+      }
+    }
+
+    // 5. Emit 4 subdivided triangles per input triangle
+    const outCount = triCount * 12;
+    const outPos = new Float32Array(outCount * 3);
+    const outNrm = new Float32Array(outCount * 3);
+    const outUv = new Float32Array(outCount * 2);
+    const hasCol = Boolean(colAttr || options.defaultHex);
+    const outCol = hasCol ? new Float32Array(outCount * 3) : null;
+    const defCol = options.defaultHex ? new THREE.Color(options.defaultHex) : new THREE.Color('#ffffff');
+
+    const getUv = (c: number): [number, number] => (uvAttr ? [uvAttr.getX(c), uvAttr.getY(c)] : [0, 0]);
+    const getCol = (c: number): [number, number, number] =>
+      colAttr ? [colAttr.getX(c), colAttr.getY(c), colAttr.getZ(c)] : [defCol.r, defCol.g, defCol.b];
+    const getNrm = (c: number): [number, number, number] =>
+      nrmAttr ? [nrmAttr.getX(c), nrmAttr.getY(c), nrmAttr.getZ(c)] : [0, 1, 0];
+
+    let ptr = 0;
+    const pushVert = (
+      p: [number, number, number],
+      n: [number, number, number],
+      uv: [number, number],
+      col: [number, number, number]
+    ) => {
+      outPos[ptr * 3 + 0] = p[0];
+      outPos[ptr * 3 + 1] = p[1];
+      outPos[ptr * 3 + 2] = p[2];
+      const nl = Math.hypot(n[0], n[1], n[2]) || 1;
+      outNrm[ptr * 3 + 0] = n[0] / nl;
+      outNrm[ptr * 3 + 1] = n[1] / nl;
+      outNrm[ptr * 3 + 2] = n[2] / nl;
+      outUv[ptr * 2 + 0] = uv[0];
+      outUv[ptr * 2 + 1] = uv[1];
+      if (outCol) {
+        outCol[ptr * 3 + 0] = col[0];
+        outCol[ptr * 3 + 1] = col[1];
+        outCol[ptr * 3 + 2] = col[2];
+      }
+      ptr++;
+    };
+
+    const avg2 = <T extends number[]>(a: T, b: T): T =>
+      a.map((v, idx) => 0.5 * (v + b[idx])) as T;
+
+    for (let t = 0; t < triCount; t++) {
+      const c0 = t * 3 + 0;
+      const c1 = t * 3 + 1;
+      const c2 = t * 3 + 2;
+      const s0 = cornerSpatial[c0];
+      const s1 = cornerSpatial[c1];
+      const s2 = cornerSpatial[c2];
+
+      const p0 = newSpatialPos[s0];
+      const p1 = newSpatialPos[s1];
+      const p2 = newSpatialPos[s2];
+      const pm01 = edgeMidPos.get(edgeKey(s0, s1)) ?? avg2(p0, p1);
+      const pm12 = edgeMidPos.get(edgeKey(s1, s2)) ?? avg2(p1, p2);
+      const pm20 = edgeMidPos.get(edgeKey(s2, s0)) ?? avg2(p2, p0);
+
+      const u0 = getUv(c0), u1 = getUv(c1), u2 = getUv(c2);
+      const um01 = avg2(u0, u1), um12 = avg2(u1, u2), um20 = avg2(u2, u0);
+
+      const k0 = getCol(c0), k1 = getCol(c1), k2 = getCol(c2);
+      const km01 = avg2(k0, k1), km12 = avg2(k1, k2), km20 = avg2(k2, k0);
+
+      const n0 = getNrm(c0), n1 = getNrm(c1), n2 = getNrm(c2);
+      const nm01 = avg2(n0, n1), nm12 = avg2(n1, n2), nm20 = avg2(n2, n0);
+
+      // Tri A: (0, m01, m20)
+      pushVert(p0, n0, u0, k0);
+      pushVert(pm01, nm01, um01, km01);
+      pushVert(pm20, nm20, um20, km20);
+      // Tri B: (m01, 1, m12)
+      pushVert(pm01, nm01, um01, km01);
+      pushVert(p1, n1, u1, k1);
+      pushVert(pm12, nm12, um12, km12);
+      // Tri C: (m20, m12, 2)
+      pushVert(pm20, nm20, um20, km20);
+      pushVert(pm12, nm12, um12, km12);
+      pushVert(p2, n2, u2, k2);
+      // Tri D: (m01, m12, m20)
+      pushVert(pm01, nm01, um01, km01);
+      pushVert(pm12, nm12, um12, km12);
+      pushVert(pm20, nm20, um20, km20);
+    }
+
+    if (smoothNormals) {
+      const accumN = new Map<string, [number, number, number]>();
+      for (let t = 0; t < triCount * 4; t++) {
+        const i0 = t * 3, i1 = t * 3 + 1, i2 = t * 3 + 2;
+        const ax = outPos[i1 * 3] - outPos[i0 * 3];
+        const ay = outPos[i1 * 3 + 1] - outPos[i0 * 3 + 1];
+        const az = outPos[i1 * 3 + 2] - outPos[i0 * 3 + 2];
+        const bx = outPos[i2 * 3] - outPos[i0 * 3];
+        const by = outPos[i2 * 3 + 1] - outPos[i0 * 3 + 1];
+        const bz = outPos[i2 * 3 + 2] - outPos[i0 * 3 + 2];
+        const fnx = ay * bz - az * by;
+        const fny = az * bx - ax * bz;
+        const fnz = ax * by - ay * bx;
+        for (const vi of [i0, i1, i2]) {
+          const key = `${Math.round(outPos[vi * 3] * 1e5)},${Math.round(outPos[vi * 3 + 1] * 1e5)},${Math.round(outPos[vi * 3 + 2] * 1e5)}`;
+          let accN = accumN.get(key);
+          if (!accN) {
+            accN = [0, 0, 0];
+            accumN.set(key, accN);
+          }
+          accN[0] += fnx;
+          accN[1] += fny;
+          accN[2] += fnz;
+        }
+      }
+      for (let i = 0; i < outCount; i++) {
+        const key = `${Math.round(outPos[i * 3] * 1e5)},${Math.round(outPos[i * 3 + 1] * 1e5)},${Math.round(outPos[i * 3 + 2] * 1e5)}`;
+        const accN = accumN.get(key);
+        if (accN) {
+          const l = Math.hypot(accN[0], accN[1], accN[2]);
+          if (l > 1e-8) {
+            outNrm[i * 3] = accN[0] / l;
+            outNrm[i * 3 + 1] = accN[1] / l;
+            outNrm[i * 3 + 2] = accN[2] / l;
+          }
+        }
+      }
+    }
+
+    const nextGeo = new THREE.BufferGeometry();
+    nextGeo.setAttribute('position', new THREE.Float32BufferAttribute(outPos, 3));
+    nextGeo.setAttribute('normal', new THREE.Float32BufferAttribute(outNrm, 3));
+    nextGeo.setAttribute('uv', new THREE.Float32BufferAttribute(outUv, 2));
+    if (outCol) {
+      nextGeo.setAttribute('color', new THREE.Float32BufferAttribute(outCol, 3));
+    }
+    nextGeo.userData = { ...current.userData };
+    current.dispose();
+    current = nextGeo;
+  }
+
+  current.computeBoundingBox();
+  current.computeBoundingSphere();
+  return current;
+}
+
+export type SculptedLimbProfile =
+  | 'bicep'
+  | 'forearm'
+  | 'thigh'
+  | 'calf'
+  | 'armor_limb'
+  | 'taper'
+  | 'cylinder';
+
+export interface SculptedLimbOptions {
+  profile?: SculptedLimbProfile;
+  radialSegs?: number;
+  heightSegs?: number;
+  hexColor?: string;
+  shadeJitter?: number;
+  /** Optional subtle muscle/armor rib intensity (default 1.0). */
+  sculptStrength?: number;
+}
+
+/**
+ * Generates an organic sculpted limb or contoured armor segment along bone local `+Y` (`y = 0 .. length`),
+ * replacing rigid beveled limb boxes with anatomical muscle curves & smooth vertex normals.
+ */
+export function makeSculptedLimbGeometry(
+  length: number,
+  radiusBottomX: number,
+  radiusBottomZ: number,
+  radiusTopX: number,
+  radiusTopZ: number,
+  options: SculptedLimbOptions = {}
+): THREE.BufferGeometry {
+  const profile = options.profile ?? 'taper';
+  const rSegs = Math.max(8, Math.round(options.radialSegs ?? 14));
+  const hSegs = Math.max(4, Math.round(options.heightSegs ?? 7));
+  const hexColor = options.hexColor ?? '#ffffff';
+  const strength = options.sculptStrength ?? 1.0;
+  const acc = createAccum();
+
+  const evalRing = (iy: number): { pos: [number, number, number][]; nrm: [number, number, number][] } => {
+    const t = iy / hSegs; // 0 = bottom joint, 1 = top joint
+    const y = t * length;
+    const baseRx = radiusBottomX * (1 - t) + radiusTopX * t;
+    const baseRz = radiusBottomZ * (1 - t) + radiusTopZ * t;
+
+    // Anatomical axial profile swell
+    let axialScaleX = 1.0;
+    let axialScaleZ = 1.0;
+    let zShift = 0;
+    if (profile === 'thigh') {
+      // Quadriceps anterior swell & hamstring curve (y=0 hip -> y=len knee)
+      const quad = Math.sin(t * Math.PI) * 0.14 * strength;
+      axialScaleX += quad * 0.65;
+      axialScaleZ += quad;
+      zShift = Math.sin(t * Math.PI) * baseRz * 0.08 * strength;
+    } else if (profile === 'calf') {
+      // Gastrocnemius bulge around t = 0.34 (below knee y=0), slim ankle toward t -> 1
+      const gastro = Math.exp(-Math.pow((t - 0.34) / 0.24, 2)) * 0.24 * strength;
+      axialScaleX += gastro * 0.72;
+      axialScaleZ += gastro;
+      zShift = -Math.exp(-Math.pow((t - 0.34) / 0.26, 2)) * baseRz * 0.16 * strength;
+    } else if (profile === 'bicep') {
+      // Deltoid cap near t=0.18 (shoulder y=0) + bicep belly at t=0.52
+      const delt = Math.exp(-Math.pow((t - 0.16) / 0.2, 2)) * 0.18 * strength;
+      const bic = Math.exp(-Math.pow((t - 0.52) / 0.24, 2)) * 0.12 * strength;
+      axialScaleX += delt + bic * 0.5;
+      axialScaleZ += delt * 0.8 + bic;
+    } else if (profile === 'forearm') {
+      // Brachioradialis swell near t=0.32 (below elbow y=0), wrist taper toward t -> 1
+      const brach = Math.exp(-Math.pow((t - 0.32) / 0.25, 2)) * 0.16 * strength;
+      axialScaleX += brach;
+      axialScaleZ += brach * 0.85;
+    } else if (profile === 'armor_limb') {
+      // Flared cuff rims near t=0.1 and t=0.9 + central plate arch
+      const cuffLow = Math.exp(-Math.pow((t - 0.09) / 0.08, 2)) * 0.11 * strength;
+      const cuffHi = Math.exp(-Math.pow((t - 0.9) / 0.08, 2)) * 0.12 * strength;
+      const belly = Math.sin(t * Math.PI) * 0.08 * strength;
+      axialScaleX += cuffLow + cuffHi + belly;
+      axialScaleZ += cuffLow + cuffHi + belly;
+    } else if (profile === 'taper') {
+      const belly = Math.sin(t * Math.PI) * 0.08 * strength;
+      axialScaleX += belly;
+      axialScaleZ += belly;
+    }
+
+    // Gentle end-bevel tuck so joint seams look rounded instead of razor-sharp cylinders
+    const endTuck =
+      iy === 0 || iy === hSegs ? 0.86 : iy === 1 || iy === hSegs - 1 ? 0.98 : 1.0;
+
+    const ringPos: [number, number, number][] = [];
+    const ringNrm: [number, number, number][] = [];
+    for (let s = 0; s <= rSegs; s++) {
+      const theta = (s / rSegs) * Math.PI * 2;
+      const cosT = Math.cos(theta);
+      const sinT = Math.sin(theta);
+
+      // Subtle shin/armor front ridge along +Z (sinT > 0.5)
+      let ridgeMod = 1.0;
+      if ((profile === 'armor_limb' || profile === 'calf') && sinT > 0.45) {
+        ridgeMod += 0.07 * (sinT - 0.45) * strength;
+      }
+
+      const rx = Math.max(1e-4, baseRx * axialScaleX * endTuck);
+      const rz = Math.max(1e-4, baseRz * axialScaleZ * endTuck * ridgeMod);
+      const px = cosT * rx;
+      const pz = sinT * rz + zShift;
+      ringPos.push([px, y, pz]);
+
+      const nx = cosT / rx;
+      const nz = sinT / rz;
+      const ny = iy === 0 ? -0.25 : iy === hSegs ? 0.25 : 0;
+      const len = Math.hypot(nx, ny, nz) || 1;
+      ringNrm.push([nx / len, ny / len, nz / len]);
+    }
+    return { pos: ringPos, nrm: ringNrm };
+  };
+
+  const rings = Array.from({ length: hSegs + 1 }, (_, iy) => evalRing(iy));
+  for (let iy = 0; iy < hSegs; iy++) {
+    const v0 = iy / hSegs;
+    const v1 = (iy + 1) / hSegs;
+    for (let s = 0; s < rSegs; s++) {
+      const u0 = s / rSegs;
+      const u1 = (s + 1) / rSegs;
+      const p00 = rings[iy].pos[s];
+      const p10 = rings[iy].pos[s + 1];
+      const p11 = rings[iy + 1].pos[s + 1];
+      const p01 = rings[iy + 1].pos[s];
+      const n00 = rings[iy].nrm[s];
+      const n10 = rings[iy].nrm[s + 1];
+      const n11 = rings[iy + 1].nrm[s + 1];
+      const n01 = rings[iy + 1].nrm[s];
+      const hint: [number, number, number] = [
+        (n00[0] + n10[0] + n11[0] + n01[0]) * 0.25,
+        0,
+        (n00[2] + n10[2] + n11[2] + n01[2]) * 0.25,
+      ];
+      pushQuadWithHint(
+        acc,
+        p00,
+        p10,
+        p11,
+        p01,
+        [u0, v0],
+        [u1, v0],
+        [u1, v1],
+        [u0, v1],
+        hint,
+        [n00, n10, n11, n01]
+      );
+    }
+  }
+
+  // Watertight domed bottom & top caps
+  const botCenter: [number, number, number] = [0, 0, 0];
+  const topCenter: [number, number, number] = [0, length, 0];
+  for (let s = 0; s < rSegs; s++) {
+    pushTriWithHint(
+      acc,
+      botCenter,
+      rings[0].pos[s],
+      rings[0].pos[s + 1],
+      [0.5, 0.5],
+      [0.5 + 0.5 * Math.cos((s / rSegs) * Math.PI * 2), 0.5 + 0.5 * Math.sin((s / rSegs) * Math.PI * 2)],
+      [0.5 + 0.5 * Math.cos(((s + 1) / rSegs) * Math.PI * 2), 0.5 + 0.5 * Math.sin(((s + 1) / rSegs) * Math.PI * 2)],
+      [0, -1, 0]
+    );
+    pushTriWithHint(
+      acc,
+      topCenter,
+      rings[hSegs].pos[s + 1],
+      rings[hSegs].pos[s],
+      [0.5, 0.5],
+      [0.5 + 0.5 * Math.cos(((s + 1) / rSegs) * Math.PI * 2), 0.5 + 0.5 * Math.sin(((s + 1) / rSegs) * Math.PI * 2)],
+      [0.5 + 0.5 * Math.cos((s / rSegs) * Math.PI * 2), 0.5 + 0.5 * Math.sin((s / rSegs) * Math.PI * 2)],
+      [0, 1, 0]
+    );
+  }
+
+  return finishAccumToGeometry(acc, hexColor, options.shadeJitter ?? 0);
+}
+
+export interface AnatomicalTorsoOptions {
+  isArmored?: boolean;
+  radialSegs?: number;
+  heightSegs?: number;
+  hexColor?: string;
+  shadeJitter?: number;
+  centered?: boolean;
+  /** Pectoral/ribcage bulge amplitude (default 1.0). */
+  musculature?: number;
+}
+
+/**
+ * Generates an anatomical sculpted torso / breastplate segment spanning `y = 0 .. length`
+ * (or centered around `y = 0` when `centered: true`), featuring pectoral swell, sternal keel/groove,
+ * dorsal spine contour, and waist-to-shoulder V-taper.
+ */
+export function makeAnatomicalTorsoGeometry(
+  length: number,
+  bottomRX: number,
+  bottomRZ: number,
+  topRX: number,
+  topRZ: number,
+  options: AnatomicalTorsoOptions = {}
+): THREE.BufferGeometry {
+  const isArmored = options.isArmored ?? false;
+  const rSegs = Math.max(10, Math.round(options.radialSegs ?? 18));
+  const hSegs = Math.max(4, Math.round(options.heightSegs ?? 8));
+  const hexColor = options.hexColor ?? '#ffffff';
+  const musc = options.musculature ?? 1.0;
+  const yStart = options.centered ? -length * 0.5 : 0;
+  const acc = createAccum();
+
+  const evalRing = (iy: number): { pos: [number, number, number][]; nrm: [number, number, number][] } => {
+    const t = iy / hSegs;
+    const y = yStart + t * length;
+    const baseRx = bottomRX * (1 - t) + topRX * t;
+    const baseRz = bottomRZ * (1 - t) + topRZ * t;
+
+    // Ribcage flare at upper chest (t ~ 0.65) and subtle waist taper near t ~ 0.2
+    const ribFlare = Math.sin(t * Math.PI) * 0.08 * musc;
+    const endBevel = iy === 0 || iy === hSegs ? 0.9 : 1.0;
+
+    const ringPos: [number, number, number][] = [];
+    const ringNrm: [number, number, number][] = [];
+
+    for (let s = 0; s <= rSegs; s++) {
+      const theta = (s / rSegs) * Math.PI * 2;
+      const cosT = Math.cos(theta);
+      const sinT = Math.sin(theta);
+
+      // Squared-ellipse superellipse blend gives broad heroic shoulders & flatter front/back chest
+      const absC = Math.abs(cosT);
+      const absS = Math.abs(sinT);
+      const sqBlend = 0.88;
+      const ex = Math.sign(cosT) * Math.pow(absC, sqBlend);
+      const ez = Math.sign(sinT) * Math.pow(absS, sqBlend);
+
+      let rx = Math.max(1e-4, baseRx * (1 + ribFlare) * endBevel);
+      let rz = Math.max(1e-4, baseRz * (1 + ribFlare * 0.8) * endBevel);
+      let zOffset = 0;
+
+      // Front (+Z, sinT > 0): Pectoralis / Sternal keel (armored) or sternal furrow (organic)
+      if (sinT > 0.1) {
+        const pecBell = Math.exp(-Math.pow((t - 0.64) / 0.26, 2));
+        const pecX = Math.exp(-Math.pow((absC - 0.45) / 0.34, 2));
+        zOffset += pecBell * pecX * baseRz * 0.16 * musc;
+        if (isArmored && absC < 0.28) {
+          // Heroic breastplate medial keel
+          zOffset += (1 - absC / 0.28) * baseRz * 0.12 * Math.sin(t * Math.PI) * musc;
+        } else if (!isArmored && absC < 0.2) {
+          // Subtle anatomical sternum groove
+          zOffset -= (1 - absC / 0.2) * baseRz * 0.045 * pecBell * musc;
+        }
+      }
+      // Back (-Z, sinT < -0.1): Scapula / trapezius swell + spinal furrow
+      if (sinT < -0.1) {
+        const scapX = Math.exp(-Math.pow((absC - 0.42) / 0.3, 2));
+        zOffset -= scapX * baseRz * 0.08 * Math.sin(t * Math.PI) * musc;
+        if (absC < 0.18) {
+          zOffset += (1 - absC / 0.18) * baseRz * 0.06 * musc; // inward spinal valley
+        }
+      }
+      if (isArmored && t > 0.86) {
+        // Subtle raised collar / gorget flange
+        rx *= 1.03;
+        rz *= 1.03;
+      }
+
+      const px = ex * rx;
+      const pz = ez * rz + zOffset;
+      ringPos.push([px, y, pz]);
+
+      const nx = cosT / rx;
+      const nz = sinT / rz;
+      const ny = iy === 0 ? -0.2 : iy === hSegs ? 0.2 : 0;
+      const len = Math.hypot(nx, ny, nz) || 1;
+      ringNrm.push([nx / len, ny / len, nz / len]);
+    }
+    return { pos: ringPos, nrm: ringNrm };
+  };
+
+  const rings = Array.from({ length: hSegs + 1 }, (_, iy) => evalRing(iy));
+  for (let iy = 0; iy < hSegs; iy++) {
+    const v0 = iy / hSegs;
+    const v1 = (iy + 1) / hSegs;
+    for (let s = 0; s < rSegs; s++) {
+      const u0 = s / rSegs;
+      const u1 = (s + 1) / rSegs;
+      const p00 = rings[iy].pos[s];
+      const p10 = rings[iy].pos[s + 1];
+      const p11 = rings[iy + 1].pos[s + 1];
+      const p01 = rings[iy + 1].pos[s];
+      const n00 = rings[iy].nrm[s];
+      const n10 = rings[iy].nrm[s + 1];
+      const n11 = rings[iy + 1].nrm[s + 1];
+      const n01 = rings[iy + 1].nrm[s];
+      const hint: [number, number, number] = [
+        (n00[0] + n10[0] + n11[0] + n01[0]) * 0.25,
+        0,
+        (n00[2] + n10[2] + n11[2] + n01[2]) * 0.25,
+      ];
+      pushQuadWithHint(
+        acc,
+        p00,
+        p10,
+        p11,
+        p01,
+        [u0, v0],
+        [u1, v0],
+        [u1, v1],
+        [u0, v1],
+        hint,
+        [n00, n10, n11, n01]
+      );
+    }
+  }
+
+  // Watertight bottom & top caps
+  const botCenter: [number, number, number] = [0, yStart, 0];
+  const topCenter: [number, number, number] = [0, yStart + length, 0];
+  for (let s = 0; s < rSegs; s++) {
+    pushTriWithHint(
+      acc,
+      botCenter,
+      rings[0].pos[s],
+      rings[0].pos[s + 1],
+      [0.5, 0.5],
+      [0.5 + 0.5 * Math.cos((s / rSegs) * Math.PI * 2), 0.5 + 0.5 * Math.sin((s / rSegs) * Math.PI * 2)],
+      [0.5 + 0.5 * Math.cos(((s + 1) / rSegs) * Math.PI * 2), 0.5 + 0.5 * Math.sin(((s + 1) / rSegs) * Math.PI * 2)],
+      [0, -1, 0]
+    );
+    pushTriWithHint(
+      acc,
+      topCenter,
+      rings[hSegs].pos[s + 1],
+      rings[hSegs].pos[s],
+      [0.5, 0.5],
+      [0.5 + 0.5 * Math.cos(((s + 1) / rSegs) * Math.PI * 2), 0.5 + 0.5 * Math.sin(((s + 1) / rSegs) * Math.PI * 2)],
+      [0.5 + 0.5 * Math.cos((s / rSegs) * Math.PI * 2), 0.5 + 0.5 * Math.sin((s / rSegs) * Math.PI * 2)],
+      [0, 1, 0]
+    );
+  }
+
+  return finishAccumToGeometry(acc, hexColor, options.shadeJitter ?? 0);
 }

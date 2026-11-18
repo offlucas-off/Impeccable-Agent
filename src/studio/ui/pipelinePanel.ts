@@ -22,13 +22,18 @@ export function mountPipelinePanel(
     <div class="ctrl-section">
       <div class="ctrl-section-head"><span>Render Path &amp; Camera Grid</span></div>
       <div class="ctrl-section-body">
+        <div class="field-row">
+          <label class="field-label" for="chk-hifi-mode">Hi-Fi Stylized 3D (Sem Pixelização)</label>
+          <input id="chk-hifi-mode" type="checkbox" checked />
+        </div>
         <div class="slider-row">
           <div class="slider-head">
             <span>Conversion Mode</span>
-            <span id="val-conv-mode" class="slider-val">Hybrid</span>
+            <span id="val-conv-mode" class="slider-val">Hi-Fi 3D</span>
           </div>
           <div class="segmented" style="width:100%;">
-            <button type="button" class="seg-btn is-active" data-filter="only_pixelized">Hybrid</button>
+            <button type="button" class="seg-btn is-active" data-filter="hifi_stylized">Hi-Fi 3D</button>
+            <button type="button" class="seg-btn" data-filter="only_pixelized">Hybrid</button>
             <button type="button" class="seg-btn" data-filter="full_scene">Full Scene</button>
             <button type="button" class="seg-btn" data-filter="cel_hard">Cel Hard</button>
             <button type="button" class="seg-btn" id="btn-mode-voxel" data-voxel="1">Voxel 3D</button>
@@ -36,36 +41,36 @@ export function mountPipelinePanel(
         </div>
         <div class="field-row">
           <label class="field-label" for="chk-pixel-expansion">Pixel Expansion (Attempt #3)</label>
-          <input id="chk-pixel-expansion" type="checkbox" checked />
+          <input id="chk-pixel-expansion" type="checkbox" />
         </div>
         <div class="field-row">
           <label class="field-label" for="sel-res-mode">Resolution Mode</label>
           <select id="sel-res-mode" class="select-ctrl select-ctrl-sm" style="width:170px;">
+            <option value="fixed_downscale_ratio" selected>Downscale Ratio</option>
             <option value="world_space_pixel_size">World Pixel Size</option>
-            <option value="fixed_downscale_ratio">Downscale Ratio</option>
             <option value="fixed_target_resolution">Target Height (px)</option>
           </select>
         </div>
-        <div class="slider-row" id="row-world-px">
+        <div class="slider-row" id="row-world-px" style="display:none;">
           <div class="slider-head">
             <span>World Pixel Size</span>
-            <span id="val-world-px" class="slider-val">0.024</span>
+            <span id="val-world-px" class="slider-val">0.012</span>
           </div>
-          <input id="rng-world-px" type="range" min="0.008" max="0.065" step="0.002" value="0.024" />
+          <input id="rng-world-px" type="range" min="0.008" max="0.065" step="0.002" value="0.012" />
         </div>
-        <div class="slider-row" id="row-downscale" style="display:none;">
+        <div class="slider-row" id="row-downscale">
           <div class="slider-head">
             <span>Downscale Factor</span>
-            <span id="val-downscale" class="slider-val">3×</span>
+            <span id="val-downscale" class="slider-val">1×</span>
           </div>
-          <input id="rng-downscale" type="range" min="1" max="8" step="1" value="3" />
+          <input id="rng-downscale" type="range" min="1" max="8" step="1" value="1" />
         </div>
         <div class="slider-row" id="row-target-h" style="display:none;">
           <div class="slider-head">
             <span>Target Vertical Res</span>
-            <span id="val-target-h" class="slider-val">220px</span>
+            <span id="val-target-h" class="slider-val">720px</span>
           </div>
-          <input id="rng-target-h" type="range" min="90" max="480" step="10" value="220" />
+          <input id="rng-target-h" type="range" min="90" max="1080" step="10" value="720" />
         </div>
         <div class="slider-row">
           <div class="slider-head">
@@ -83,7 +88,7 @@ export function mountPipelinePanel(
         </div>
         <div class="field-row">
           <label class="field-label" for="chk-snap-cam">Snap Camera to Grid</label>
-          <input id="chk-snap-cam" type="checkbox" checked />
+          <input id="chk-snap-cam" type="checkbox" />
         </div>
         <div class="field-row">
           <label class="field-label" for="chk-subpixel-cam">Subpixel Smooth Pan</label>
@@ -108,39 +113,39 @@ export function mountPipelinePanel(
         </div>
         <div class="field-row">
           <label class="field-label" for="chk-norm-edge">Normal Crease Edges</label>
-          <input id="chk-norm-edge" type="checkbox" checked />
+          <input id="chk-norm-edge" type="checkbox" />
         </div>
         <div class="slider-row">
           <div class="slider-head">
             <span>Normal Sensitivity</span>
-            <span id="val-norm-edge" class="slider-val">0.22</span>
+            <span id="val-norm-edge" class="slider-val">0.68</span>
           </div>
-          <input id="rng-norm-edge" type="range" min="0.04" max="0.85" step="0.02" value="0.22" />
+          <input id="rng-norm-edge" type="range" min="0.04" max="0.85" step="0.02" value="0.68" />
         </div>
         <div class="field-row">
           <label class="field-label" for="chk-depth-edge">Depth Step Edges (Staircases)</label>
-          <input id="chk-depth-edge" type="checkbox" checked />
+          <input id="chk-depth-edge" type="checkbox" />
         </div>
         <div class="slider-row">
           <div class="slider-head">
             <span>Edge Depth Threshold</span>
-            <span id="val-edge-depth" class="slider-val">0.012</span>
+            <span id="val-edge-depth" class="slider-val">0.015</span>
           </div>
-          <input id="rng-edge-depth" type="range" min="0.002" max="0.05" step="0.002" value="0.012" />
+          <input id="rng-edge-depth" type="range" min="0.002" max="0.05" step="0.002" value="0.015" />
         </div>
         <div class="slider-row">
           <div class="slider-head">
             <span>Edge Highlight Strength</span>
-            <span id="val-edge-hl-str" class="slider-val">0.90</span>
+            <span id="val-edge-hl-str" class="slider-val">0.00</span>
           </div>
-          <input id="rng-edge-hl-str" type="range" min="0" max="1.5" step="0.05" value="0.9" />
+          <input id="rng-edge-hl-str" type="range" min="0" max="1.5" step="0.05" value="0.0" />
         </div>
         <div class="slider-row">
           <div class="slider-head">
             <span>Bevel Edges Reactivity</span>
-            <span id="val-bevel-str" class="slider-val">1.00</span>
+            <span id="val-bevel-str" class="slider-val">0.00</span>
           </div>
-          <input id="rng-bevel-str" type="range" min="0" max="1.5" step="0.05" value="1.0" />
+          <input id="rng-bevel-str" type="range" min="0" max="1.5" step="0.05" value="0.0" />
         </div>
         <div class="field-row">
           <label class="field-label" for="sel-global-outline-steps">Scene Outline Width</label>
@@ -299,6 +304,7 @@ export function mountPipelinePanel(
     </div>
   `;
 
+  const chkHifiMode = container.querySelector<HTMLInputElement>('#chk-hifi-mode')!;
   const valConvMode = container.querySelector<HTMLElement>('#val-conv-mode')!;
   const filterBtns = container.querySelectorAll<HTMLButtonElement>('[data-filter]');
   const btnModeVoxel = container.querySelector<HTMLButtonElement>('#btn-mode-voxel')!;
@@ -306,12 +312,28 @@ export function mountPipelinePanel(
   const rowWorldPx = container.querySelector<HTMLElement>('#row-world-px')!;
   const rowDownscale = container.querySelector<HTMLElement>('#row-downscale')!;
   const rowTargetH = container.querySelector<HTMLElement>('#row-target-h')!;
+  const rngWorldPx = container.querySelector<HTMLInputElement>('#rng-world-px')!;
+  const valWorldPx = container.querySelector<HTMLElement>('#val-world-px')!;
+  const rngDownscale = container.querySelector<HTMLInputElement>('#rng-downscale')!;
+  const valDownscale = container.querySelector<HTMLElement>('#val-downscale')!;
+  const rngTargetH = container.querySelector<HTMLInputElement>('#rng-target-h')!;
+  const valTargetH = container.querySelector<HTMLElement>('#val-target-h')!;
+  const rngOrthoH = container.querySelector<HTMLInputElement>('#rng-ortho-h')!;
+  const valOrthoH = container.querySelector<HTMLElement>('#val-ortho-h')!;
+  const selUpscale = container.querySelector<HTMLSelectElement>('#sel-upscale')!;
+  const chkSnapCam = container.querySelector<HTMLInputElement>('#chk-snap-cam')!;
+  const chkSubpixelCam = container.querySelector<HTMLInputElement>('#chk-subpixel-cam')!;
 
   const chkExp = container.querySelector<HTMLInputElement>('#chk-pixel-expansion')!;
   const chkIdDepth = container.querySelector<HTMLInputElement>('#chk-id-depth')!;
+  const rngIdDepth = container.querySelector<HTMLInputElement>('#rng-id-depth')!;
+  const valIdDepth = container.querySelector<HTMLElement>('#val-id-depth')!;
   const chkNormEdge = container.querySelector<HTMLInputElement>('#chk-norm-edge')!;
   const rngNormEdge = container.querySelector<HTMLInputElement>('#rng-norm-edge')!;
   const valNormEdge = container.querySelector<HTMLElement>('#val-norm-edge')!;
+  const chkDepthEdge = container.querySelector<HTMLInputElement>('#chk-depth-edge')!;
+  const rngEdgeDepth = container.querySelector<HTMLInputElement>('#rng-edge-depth')!;
+  const valEdgeDepth = container.querySelector<HTMLElement>('#val-edge-depth')!;
   const rngEdgeHlStr = container.querySelector<HTMLInputElement>('#rng-edge-hl-str')!;
   const valEdgeHlStr = container.querySelector<HTMLElement>('#val-edge-hl-str')!;
   const rngBevelStr = container.querySelector<HTMLInputElement>('#rng-bevel-str')!;
@@ -319,6 +341,7 @@ export function mountPipelinePanel(
   const colLight = container.querySelector<HTMLInputElement>('#col-light')!;
   const colAmbient = container.querySelector<HTMLInputElement>('#col-ambient')!;
   const colBg = container.querySelector<HTMLInputElement>('#col-bg')!;
+  const chkBgTrans = container.querySelector<HTMLInputElement>('#chk-bg-trans')!;
   const rngLightInt = container.querySelector<HTMLInputElement>('#rng-light-int')!;
   const valLightInt = container.querySelector<HTMLElement>('#val-light-int')!;
   const selGlobalOutlineSteps = container.querySelector<HTMLSelectElement>('#sel-global-outline-steps')!;
@@ -350,14 +373,51 @@ export function mountPipelinePanel(
     });
   };
 
+  const applyLegacyOrHifiMode = (useHifi: boolean) => {
+    const preset = useHifi ? 'hifi_stylized' : 'nwl_snes';
+    ctx.pipeline.applyVisualStylePreset(preset, ctx.scene);
+    const selStyle = ctx.rootElement.querySelector<HTMLSelectElement>('#sel-style-preset');
+    if (selStyle) selStyle.value = preset;
+    ctx.dirLight.color.set(ctx.pipeline.pipelineConfig.lightColor);
+    ctx.dirLight.intensity = ctx.pipeline.pipelineConfig.lightIntensity;
+    ctx.hemiLight.color.set(ctx.pipeline.pipelineConfig.ambientSkyColor);
+    ctx.ambientLight.color.set(ctx.pipeline.pipelineConfig.ambientSkyColor);
+    if (ctx.isVoxelMode) {
+      ctx.actions.setVoxelMode(false);
+    } else {
+      ctx.actions.syncConversionModeUi();
+    }
+    syncFromPipeline();
+    ctx.actions.syncObjectInspector();
+  };
+
+  events.listen(chkHifiMode, 'change', () => {
+    applyLegacyOrHifiMode(chkHifiMode.checked);
+  });
+
   filterBtns.forEach((btn) => {
     events.listen(btn, 'click', () => {
-      ctx.pipeline.pipelineConfig.filterMode = btn.dataset.filter as PixelizationFilterMode;
+      const nextFilter = btn.dataset.filter as PixelizationFilterMode;
+      if (nextFilter === 'hifi_stylized') {
+        applyLegacyOrHifiMode(true);
+        return;
+      }
+      if (ctx.pipeline.pipelineConfig.filterMode === 'hifi_stylized') {
+        ctx.pipeline.applyVisualStylePreset(
+          nextFilter === 'cel_hard' ? 'hades_lab' : 'nwl_snes',
+          ctx.scene
+        );
+        const selStyle = ctx.rootElement.querySelector<HTMLSelectElement>('#sel-style-preset');
+        if (selStyle) selStyle.value = ctx.pipeline.activeStylePreset;
+      }
+      ctx.pipeline.pipelineConfig.filterMode = nextFilter;
       if (ctx.isVoxelMode) {
         ctx.actions.setVoxelMode(false);
       } else {
         ctx.actions.syncConversionModeUi();
       }
+      syncFromPipeline();
+      ctx.actions.syncObjectInspector();
     });
   });
 
@@ -400,7 +460,7 @@ export function mountPipelinePanel(
       if (obj instanceof THREE.Mesh) {
         const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
         for (const m of mats) {
-          if (m instanceof PixelizerMaterial && m.options.pixelated) {
+          if (m instanceof PixelizerMaterial && m.options.objectId !== 0) {
             m.updateOptions(patch);
           }
         }
@@ -614,24 +674,49 @@ export function mountPipelinePanel(
 
   const syncFromPipeline = () => {
     const cfg = ctx.pipeline.pipelineConfig;
+    const cam = ctx.pipeline.cameraConfig;
     const mode = cfg.filterMode;
+    chkHifiMode.checked = !ctx.isVoxelMode && mode === 'hifi_stylized';
     valConvMode.textContent = ctx.isVoxelMode
       ? 'Voxel 3D'
-      : mode === 'full_scene'
-        ? 'Full Scene'
-        : mode === 'cel_hard'
-          ? 'Cel Hard'
-          : 'Hybrid';
+      : mode === 'hifi_stylized'
+        ? 'Hi-Fi 3D'
+        : mode === 'full_scene'
+          ? 'Full Scene'
+          : mode === 'cel_hard'
+            ? 'Cel Hard'
+            : 'Hybrid';
     filterBtns.forEach((b) =>
       b.classList.toggle('is-active', !ctx.isVoxelMode && b.dataset.filter === mode)
     );
     btnModeVoxel.classList.toggle('is-active', ctx.isVoxelMode);
 
+    selResMode.value = cam.resolutionMode;
+    rowWorldPx.style.display = cam.resolutionMode === 'world_space_pixel_size' ? 'flex' : 'none';
+    rowDownscale.style.display = cam.resolutionMode === 'fixed_downscale_ratio' ? 'flex' : 'none';
+    rowTargetH.style.display = cam.resolutionMode === 'fixed_target_resolution' ? 'flex' : 'none';
+    rngWorldPx.value = String(cam.worldSpacePixelSize);
+    valWorldPx.textContent = cam.worldSpacePixelSize.toFixed(3);
+    rngDownscale.value = String(cam.downscaleRatio);
+    valDownscale.textContent = `${cam.downscaleRatio}×`;
+    rngTargetH.value = String(cam.targetHeight);
+    valTargetH.textContent = `${cam.targetHeight}px`;
+    rngOrthoH.value = String(cam.orthoHeight);
+    valOrthoH.textContent = cam.orthoHeight.toFixed(1);
+    selUpscale.value = cam.upscaleMode;
+    chkSnapCam.checked = cam.snapCameraPosition;
+    chkSubpixelCam.checked = cam.cameraSubpixelMotion;
+
     chkExp.checked = cfg.usePixelExpansion;
     chkIdDepth.checked = cfg.useDepthTestForIdOutlines;
+    rngIdDepth.value = String(cfg.idDepthThreshold);
+    valIdDepth.textContent = cfg.idDepthThreshold.toFixed(3);
     chkNormEdge.checked = cfg.useNormalsForEdgeDetection;
     rngNormEdge.value = String(cfg.normalEdgeThreshold);
     valNormEdge.textContent = cfg.normalEdgeThreshold.toFixed(2);
+    chkDepthEdge.checked = cfg.useDepthTestForEdges;
+    rngEdgeDepth.value = String(cfg.edgeDepthThreshold);
+    valEdgeDepth.textContent = cfg.edgeDepthThreshold.toFixed(3);
     rngEdgeHlStr.value = String(cfg.edgeHighlightStrength);
     valEdgeHlStr.textContent = cfg.edgeHighlightStrength.toFixed(2);
     rngBevelStr.value = String(cfg.edgeBevelStrength);
@@ -644,6 +729,7 @@ export function mountPipelinePanel(
     colLight.value = cfg.lightColor;
     colAmbient.value = cfg.ambientSkyColor;
     colBg.value = cfg.backgroundColor;
+    chkBgTrans.checked = cfg.backgroundTransparent;
     rngLightInt.value = String(cfg.lightIntensity);
     valLightInt.textContent = cfg.lightIntensity.toFixed(2);
 

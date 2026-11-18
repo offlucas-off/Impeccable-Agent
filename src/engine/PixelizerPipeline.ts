@@ -4,6 +4,7 @@ import { BUILTIN_LIGHTING_RAMPS, createLightingRampTexture } from './lightingRam
 import { BUILTIN_PALETTES, buildPaletteLutPair, type PaletteLutPair } from './palettes';
 import {
   PixelizerMaterial,
+  enforceHiFiTextureSampling,
   type PixelizerMaterialResources,
 } from './PixelizerMaterial';
 import {
@@ -32,9 +33,10 @@ import type {
   LightingRampConfig,
   PipelineConfig,
   SnapOptions,
+  VisualStylePresetId,
 } from './types';
 
-export type VisualStylePresetId = 'stylized_crisp' | 'nwl_snes' | 'hades_lab';
+export type { VisualStylePresetId };
 
 export interface PixelizerObjectAttachment {
   snap: SnapOptions;
@@ -109,7 +111,7 @@ export class PixelizerPipeline {
   public activePaletteId = 'resurrect64';
   public activeDitherId = 'bayer4x4';
   public activeRampId = 'crisp_stylized';
-  public activeStylePreset: VisualStylePresetId = 'stylized_crisp';
+  public activeStylePreset: VisualStylePresetId = 'hifi_stylized';
 
   private lastGrid: ComputedCameraGrid | null = null;
   private renderWidth = 1;
@@ -141,44 +143,44 @@ export class PixelizerPipeline {
     this.renderer.toneMapping = THREE.NoToneMapping;
 
     this.pipelineConfig = {
-      filterMode: 'only_pixelized',
+      filterMode: 'hifi_stylized',
       usePixelExpansion: false,
       useDepthTestForIdOutlines: true,
       idDepthThreshold: 0.008,
       useNormalsForEdgeDetection: false,
       normalEdgeThreshold: 0.68,
-      useDepthTestForEdges: true,
+      useDepthTestForEdges: false,
       edgeDepthThreshold: 0.015,
       edgeHighlightStrength: 0.0,
-      edgeBevelStrength: 0.08,
+      edgeBevelStrength: 0.0,
       lightDirection: [0.55, 0.85, 0.5],
       lightColor: '#fff8ee',
-      lightIntensity: 1.35,
-      ambientSkyColor: '#9fb2d8',
-      ambientIntensity: 0.65,
-      backgroundColor: '#cfd5e0',
+      lightIntensity: 1.45,
+      ambientSkyColor: '#b7c8e8',
+      ambientIntensity: 0.7,
+      backgroundColor: '#1a2030',
       backgroundTransparent: false,
       debugView: 'final',
       splitCompare: false,
       splitPosition: 0.5,
       bloomEnabled: false,
-      bloomThreshold: 0.38,
-      bloomIntensity: 0.45,
-      exposure: 1.0,
-      contrast: 1.0,
+      bloomThreshold: 0.42,
+      bloomIntensity: 0.4,
+      exposure: 1.04,
+      contrast: 1.02,
       vignetteStrength: 0.0,
       ...pipelineConfig,
     };
 
     this.cameraConfig = {
       orthographic: true,
-      orthoHeight: 6.5,
+      orthoHeight: 5.8,
       perspectiveFov: 38,
-      resolutionMode: 'world_space_pixel_size',
+      resolutionMode: 'fixed_downscale_ratio',
       worldSpacePixelSize: 0.012,
-      downscaleRatio: 3,
-      targetHeight: 240,
-      snapCameraPosition: true,
+      downscaleRatio: 1,
+      targetHeight: 720,
+      snapCameraPosition: false,
       cameraSubpixelMotion: false,
       upscaleMode: 'pixel_art_aa',
       ...cameraConfig,
@@ -416,14 +418,77 @@ export class PixelizerPipeline {
 
   /**
    * Applies an official visual preset across palette, dither, lighting ramp, outline thresholds,
-   * and updates all pixelated scene materials (including Wave 3 rim light, outline width, and dither domain).
+   * and updates scene materials (supporting Clean Hi-Fi 3D mode as well as legacy pixelated presets).
    */
   public applyVisualStylePreset(
     preset: VisualStylePresetId,
     scene?: THREE.Scene
   ): void {
     this.activeStylePreset = preset;
-    if (preset === 'stylized_crisp') {
+
+    const setSubjectSnapEnabled = (obj: THREE.Object3D, enabled: boolean) => {
+      const attachment = obj.userData.pixelizer as PixelizerObjectAttachment | undefined;
+      if (!attachment?.snap) return;
+      if (!enabled) {
+        if (!obj.userData._hifiSavedSnap) {
+          obj.userData._hifiSavedSnap = { ...attachment.snap };
+        }
+        attachment.snap.snapPosition = false;
+        attachment.snap.alignPixelGrid = false;
+        attachment.snap.angleSnapMode = 'none';
+      } else if (obj.userData._hifiSavedSnap) {
+        Object.assign(attachment.snap, obj.userData._hifiSavedSnap);
+      }
+    };
+
+    if (preset === 'hifi_stylized') {
+      this.activePaletteId = 'resurrect64';
+      this.activeDitherId = 'bayer4x4';
+      this.activeRampId = 'crisp_stylized';
+      this.pipelineConfig.filterMode = 'hifi_stylized';
+      this.pipelineConfig.usePixelExpansion = false;
+      this.pipelineConfig.useDepthTestForIdOutlines = true;
+      this.pipelineConfig.useNormalsForEdgeDetection = false;
+      this.pipelineConfig.normalEdgeThreshold = 0.68;
+      this.pipelineConfig.useDepthTestForEdges = false;
+      this.pipelineConfig.edgeHighlightStrength = 0.0;
+      this.pipelineConfig.edgeBevelStrength = 0.0;
+      this.pipelineConfig.backgroundColor = '#1a2030';
+      this.pipelineConfig.lightColor = '#fff8ee';
+      this.pipelineConfig.lightIntensity = 1.45;
+      this.pipelineConfig.ambientSkyColor = '#b7c8e8';
+      this.pipelineConfig.ambientIntensity = 0.7;
+      this.pipelineConfig.bloomEnabled = false;
+      this.pipelineConfig.exposure = 1.04;
+      this.pipelineConfig.contrast = 1.02;
+      this.cameraConfig.resolutionMode = 'fixed_downscale_ratio';
+      this.cameraConfig.downscaleRatio = 1;
+      this.cameraConfig.snapCameraPosition = false;
+      this.cameraConfig.cameraSubpixelMotion = false;
+      if (scene) {
+        scene.traverse((obj) => {
+          setSubjectSnapEnabled(obj, false);
+          if (obj instanceof THREE.Mesh) {
+            const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+            for (const m of mats) {
+              if (m instanceof PixelizerMaterial && m.options.objectId !== 0) {
+                m.updateOptions({
+                  pixelated: false,
+                  pixelSize: 1,
+                  outlineAlpha: 0.0,
+                  edgeHighlight: 0.0,
+                  edgeBevelWeight: 0.0,
+                  rimIntensity: 0.0,
+                  useColorGrading: false,
+                  useDitheredTransparency: false,
+                  ambientConstantWeight: 0.24,
+                });
+              }
+            }
+          }
+        });
+      }
+    } else if (preset === 'stylized_crisp') {
       this.activePaletteId = 'resurrect64';
       this.activeDitherId = 'bayer4x4';
       this.activeRampId = 'crisp_stylized';
@@ -432,6 +497,7 @@ export class PixelizerPipeline {
       this.pipelineConfig.useDepthTestForIdOutlines = true;
       this.pipelineConfig.useNormalsForEdgeDetection = false;
       this.pipelineConfig.normalEdgeThreshold = 0.68;
+      this.pipelineConfig.useDepthTestForEdges = true;
       this.pipelineConfig.edgeHighlightStrength = 0.0;
       this.pipelineConfig.edgeBevelStrength = 0.08;
       this.pipelineConfig.backgroundColor = '#cfd5e0';
@@ -440,21 +506,27 @@ export class PixelizerPipeline {
       this.pipelineConfig.ambientSkyColor = '#9fb2d8';
       this.pipelineConfig.ambientIntensity = 0.65;
       this.pipelineConfig.bloomEnabled = false;
+      this.cameraConfig.resolutionMode = 'fixed_downscale_ratio';
+      this.cameraConfig.downscaleRatio = 1;
+      this.cameraConfig.snapCameraPosition = false;
       if (scene) {
         scene.traverse((obj) => {
+          setSubjectSnapEnabled(obj, false);
           if (obj instanceof THREE.Mesh) {
             const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
             for (const m of mats) {
-              if (m instanceof PixelizerMaterial && m.options.pixelated) {
+              if (m instanceof PixelizerMaterial && m.options.objectId !== 0) {
                 m.updateOptions({
+                  pixelated: true,
                   pixelSize: 1,
                   outlineColor: '#222736',
-                  outlineAlpha: 0.22,
+                  outlineAlpha: 0.18,
                   outlineWidthSteps: 1,
                   edgeHighlight: 0.0,
                   edgeBevelWeight: 0.1,
                   rimIntensity: 0.0,
                   useColorGrading: false,
+                  useDitheredTransparency: false,
                   ditherSpace: 'object_uv',
                 });
               }
@@ -471,6 +543,7 @@ export class PixelizerPipeline {
       this.pipelineConfig.useDepthTestForIdOutlines = true;
       this.pipelineConfig.useNormalsForEdgeDetection = true;
       this.pipelineConfig.normalEdgeThreshold = 0.22;
+      this.pipelineConfig.useDepthTestForEdges = true;
       this.pipelineConfig.edgeHighlightStrength = 0.9;
       this.pipelineConfig.edgeBevelStrength = 1.0;
       this.pipelineConfig.backgroundColor = '#141722';
@@ -480,14 +553,20 @@ export class PixelizerPipeline {
       this.pipelineConfig.bloomEnabled = false;
       this.pipelineConfig.bloomThreshold = 0.38;
       this.pipelineConfig.bloomIntensity = 0.45;
+      this.cameraConfig.resolutionMode = 'world_space_pixel_size';
+      this.cameraConfig.worldSpacePixelSize = 0.024;
+      this.cameraConfig.downscaleRatio = 3;
+      this.cameraConfig.snapCameraPosition = true;
       if (scene) {
         scene.traverse((obj) => {
+          setSubjectSnapEnabled(obj, true);
           if (obj instanceof THREE.Mesh) {
             const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
             for (const m of mats) {
-              if (m instanceof PixelizerMaterial && m.options.pixelated) {
+              if (m instanceof PixelizerMaterial && m.options.objectId !== 0) {
                 const isBoss = Boolean(obj.userData?.nwlIsBoss);
                 m.updateOptions({
+                  pixelated: true,
                   pixelSize: obj.userData.nwlFixedPixelSize ?? 3,
                   outlineColor: '#14101c',
                   outlineAlpha: 1.0,
@@ -497,6 +576,7 @@ export class PixelizerPipeline {
                   rimIntensity: isBoss ? 0.35 : 0.0,
                   rimColor: '#fa6a0a',
                   useColorGrading: true,
+                  useDitheredTransparency: true,
                   ditherSpace: 'screen_macropixel',
                 });
               }
@@ -513,6 +593,7 @@ export class PixelizerPipeline {
       this.pipelineConfig.useDepthTestForIdOutlines = true;
       this.pipelineConfig.useNormalsForEdgeDetection = true;
       this.pipelineConfig.normalEdgeThreshold = 0.14;
+      this.pipelineConfig.useDepthTestForEdges = true;
       this.pipelineConfig.edgeHighlightStrength = 0.28;
       this.pipelineConfig.edgeBevelStrength = 0.45;
       this.pipelineConfig.backgroundColor = '#07060b';
@@ -522,14 +603,19 @@ export class PixelizerPipeline {
       this.pipelineConfig.bloomEnabled = true;
       this.pipelineConfig.bloomThreshold = 0.35;
       this.pipelineConfig.bloomIntensity = 0.55;
+      this.cameraConfig.resolutionMode = 'fixed_downscale_ratio';
+      this.cameraConfig.downscaleRatio = 1;
+      this.cameraConfig.snapCameraPosition = false;
       if (scene) {
         scene.traverse((obj) => {
+          setSubjectSnapEnabled(obj, true);
           if (obj instanceof THREE.Mesh) {
             const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
             for (const m of mats) {
-              if (m instanceof PixelizerMaterial && m.options.pixelated) {
+              if (m instanceof PixelizerMaterial && m.options.objectId !== 0) {
                 const hasEmit = (m.options.emissionIntensity ?? 0) > 0.3;
                 m.updateOptions({
+                  pixelated: true,
                   pixelSize: 1,
                   outlineColor: '#07060b',
                   outlineAlpha: 1.0,
@@ -541,6 +627,7 @@ export class PixelizerPipeline {
                   rimPower: 2.8,
                   rimSteppedThreshold: 0.34,
                   useColorGrading: true,
+                  useDitheredTransparency: true,
                   ditherSpace: 'object_uv',
                 });
               }
@@ -697,7 +784,9 @@ export class PixelizerPipeline {
     const grid = computeCameraGrid(screenW, screenH, camCfg);
     this.lastGrid = grid;
 
-    // Pass target resolution: lowRes in full_scene mode, screen CSS resolution in only_pixelized hybrid mode
+    const isHiFi = cfg.filterMode === 'hifi_stylized';
+
+    // Pass target resolution: lowRes in full_scene mode, screen CSS resolution in hifi_stylized / hybrid mode
     const passW = cfg.filterMode === 'full_scene' ? grid.lowResWidth : screenW;
     const passH = cfg.filterMode === 'full_scene' ? grid.lowResHeight : screenH;
 
@@ -727,6 +816,9 @@ export class PixelizerPipeline {
       mesh: THREE.Mesh;
       origPixelated: boolean;
       origExpand: number;
+      origColorGrading: number;
+      origDitherTrans: number;
+      origOutlineAlpha: number;
     }[] = [];
 
     scene.traverse((obj) => {
@@ -739,6 +831,9 @@ export class PixelizerPipeline {
               mesh: obj,
               origPixelated: m.options.pixelated,
               origExpand: m.uniforms.uUsePixelExpansion.value,
+              origColorGrading: m.uniforms.uUseColorGrading.value,
+              origDitherTrans: m.uniforms.uUseDitheredTransparency.value,
+              origOutlineAlpha: m.uniforms.uOutlineAlpha.value,
             });
           }
         }
@@ -774,33 +869,37 @@ export class PixelizerPipeline {
       this.renderer.autoClear = true;
     }
 
-    // 2. Snap camera & snappable objects (eliminates pixel creep)
+    // 2. Snap camera & snappable objects (disabled in Hi-Fi mode)
     const effectiveWorldPixelSize =
       cfg.filterMode === 'full_scene'
         ? grid.worldPixelSize
         : grid.effectiveOrthoHeight / Math.max(1, passH);
 
-    const savedCamPos = snapCameraToPixelGrid(
-      camera,
-      grid,
-      camCfg,
-      effectiveWorldPixelSize
-    );
+    const savedCamPos = isHiFi
+      ? null
+      : snapCameraToPixelGrid(
+          camera,
+          grid,
+          camCfg,
+          effectiveWorldPixelSize
+        );
     const savedObjects: { obj: THREE.Object3D; saved: SavedTransform }[] = [];
 
-    scene.traverse((obj) => {
-      const attachment = obj.userData.pixelizer as PixelizerObjectAttachment | undefined;
-      if (attachment) {
-        const saved = snapObjectForRender(
-          obj,
-          camera,
-          effectiveWorldPixelSize,
-          attachment.snap,
-          attachment.gridReference
-        );
-        savedObjects.push({ obj, saved });
-      }
-    });
+    if (!isHiFi) {
+      scene.traverse((obj) => {
+        const attachment = obj.userData.pixelizer as PixelizerObjectAttachment | undefined;
+        if (attachment) {
+          const saved = snapObjectForRender(
+            obj,
+            camera,
+            effectiveWorldPixelSize,
+            attachment.snap,
+            attachment.gridReference
+          );
+          savedObjects.push({ obj, saved });
+        }
+      });
+    }
     scene.updateMatrixWorld(true);
 
     // 3. Synchronize materials with active palette, dither, ramp, grid origin, and mode
@@ -808,6 +907,7 @@ export class PixelizerPipeline {
     const isSeedDebug = cfg.debugView === 'seed_dither';
     const isCelHard = cfg.filterMode === 'cel_hard';
     const expansionAllowed =
+      !isHiFi &&
       !isCelHard &&
       ((cfg.usePixelExpansion && cfg.filterMode === 'only_pixelized') ||
         (cfg.usePixelExpansion && cfg.filterMode === 'full_scene' && camCfg.downscaleRatio <= 2) ||
@@ -824,8 +924,14 @@ export class PixelizerPipeline {
       );
       m.applySharedResources(res);
 
-      const isPix = cfg.filterMode === 'full_scene' ? true : item.origPixelated;
-      const effectiveP = isCelHard
+      const isPix = isHiFi
+        ? false
+        : cfg.filterMode === 'full_scene'
+        ? true
+        : item.origPixelated;
+      const effectiveP = isHiFi
+        ? 0
+        : isCelHard
         ? isPix
           ? 1
           : 0
@@ -839,9 +945,18 @@ export class PixelizerPipeline {
 
       if (effectiveP > maxPixelSize) maxPixelSize = effectiveP;
 
+      if (isHiFi) {
+        if (m.options.albedoMap) enforceHiFiTextureSampling(m.options.albedoMap, 'albedo');
+        if (m.options.normalMap) enforceHiFiTextureSampling(m.options.normalMap, 'normal');
+        if (m.options.emissionMap) enforceHiFiTextureSampling(m.options.emissionMap, 'emission');
+        m.uniforms.uUseColorGrading.value = 0;
+        m.uniforms.uUseDitheredTransparency.value = 0;
+        m.uniforms.uOutlineAlpha.value = 0;
+      }
+
       m.uniforms.uPixelated.value = isPix ? 1 : 0;
       m.uniforms.uPixelSize.value = Math.max(1, effectiveP);
-      m.uniforms.uForceFlatDither.value = isCelHard ? 1 : 0;
+      m.uniforms.uForceFlatDither.value = !isHiFi && isCelHard ? 1 : 0;
       m.uniforms.uUsePixelExpansion.value = expansionAllowed && effectiveP > 1 ? 1 : 0;
       m.uniforms.uEncodeBloomAlpha.value = encodeBloomAlpha;
       m.uniforms.uCameraNear.value =
@@ -888,6 +1003,9 @@ export class PixelizerPipeline {
     for (const item of materialsList) {
       item.mat.uniforms.uPixelated.value = item.origPixelated ? 1 : 0;
       item.mat.uniforms.uUsePixelExpansion.value = item.origExpand;
+      item.mat.uniforms.uUseColorGrading.value = item.origColorGrading;
+      item.mat.uniforms.uUseDitheredTransparency.value = item.origDitherTrans;
+      item.mat.uniforms.uOutlineAlpha.value = item.origOutlineAlpha;
       item.mat.uniforms.uForceFlatDither.value = 0;
       item.mat.uniforms.uEncodeBloomAlpha.value = 0;
     }
