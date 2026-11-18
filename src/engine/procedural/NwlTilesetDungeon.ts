@@ -447,7 +447,9 @@ export function buildNwlTilesetCatalog(
   const floorBaked = bakeTaggedPartsAsset(floorParts, {
     finishMode,
     texelsPerMeter: 32,
+    maxAtlasSize: 512,
     seed,
+    aoRays: 4,
     aoStrength: aoStrength * 0.45,
     normalStrength,
     emissiveRuneHex: RUINS_PAL.portalBlue,
@@ -460,7 +462,9 @@ export function buildNwlTilesetCatalog(
   const pieceBaked = bakeTaggedPartsAsset(pieceParts, {
     finishMode,
     texelsPerMeter: 32,
+    maxAtlasSize: 512,
     seed: seed + 19,
+    aoRays: 4,
     aoStrength,
     normalStrength,
     emblemHex: RUINS_PAL.goldBright,
@@ -819,8 +823,9 @@ export function buildGreenRuinsFloor1(
     const torchBaked = bakeTaggedPartsAsset(torchProtoParts, {
       finishMode,
       texelsPerMeter: 32,
+      maxAtlasSize: 512,
       seed: seed + 19,
-      aoRays: 8,
+      aoRays: 4,
       aoStrength,
       normalStrength,
       emissiveRuneHex: RUINS_PAL.ember,
@@ -886,8 +891,9 @@ export function buildGreenRuinsFloor1(
     const treeBaked = bakeTaggedPartsAsset(treeProtoParts, {
       finishMode,
       texelsPerMeter: 32,
+      maxAtlasSize: 512,
       seed: seed + 23,
-      aoRays: 10,
+      aoRays: 4,
       aoStrength,
       normalStrength,
       usePool: true,
@@ -934,8 +940,8 @@ export function buildGreenRuinsFloor1(
     computeGeometryTangents(floorGeo);
     computeGeometryTangents(wallGeo);
     if (aoStrength > 0.05) {
-      bakeVertexAoAndCreases(floorGeo, { rays: 6, maxDist: 0.55, strength: aoStrength * 0.45 });
-      bakeVertexAoAndCreases(wallGeo, { rays: 8, maxDist: 0.65, strength: aoStrength });
+      bakeVertexAoAndCreases(floorGeo, { rays: 4, maxDist: 0.55, strength: aoStrength * 0.45 });
+      bakeVertexAoAndCreases(wallGeo, { rays: 4, maxDist: 0.65, strength: aoStrength });
     }
   }
 
@@ -1066,8 +1072,9 @@ export function buildGreenRuinsFloor1(
   const landmarkBaked = bakeTaggedPartsAsset(landmarkParts, {
     finishMode,
     texelsPerMeter: 32,
+    maxAtlasSize: 512,
     seed: seed + 31,
-    aoRays: 10,
+    aoRays: 4,
     aoStrength,
     normalStrength,
     emblemHex: RUINS_PAL.goldBright,
@@ -1113,7 +1120,9 @@ export function buildGreenRuinsFloor1(
   const portalBaked = bakeTaggedPartsAsset(portalParts, {
     finishMode,
     texelsPerMeter: 32,
+    maxAtlasSize: 512,
     seed: seed + 43,
+    aoRays: 4,
     aoStrength: aoStrength * 0.3,
     normalStrength,
     emissiveRuneHex: RUINS_PAL.portalBlue,
@@ -1170,7 +1179,9 @@ export function buildGreenRuinsFloor1(
   const trapBaked = bakeTaggedPartsAsset(trapParts, {
     finishMode,
     texelsPerMeter: 32,
+    maxAtlasSize: 512,
     seed: seed + 51,
+    aoRays: 4,
     aoStrength,
     normalStrength,
     usePool: true,
@@ -1296,7 +1307,9 @@ export function buildGreenRuinsFloor1(
     const intactBaked = bakeTaggedPartsAsset(intactParts, {
       finishMode,
       texelsPerMeter: 32,
-      seed: seed + 70 + idx,
+      maxAtlasSize: 512,
+      seed: seed + 70,
+      aoRays: 4,
       aoStrength,
       normalStrength,
       usePool: true,
@@ -1329,7 +1342,9 @@ export function buildGreenRuinsFloor1(
     const brokenBaked = bakeTaggedPartsAsset(brokenParts, {
       finishMode,
       texelsPerMeter: 32,
-      seed: seed + 90 + idx,
+      maxAtlasSize: 512,
+      seed: seed + 90,
+      aoRays: 4,
       aoStrength: aoStrength * 0.6,
       normalStrength,
       usePool: true,
@@ -1691,8 +1706,9 @@ export function buildArchitecturalStructure(
   const baked = bakeTaggedPartsAsset(parts, {
     finishMode,
     texelsPerMeter: 24,
+    maxAtlasSize: 512,
     seed,
-    aoRays: 10,
+    aoRays: 4,
     aoMaxDist: 0.9,
     aoStrength: options.aoStrength ?? 0.3,
     normalStrength: options.normalStrength ?? 0.14,

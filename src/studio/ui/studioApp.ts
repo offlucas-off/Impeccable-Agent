@@ -29,7 +29,7 @@ import { ICONS } from './icons';
 import { mountObjectInspectorPanel } from './objectInspectorPanel';
 import { mountPaletteEditorTab } from './paletteEditor';
 import { mountPipelinePanel } from './pipelinePanel';
-import { createStageManager } from './stageManager';
+import { createStageManager, type StudioSpellVfxRunner } from './stageManager';
 
 export interface PixelizerStudioBridge {
   loadPreset: (presetId: string) => Promise<void>;
@@ -539,10 +539,11 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
       setModelClips: (clips, activeName) => {
         if (!ctx.activeStage) return;
         animCtrl.bindModel(ctx.activeStage.subjectRoot, clips);
-        let idx = activeName ? clips.findIndex((c) => c.name === activeName) : -1;
+        const boundClips = animCtrl.getClips();
+        let idx = activeName ? boundClips.findIndex((c) => c.name === activeName) : -1;
         if (idx < 0) idx = 0;
         animCtrl.playClip(idx);
-        syncAnimClipSelector(clips, idx);
+        syncAnimClipSelector(boundClips, idx);
         ctx.animViewerHandle?.refreshFromActiveStage();
       },
       setActiveClipByIndex: (index, crossFadeSec = 0) => {
@@ -694,6 +695,12 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
           return;
         }
         void stageMgr.loadPresetSelection(selDemo.value || 'nwl_knight');
+      },
+      onPlayerEquipmentChanged: (player) => {
+        stageMgr.bindUalClipsToSubject(
+          player.root,
+          ctx.animCtrl.getActiveClip()?.name || undefined
+        );
       },
     }
   );
@@ -875,6 +882,9 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
       if (!ctx.activeStage) return null;
       const target =
         ctx.isVoxelMode && ctx.activeVoxel ? ctx.activeVoxel.group : ctx.activeStage.subjectRoot;
+      const vfxRunner = !ctx.isVoxelMode
+        ? (target.userData?.vfxRunner as StudioSpellVfxRunner | undefined)
+        : undefined;
       const res = withIsolatedSubject(() =>
         exportNwlIsometricSheet(
           pipeline,
@@ -886,6 +896,13 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
             projection: opts?.projection ?? 'dimetric_2_1',
             tightPack: opts?.tightPack ?? false,
             postOutlinePx: opts?.postOutlinePx ?? false,
+            vfxDurationSec: vfxRunner?.durationSec,
+            onStepVfxFrame: vfxRunner
+              ? ({ frameIndex, dtSeconds }) => {
+                  if (frameIndex === 0) vfxRunner.reset();
+                  vfxRunner.step(dtSeconds > 0 ? dtSeconds : 0.016, false);
+                }
+              : undefined,
           },
           !ctx.isVoxelMode && animCtrl.getClips().length > 0 ? animCtrl : undefined
         )
@@ -950,6 +967,8 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
   // Animation & Render Loop
   let rafId = 0;
   let lastNow = performance.now();
+  let prevAnimQTime = 0;
+  let prevStageRef: typeof ctx.activeStage = null;
 
   const animate = (now: number) => {
     rafId = requestAnimationFrame(animate);
@@ -966,6 +985,21 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
       perspCamera.position.add(delta);
     } else {
       const qTime = animCtrl.update(dt);
+      if (ctx.activeStage !== prevStageRef || qTime < prevAnimQTime) {
+        prevStageRef = ctx.activeStage;
+        prevAnimQTime = qTime;
+      }
+      const stepDt = animCtrl.config.paused
+        ? 0
+        : animCtrl.config.enabled && animCtrl.config.fps > 0
+          ? Math.max(0, qTime - prevAnimQTime)
+          : dt * animCtrl.config.playbackSpeed;
+      prevAnimQTime = qTime;
+
+      const onRenderFrame = ctx.activeStage?.subjectRoot.userData?.onRenderFrame as
+        | ((dtSec: number) => void)
+        | undefined;
+      onRenderFrame?.(stepDt);
       ctx.activeStage?.updateAnimation(qTime, ctx.motionCreepTest);
       if (ctx.activeVoxel && ctx.activeStage) {
         ctx.activeVoxel.group.position.copy(ctx.activeStage.subjectRoot.position);

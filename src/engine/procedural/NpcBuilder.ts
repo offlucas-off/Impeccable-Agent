@@ -20,6 +20,10 @@ import {
   type UnwrapMetricsSummary,
 } from './PixelMaterialSynth';
 import {
+  buildStylizedHairParts,
+  type StylizedHairStyle,
+} from './CharacterBuilder';
+import {
   makeAxeHeadGeometry,
   makeBeveledBoneSegmentBox,
   makeBeveledBox,
@@ -725,22 +729,34 @@ export function buildNwlNpc(
     ),
   ]);
 
-  // Head + Semantic eyes/brows + Upgraded Headgear
+  // Head + Clean Front-Facing Semantic Eyes/Brows + Stylized Lofted Hair + Headgear
+  const hairStyle: StylizedHairStyle | null =
+    spec.headgear === 'helm'
+      ? null
+      : id === 'npc.joalheira'
+        ? 'layered_ponytail'
+        : id === 'npc.escriba'
+          ? 'layered_bob'
+          : spec.headgear === 'none' || spec.headgear === 'circlet'
+            ? 'swept_short'
+            : 'under_hat_locks';
+
   const headParts: TaggedGeometryPart[] = [
     tagPart(
-      makeBeveledBox(0.215, 0.23, 0.215, 0.02, SKIN_BASE, { offset: [0, 0.11, 0] }),
-      'npc_head',
+      makeBeveledBox(0.215, 0.23, 0.215, 0.022, SKIN_BASE, { offset: [0, 0.11, 0] }),
+      'head_front',
       'human_skin',
       SKIN_BASE,
-      { landmarkKind: 'head_front', lockVertical: true }
+      { landmarkKind: 'head_front', lockVertical: true, islandScaleBias: 2.4 }
     ),
-    tagPart(
-      makeBeveledBox(0.228, 0.09, 0.23, 0.016, spec.hair, { offset: [0, 0.2, -0.01] }),
-      'npc_hair',
-      'woven_cloth',
-      spec.hair,
-      { lockVertical: true }
-    ),
+    ...(hairStyle
+      ? buildStylizedHairParts(spec.hair, {
+          style: hairStyle,
+          scale: spec.headgear === 'hood' ? 0.96 : 1.0,
+          tagPrefix: 'npc_hair',
+          accentHex: spec.hair,
+        })
+      : []),
   ];
 
   if (spec.headgear === 'helm') {

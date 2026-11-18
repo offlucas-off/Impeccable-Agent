@@ -605,11 +605,11 @@ export function buildEnterableNwlHouse(
     offset: [doorW - 0.26, 1.0, 0],
   });
   const portaParts: TaggedGeometryPart[] = [
-    tagPart(doorSlab, `${spec.id}_door_slab`, 'wood_planks', CITY_COLORS.wood, {
+    tagPart(doorSlab, 'city_door_slab', 'wood_planks', CITY_COLORS.wood, {
       landmarkKind: 'door_front',
       lockVertical: true,
     }),
-    tagPart(handle, `${spec.id}_door_handle`, 'brushed_gold', CITY_COLORS.goldBright, {
+    tagPart(handle, 'city_door_handle', 'brushed_gold', CITY_COLORS.goldBright, {
       lockVertical: false,
     }),
   ];
@@ -617,9 +617,10 @@ export function buildEnterableNwlHouse(
   // Bake each structural sub-part cleanly with LRU pool reuse
   const baseBaked = bakeTaggedPartsAsset(baseParts, {
     finishMode,
-    texelsPerMeter: 32,
+    texelsPerMeter: 24,
+    maxAtlasSize: 512,
     seed,
-    aoRays: 8,
+    aoRays: 4,
     aoStrength,
     normalStrength,
     emissiveRuneHex: spec.id === 'forja' ? CITY_COLORS.ember : CITY_COLORS.goldBright,
@@ -631,9 +632,10 @@ export function buildEnterableNwlHouse(
 
   const capaBaked = bakeTaggedPartsAsset(capaParts, {
     finishMode,
-    texelsPerMeter: 32,
+    texelsPerMeter: 24,
+    maxAtlasSize: 512,
     seed: seed + 7,
-    aoRays: 8,
+    aoRays: 4,
     aoStrength,
     normalStrength,
     emblemHex: CITY_COLORS.goldBright,
@@ -646,13 +648,14 @@ export function buildEnterableNwlHouse(
   const portaBaked = bakeTaggedPartsAsset(portaParts, {
     finishMode,
     texelsPerMeter: 32,
+    maxAtlasSize: 512,
     seed: seed + 13,
-    aoRays: 8,
+    aoRays: 4,
     aoStrength,
     normalStrength,
     emblemHex: CITY_COLORS.goldBright,
     usePool: true,
-    cacheKey: `city_house:${spec.id}:porta`,
+    cacheKey: 'city_house:porta',
     inspectUvs: false,
   });
   for (const p of portaParts) p.geometry.dispose();
@@ -849,7 +852,7 @@ export function buildNwlStarterCity(
   if (sheet) {
     computeGeometryTangents(groundGeo);
     if (aoStrength > 0.05) {
-      bakeVertexAoAndCreases(groundGeo, { rays: 6, maxDist: 0.5, strength: aoStrength * 0.42 });
+      bakeVertexAoAndCreases(groundGeo, { rays: 4, maxDist: 0.5, strength: aoStrength * 0.42 });
     }
   }
 
@@ -1013,8 +1016,9 @@ export function buildNwlStarterCity(
   const lampBaked = bakeTaggedPartsAsset(lampProtoParts, {
     finishMode,
     texelsPerMeter: 32,
+    maxAtlasSize: 512,
     seed: seed + 13,
-    aoRays: 10,
+    aoRays: 4,
     aoStrength,
     normalStrength,
     emissiveRuneHex: CITY_COLORS.goldBright,
@@ -1085,9 +1089,10 @@ export function buildNwlStarterCity(
 
   const propsBaked = bakeTaggedPartsAsset(propsParts, {
     finishMode,
-    texelsPerMeter: 32,
+    texelsPerMeter: 24,
+    maxAtlasSize: 512,
     seed: seed + 17,
-    aoRays: 12,
+    aoRays: 4,
     aoStrength,
     normalStrength,
     emissiveRuneHex: CITY_COLORS.goldBright,
@@ -1163,7 +1168,9 @@ export function buildNwlStarterCity(
   const archBaked = bakeTaggedPartsAsset(portalArchParts, {
     finishMode,
     texelsPerMeter: 32,
+    maxAtlasSize: 512,
     seed: seed + 29,
+    aoRays: 4,
     aoStrength,
     normalStrength,
     emissiveRuneHex: CITY_COLORS.portalEdge,
@@ -1215,7 +1222,9 @@ export function buildNwlStarterCity(
   const coreBaked = bakeTaggedPartsAsset(portalCoreParts, {
     finishMode,
     texelsPerMeter: 32,
+    maxAtlasSize: 512,
     seed: seed + 41,
+    aoRays: 4,
     aoStrength: aoStrength * 0.25,
     normalStrength,
     emissiveRuneHex: CITY_COLORS.portalCore,

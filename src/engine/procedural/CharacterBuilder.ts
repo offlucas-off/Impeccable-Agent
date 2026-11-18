@@ -204,6 +204,351 @@ function disposeCharacterMaterialsSafely(materials: PixelizerMaterial[]): void {
   }
 }
 
+export type StylizedHairStyle =
+  | 'layered_ponytail'
+  | 'layered_bob'
+  | 'swept_short'
+  | 'under_hat_locks';
+
+export interface StylizedHairOptions {
+  style?: StylizedHairStyle;
+  scale?: number;
+  tagPrefix?: string;
+  recipe?: MaterialRecipeId;
+  accentHex?: string;
+  includeBangs?: boolean;
+}
+
+function scaleLoftPts(
+  pts: ReadonlyArray<readonly [number, number, number]>,
+  s: number
+): [number, number, number][] {
+  return pts.map(([x, y, z]) => [x * s, y * s, z * s]);
+}
+
+function scaleLoftRadii(
+  radii: ReadonlyArray<readonly [number, number]>,
+  s: number
+): [number, number][] {
+  return radii.map(([rx, ry]) => [Math.max(0.004, rx * s), Math.max(0.004, ry * s)]);
+}
+
+/**
+ * Builds curved, tapered `makeSplineLoftGeometry` hair strands (layered crown sweeps,
+ * parted anime bangs above the brow line, cheek-framing side locks, and tapered back/ponytail)
+ * mounted in `Head`-local coordinates (Blu/Reze-inspired layered silhouette).
+ */
+export function buildStylizedHairParts(
+  hairHex: string,
+  options: StylizedHairOptions = {}
+): TaggedGeometryPart[] {
+  const style = options.style ?? 'layered_ponytail';
+  const s = options.scale ?? 1.0;
+  const prefix = options.tagPrefix ?? 'hair';
+  const recipe: MaterialRecipeId = options.recipe ?? 'woven_cloth';
+  const accentHex = options.accentHex ?? hairHex;
+  const includeBangs = options.includeBangs ?? true;
+  const parts: TaggedGeometryPart[] = [];
+
+  const pushStrand = (
+    name: string,
+    pts: ReadonlyArray<readonly [number, number, number]>,
+    radii: ReadonlyArray<readonly [number, number]>,
+    radialSegs = 6,
+    tubularSegs = 6
+  ) => {
+    const geo = makeSplineLoftGeometry(
+      scaleLoftPts(pts, s),
+      scaleLoftRadii(radii, s),
+      radialSegs,
+      tubularSegs,
+      { colorHex: hairHex }
+    );
+    parts.push(
+      tagPart(geo, `${prefix}_${name}`, recipe, hairHex, {
+        accentHex,
+        lockVertical: false,
+      })
+    );
+  };
+
+  if (style !== 'under_hat_locks') {
+    // Layered crown sweeps hugging the cranium without boxy cuboid edges
+    pushStrand(
+      'crown_center',
+      [
+        [0, 0.212, 0.095],
+        [0, 0.242, 0.02],
+        [0, 0.22, -0.075],
+        [0, 0.118, -0.122],
+        [0, 0.036, -0.116],
+      ],
+      [
+        [0.048, 0.015],
+        [0.068, 0.024],
+        [0.074, 0.026],
+        [0.056, 0.022],
+        [0.03, 0.014],
+      ],
+      8,
+      8
+    );
+
+    for (const [idx, sx] of [-1, 1].entries()) {
+      pushStrand(
+        `crown_side_${idx}`,
+        [
+          [sx * 0.052, 0.205, 0.082],
+          [sx * 0.095, 0.218, 0.01],
+          [sx * 0.104, 0.172, -0.068],
+          [sx * 0.072, 0.088, -0.112],
+          [sx * 0.042, 0.028, -0.108],
+        ],
+        [
+          [0.036, 0.015],
+          [0.048, 0.022],
+          [0.052, 0.024],
+          [0.04, 0.02],
+          [0.022, 0.012],
+        ],
+        8,
+        8
+      );
+    }
+  }
+
+  // Swept parted bangs (hovering cleanly in front of forehead, stopping above eye line)
+  if (includeBangs) {
+    if (style === 'under_hat_locks') {
+      for (const [idx, sx] of [-1, 1].entries()) {
+        pushStrand(
+          `hat_bang_${idx}`,
+          [
+            [sx * 0.022, 0.205, 0.092],
+            [sx * 0.062, 0.184, 0.115],
+            [sx * 0.092, 0.145, 0.105],
+          ],
+          [
+            [0.02, 0.01],
+            [0.018, 0.01],
+            [0.007, 0.006],
+          ],
+          6,
+          6
+        );
+      }
+    } else {
+      pushStrand(
+        'bang_l',
+        [
+          [-0.015, 0.225, 0.078],
+          [-0.055, 0.205, 0.116],
+          [-0.088, 0.165, 0.114],
+          [-0.098, 0.128, 0.098],
+        ],
+        [
+          [0.026, 0.012],
+          [0.028, 0.013],
+          [0.02, 0.01],
+          [0.007, 0.006],
+        ],
+        6,
+        7
+      );
+      pushStrand(
+        'bang_r',
+        [
+          [0.012, 0.225, 0.078],
+          [0.048, 0.206, 0.116],
+          [0.084, 0.168, 0.114],
+          [0.096, 0.13, 0.098],
+        ],
+        [
+          [0.025, 0.012],
+          [0.027, 0.013],
+          [0.019, 0.01],
+          [0.007, 0.006],
+        ],
+        6,
+        7
+      );
+      // Asymmetric parted forehead wisps (matching Blu/Reze silhouette)
+      pushStrand(
+        'bang_c1',
+        [
+          [0.008, 0.224, 0.084],
+          [-0.012, 0.202, 0.117],
+          [-0.028, 0.174, 0.118],
+          [-0.036, 0.154, 0.113],
+        ],
+        [
+          [0.02, 0.01],
+          [0.022, 0.011],
+          [0.014, 0.008],
+          [0.006, 0.005],
+        ],
+        6,
+        6
+      );
+      pushStrand(
+        'bang_c2',
+        [
+          [0.024, 0.222, 0.084],
+          [0.034, 0.198, 0.116],
+          [0.028, 0.172, 0.118],
+          [0.018, 0.155, 0.114],
+        ],
+        [
+          [0.018, 0.01],
+          [0.02, 0.01],
+          [0.012, 0.008],
+          [0.005, 0.005],
+        ],
+        6,
+        6
+      );
+    }
+  }
+
+  // Cheek-framing tapered side locks
+  const longSide = style === 'layered_ponytail' || style === 'layered_bob';
+  for (const [idx, sx] of [-1, 1].entries()) {
+    if (longSide) {
+      pushStrand(
+        `side_${idx}`,
+        [
+          [sx * 0.096, 0.195, 0.048],
+          [sx * 0.118, 0.145, 0.068],
+          [sx * 0.115, 0.082, 0.07],
+          [sx * 0.098, 0.025, 0.056],
+        ],
+        [
+          [0.018, 0.022],
+          [0.016, 0.022],
+          [0.012, 0.016],
+          [0.006, 0.007],
+        ],
+        6,
+        7
+      );
+    } else {
+      pushStrand(
+        `side_${idx}`,
+        [
+          [sx * 0.096, 0.19, 0.045],
+          [sx * 0.113, 0.142, 0.058],
+          [sx * 0.105, 0.088, 0.052],
+        ],
+        [
+          [0.016, 0.02],
+          [0.014, 0.018],
+          [0.006, 0.007],
+        ],
+        6,
+        6
+      );
+    }
+  }
+
+  // Back silhouette: ponytail, layered bob, swept crest, or under-hat nape locks
+  if (style === 'layered_ponytail') {
+    pushStrand(
+      'ponytail_main',
+      [
+        [0, 0.148, -0.118],
+        [0, 0.122, -0.172],
+        [0, 0.035, -0.198],
+        [0, -0.065, -0.185],
+        [0, -0.135, -0.152],
+      ],
+      [
+        [0.026, 0.024],
+        [0.042, 0.036],
+        [0.038, 0.032],
+        [0.024, 0.022],
+        [0.008, 0.008],
+      ],
+      8,
+      8
+    );
+    pushStrand(
+      'ponytail_wisp',
+      [
+        [0.018, 0.142, -0.122],
+        [0.042, 0.095, -0.176],
+        [0.046, 0.01, -0.186],
+        [0.028, -0.08, -0.168],
+      ],
+      [
+        [0.016, 0.014],
+        [0.022, 0.018],
+        [0.016, 0.014],
+        [0.006, 0.006],
+      ],
+      6,
+      7
+    );
+  } else if (style === 'layered_bob') {
+    for (const [idx, ox] of [-0.056, 0, 0.056].entries()) {
+      pushStrand(
+        `bob_back_${idx}`,
+        [
+          [ox, 0.175, -0.108],
+          [ox * 1.18, 0.105, -0.128],
+          [ox * 0.96, 0.035, -0.116],
+          [ox * 0.7, 0.008, -0.095],
+        ],
+        [
+          [0.032, 0.018],
+          [0.036, 0.02],
+          [0.026, 0.015],
+          [0.008, 0.007],
+        ],
+        6,
+        7
+      );
+    }
+  } else if (style === 'swept_short') {
+    for (const [idx, sx] of [-1, 1].entries()) {
+      pushStrand(
+        `swept_tip_${idx}`,
+        [
+          [sx * 0.032, 0.224, -0.025],
+          [sx * 0.046, 0.23, -0.095],
+          [sx * 0.034, 0.174, -0.136],
+        ],
+        [
+          [0.026, 0.018],
+          [0.024, 0.018],
+          [0.007, 0.007],
+        ],
+        6,
+        6
+      );
+    }
+  } else if (style === 'under_hat_locks') {
+    for (const [idx, ox] of [-0.048, 0, 0.048].entries()) {
+      pushStrand(
+        `nape_${idx}`,
+        [
+          [ox, 0.145, -0.112],
+          [ox * 1.1, 0.08, -0.126],
+          [ox * 0.9, 0.02, -0.108],
+        ],
+        [
+          [0.026, 0.014],
+          [0.024, 0.014],
+          [0.008, 0.006],
+        ],
+        6,
+        6
+      );
+    }
+  }
+
+  return parts;
+}
+
 /**
  * Generates an autonomous humanoid character built natively onto the 65-bone Quaternius UAL rig,
  * supporting both NWL rigid-bone segmentation (`skinnedMeshes: 0`) and smooth capsule SkinnedMesh / Voxel 3D.
@@ -406,16 +751,15 @@ export function buildProceduralUalCharacter(
     ],
   });
 
-  // Head + Semantic Eyes/Brows + Sculpted Headgear
-  const rawHead = makeBeveledBox(0.225 * bulk, 0.245 * bulk, 0.225 * bulk, 0.038 * bulk, pal.skin, {
+  // Head + Clean Front-Facing Semantic Eyes/Brows + Sculpted Headgear / Stylized Hair
+  const headGeo = makeBeveledBox(0.22 * bulk, 0.24 * bulk, 0.22 * bulk, 0.026 * bulk, pal.skin, {
     offset: [0, 0.11 * bulk, 0],
   });
-  const sculptedHead = subdivideGeometryLoop(rawHead, 1, { defaultHex: pal.skin });
-  rawHead.dispose();
   const headParts: TaggedGeometryPart[] = [
-    tagPart(sculptedHead, 'char_head', skinRecipe, pal.skin, {
+    tagPart(headGeo, 'head_front', skinRecipe, pal.skin, {
       landmarkKind: 'head_front',
       lockVertical: true,
+      islandScaleBias: 2.6,
     }),
   ];
   if (archetype === 'knight') {
@@ -484,7 +828,13 @@ export function buildProceduralUalCharacter(
     );
     headParts.push(
       tagPart(brim, 'char_mage_brim', 'woven_cloth', pal.armorPrimary, { accentHex: pal.accent }),
-      tagPart(cone, 'char_mage_cone', 'woven_cloth', pal.cloth, { accentHex: pal.accent })
+      tagPart(cone, 'char_mage_cone', 'woven_cloth', pal.cloth, { accentHex: pal.accent }),
+      ...buildStylizedHairParts(pal.hair, {
+        style: 'under_hat_locks',
+        scale: bulk,
+        tagPrefix: 'char_hair',
+        accentHex: pal.hair,
+      })
     );
   } else if (archetype === 'ranger') {
     const rawHood = makeBeveledBox(0.25 * bulk, 0.24 * bulk, 0.26 * bulk, 0.036 * bulk, pal.armorPrimary, {
@@ -493,17 +843,38 @@ export function buildProceduralUalCharacter(
     const hood = subdivideGeometryLoop(rawHood, 1, { defaultHex: pal.armorPrimary });
     rawHood.dispose();
     headParts.push(
-      tagPart(hood, 'char_ranger_hood', 'stitched_leather', pal.armorPrimary, { accentHex: pal.accent })
+      tagPart(hood, 'char_ranger_hood', 'stitched_leather', pal.armorPrimary, { accentHex: pal.accent }),
+      ...buildStylizedHairParts(pal.hair, {
+        style: 'under_hat_locks',
+        scale: bulk * 0.96,
+        tagPrefix: 'char_hair',
+        accentHex: pal.hair,
+      })
+    );
+  } else if (archetype === 'golem') {
+    headParts.push(
+      ...buildStylizedHairParts(pal.hair, {
+        style: 'swept_short',
+        scale: bulk,
+        tagPrefix: 'char_golem_crest',
+        recipe: 'mossy_cobble',
+        accentHex: pal.accent,
+        includeBangs: false,
+      })
     );
   } else {
-    const rawHair = makeBeveledBox(0.238 * bulk, 0.105 * bulk, 0.238 * bulk, 0.025 * bulk, pal.hair, {
-      offset: [0, 0.205 * bulk, -0.01],
-    });
-    const hair = subdivideGeometryLoop(rawHair, 1, { defaultHex: pal.hair });
-    rawHair.dispose();
+    const hairStyle: StylizedHairStyle =
+      archetype === 'villager' && profile === 'female'
+        ? 'layered_ponytail'
+        : archetype === 'villager'
+          ? 'layered_bob'
+          : 'swept_short';
     headParts.push(
-      tagPart(hair, 'char_hair', archetype === 'golem' ? 'mossy_cobble' : 'woven_cloth', pal.hair, {
-        accentHex: pal.accent,
+      ...buildStylizedHairParts(pal.hair, {
+        style: hairStyle,
+        scale: bulk,
+        tagPrefix: 'char_hair',
+        accentHex: pal.hair,
       })
     );
   }

@@ -34,17 +34,138 @@ interface QuantizeBakeCtx {
   disposableTex: THREE.Texture[];
 }
 
-function convertToExportStandardMaterial(
+interface PbrExportCtx {
+  mrCache: Map<string, THREE.Texture>;
+  disposableTex: THREE.Texture[];
+}
+
+interface TextureByteBuffer {
+  data: ArrayLike<number>;
+  width: number;
+  height: number;
+  stride: number;
+}
+
+function readTextureByteBuffer(tex: THREE.Texture | null): TextureByteBuffer | null {
+  if (!tex) return null;
+  const img = tex.image as { data?: ArrayLike<number>; width?: number; height?: number } | undefined;
+  if (!img || !img.data || typeof img.width !== 'number' || typeof img.height !== 'number') {
+    return null;
+  }
+  if (img.width <= 0 || img.height <= 0) return null;
+  const pixelCount = img.width * img.height;
+  const stride = Math.max(1, Math.floor(img.data.length / pixelCount));
+  if (img.data.length < pixelCount * stride) return null;
+  return { data: img.data, width: img.width, height: img.height, stride };
+}
+
+/**
+ * Pre-packs separate roughnessMap (G) and metalnessMap (B) DataTextures into a single
+ * glTF 2.0 metallicRoughness DataTexture so GLTFExporter receives `metalnessMap === roughnessMap`
+ * and skips its canvas drawImage merger (which logs warnings and fails on DataTextures).
+ */
+function resolveGltfMetallicRoughnessMaps(
+  rawRoughnessMap: THREE.Texture | null,
+  rawMetalnessMap: THREE.Texture | null,
+  pbrCtx: PbrExportCtx
+): { roughnessMap: THREE.Texture | null; metalnessMap: THREE.Texture | null } {
+  if (!rawRoughnessMap && !rawMetalnessMap) {
+    return { roughnessMap: null, metalnessMap: null };
+  }
+  if (rawRoughnessMap && rawRoughnessMap === rawMetalnessMap) {
+    return { roughnessMap: rawRoughnessMap, metalnessMap: rawMetalnessMap };
+  }
+
+  const key = `${rawRoughnessMap?.uuid ?? 'none'}:${rawMetalnessMap?.uuid ?? 'none'}`;
+  const cached = pbrCtx.mrCache.get(key);
+  if (cached) {
+    return { roughnessMap: cached, metalnessMap: cached };
+  }
+
+  const rBuf = readTextureByteBuffer(rawRoughnessMap);
+  const mBuf = readTextureByteBuffer(rawMetalnessMap);
+  if ((rawRoughnessMap && !rBuf) || (rawMetalnessMap && !mBuf)) {
+    return { roughnessMap: rawRoughnessMap, metalnessMap: rawMetalnessMap };
+  }
+
+  const width = Math.max(rBuf?.width ?? 0, mBuf?.width ?? 0);
+  const height = Math.max(rBuf?.height ?? 0, mBuf?.height ?? 0);
+  if (width <= 0 || height <= 0) {
+    return { roughnessMap: rawRoughnessMap, metalnessMap: rawMetalnessMap };
+  }
+
+  const out = new Uint8Array(width * height * 4);
+  for (let y = 0; y < height; y++) {
+    const ry = rBuf ? Math.min(rBuf.height - 1, Math.floor((y * rBuf.height) / height)) : 0;
+    const my = mBuf ? Math.min(mBuf.height - 1, Math.floor((y * mBuf.height) / height)) : 0;
+    for (let x = 0; x < width; x++) {
+      const dst = (y * width + x) * 4;
+      let gVal = 255;
+      if (rBuf) {
+        const rx = Math.min(rBuf.width - 1, Math.floor((x * rBuf.width) / width));
+        const rIdx = (ry * rBuf.width + rx) * rBuf.stride;
+        const rChan = rBuf.stride >= 2 ? 1 : 0;
+        gVal = Math.max(0, Math.min(255, Math.round(rBuf.data[rIdx + rChan])));
+      }
+      let bVal = 255;
+      if (mBuf) {
+        const mx = Math.min(mBuf.width - 1, Math.floor((x * mBuf.width) / width));
+        const mIdx = (my * mBuf.width + mx) * mBuf.stride;
+        const mChan = mBuf.stride >= 3 ? 2 : 0;
+        bVal = Math.max(0, Math.min(255, Math.round(mBuf.data[mIdx + mChan])));
+      }
+      out[dst + 0] = 255;
+      out[dst + 1] = gVal;
+      out[dst + 2] = bVal;
+      out[dst + 3] = 255;
+    }
+  }
+
+  const ref = (rawRoughnessMap ?? rawMetalnessMap)!;
+  const packed = new THREE.DataTexture(out, width, height, THREE.RGBAFormat);
+  packed.flipY = ref.flipY;
+  packed.wrapS = ref.wrapS;
+  packed.wrapT = ref.wrapT;
+  packed.magFilter = ref.magFilter;
+  packed.minFilter = ref.minFilter;
+  packed.generateMipmaps = ref.generateMipmaps;
+  packed.channel = 0;
+  packed.colorSpace = THREE.NoColorSpace;
+  packed.needsUpdate = true;
+
+  pbrCtx.mrCache.set(key, packed);
+  pbrCtx.disposableTex.push(packed);
+  return { roughnessMap: packed, metalnessMap: packed };
+}
+
+function convertPixelizerMaterialForGltf(
   src: THREE.Material | null | undefined,
   hasVertexColors: boolean,
   safeMaxMetalness: number,
+  pbrCtx: PbrExportCtx,
   quantizeOpts?: QuantizeBakeCtx
 ): THREE.MeshStandardMaterial {
   if (src instanceof PixelizerMaterial) {
     const o = src.options;
+    const ud = (src.userData ?? {}) as Record<string, unknown>;
+    const rawRoughnessMap = ud.roughnessMap instanceof THREE.Texture ? ud.roughnessMap : null;
+    const rawAoMap = ud.aoMap instanceof THREE.Texture ? ud.aoMap : null;
+    const rawMetalnessMap = ud.metalnessMap instanceof THREE.Texture ? ud.metalnessMap : null;
+    const rawEmissionMap =
+      o.emissionMap ?? (ud.emissionMap instanceof THREE.Texture ? ud.emissionMap : null);
+
     const isMetal = o.workflow === 'metallic';
-    const metalness = isMetal ? Math.min(safeMaxMetalness, Math.max(0.05, o.metallic)) : 0.08;
-    const roughness = Math.max(0.25, Math.min(0.95, 1.0 - o.smoothness));
+    const scalarMetalness = isMetal ? Math.min(safeMaxMetalness, Math.max(0.05, o.metallic)) : 0.08;
+    const scalarRoughness = Math.max(0.25, Math.min(0.95, 1.0 - o.smoothness));
+    const metalness = rawMetalnessMap ? 1.0 : scalarMetalness;
+    const roughness = rawRoughnessMap ? 1.0 : scalarRoughness;
+
+    const { roughnessMap, metalnessMap } = resolveGltfMetallicRoughnessMaps(
+      rawRoughnessMap,
+      rawMetalnessMap,
+      pbrCtx
+    );
+
     let albedoMap: THREE.Texture | null = o.albedoMap ?? null;
     if (quantizeOpts && albedoMap) {
       let cached = quantizeOpts.cache.get(albedoMap);
@@ -55,14 +176,32 @@ function convertToExportStandardMaterial(
       }
       albedoMap = cached;
     }
+
+    const emissiveColor = new THREE.Color(o.emissionColor);
+    const hasNonBlackEmission =
+      emissiveColor.r > 0 || emissiveColor.g > 0 || emissiveColor.b > 0;
+    const emissive =
+      rawEmissionMap && !hasNonBlackEmission ? new THREE.Color('#ffffff') : emissiveColor;
+    const emissiveIntensity =
+      o.emissionIntensity > 0
+        ? Math.min(0.35, o.emissionIntensity * 0.25)
+        : rawEmissionMap
+          ? 1.0
+          : 0;
+
     return new THREE.MeshStandardMaterial({
       color: new THREE.Color(o.baseColor),
       vertexColors: hasVertexColors || src.vertexColors,
       map: albedoMap,
       normalMap: o.normalMap ?? null,
-      emissiveMap: o.emissionMap ?? null,
-      emissive: new THREE.Color(o.emissionColor),
-      emissiveIntensity: o.emissionIntensity > 0 ? Math.min(0.35, o.emissionIntensity * 0.25) : 0,
+      normalScale: new THREE.Vector2(o.normalScale, o.normalScale),
+      roughnessMap,
+      aoMap: rawAoMap,
+      aoMapIntensity: 1.0,
+      metalnessMap,
+      emissiveMap: rawEmissionMap ?? null,
+      emissive,
+      emissiveIntensity,
       metalness,
       roughness,
       side: src.side,
@@ -71,7 +210,21 @@ function convertToExportStandardMaterial(
 
   if (src instanceof THREE.MeshStandardMaterial) {
     const cloned = src.clone();
-    cloned.metalness = Math.min(safeMaxMetalness, cloned.metalness);
+    const hasRough = Boolean(cloned.roughnessMap);
+    const hasMetal = Boolean(cloned.metalnessMap);
+    if (hasRough || hasMetal) {
+      const { roughnessMap, metalnessMap } = resolveGltfMetallicRoughnessMaps(
+        cloned.roughnessMap,
+        cloned.metalnessMap,
+        pbrCtx
+      );
+      cloned.roughnessMap = roughnessMap;
+      cloned.metalnessMap = metalnessMap;
+      if (hasRough) cloned.roughness = 1.0;
+      if (hasMetal) cloned.metalness = 1.0;
+    } else {
+      cloned.metalness = Math.min(safeMaxMetalness, cloned.metalness);
+    }
     return cloned;
   }
 
@@ -391,6 +544,12 @@ export async function exportRiggedAssetToGlb(
 
   const disposableMats: THREE.Material[] = [];
   const disposableTex: THREE.Texture[] = [];
+  const disposableGeos: THREE.BufferGeometry[] = [];
+  const clonedGeoMap = new Map<THREE.BufferGeometry, THREE.BufferGeometry>();
+  const pbrCtx: PbrExportCtx = {
+    mrCache: new Map<string, THREE.Texture>(),
+    disposableTex,
+  };
   const quantizeOpts = options.quantizeAlbedo
     ? {
         palette:
@@ -413,17 +572,48 @@ export async function exportRiggedAssetToGlb(
     }
     if (obj instanceof THREE.Mesh) {
       const hasCol = Boolean(obj.geometry?.getAttribute('color'));
+      let hasAoMap = false;
       if (Array.isArray(obj.material)) {
         const nextMats = obj.material.map((m) => {
-          const conv = convertToExportStandardMaterial(m, hasCol, safeMaxMetalness, quantizeOpts);
+          const conv = convertPixelizerMaterialForGltf(
+            m,
+            hasCol,
+            safeMaxMetalness,
+            pbrCtx,
+            quantizeOpts
+          );
+          if (conv.aoMap) hasAoMap = true;
           disposableMats.push(conv);
           return conv;
         });
         obj.material = nextMats;
       } else {
-        const conv = convertToExportStandardMaterial(obj.material, hasCol, safeMaxMetalness, quantizeOpts);
+        const conv = convertPixelizerMaterialForGltf(
+          obj.material,
+          hasCol,
+          safeMaxMetalness,
+          pbrCtx,
+          quantizeOpts
+        );
+        if (conv.aoMap) hasAoMap = true;
         disposableMats.push(conv);
         obj.material = conv;
+      }
+
+      if (hasAoMap && obj.geometry) {
+        const srcGeo = obj.geometry;
+        const uvAttr = srcGeo.getAttribute('uv');
+        if (uvAttr && !srcGeo.getAttribute('uv1')) {
+          let geoWithUv1 = clonedGeoMap.get(srcGeo);
+          if (!geoWithUv1) {
+            const clonedGeo = srcGeo.clone();
+            clonedGeo.setAttribute('uv1', uvAttr.clone());
+            clonedGeoMap.set(srcGeo, clonedGeo);
+            disposableGeos.push(clonedGeo);
+            geoWithUv1 = clonedGeo;
+          }
+          obj.geometry = geoWithUv1;
+        }
       }
     }
   });
@@ -468,6 +658,9 @@ export async function exportRiggedAssetToGlb(
     }
     for (const t of disposableTex) {
       t.dispose();
+    }
+    for (const g of disposableGeos) {
+      g.dispose();
     }
   }
 

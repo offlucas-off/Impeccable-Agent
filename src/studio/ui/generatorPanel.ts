@@ -129,6 +129,7 @@ export interface GeneratorHostContext {
   getCurrentStructureRoot: () => THREE.Object3D | null;
   downloadBlob: (blob: Blob, filename: string) => void;
   onFinishOptionsChanged?: (opts: GeneratorFinishOptions) => void;
+  onPlayerEquipmentChanged?: (player: PlayerCharacterInstance) => void;
 }
 
 export function mountGeneratorPanel(
@@ -568,6 +569,7 @@ export function mountGeneratorPanel(
       if (!player) return;
       const next = getStyleLoadout();
       player.setStyleLoadout(next);
+      ctx.onPlayerEquipmentChanged?.(player);
       updateQualityStats(player.root.userData.unwrapMetrics as UnwrapMetricsSummary | undefined);
       statusEl.textContent = `Mix & Match ao vivo: ${next.weaponMain} + ${next.weaponOffhand} (${next.helmet}, ${next.back ?? 'none'})`;
     });
@@ -620,6 +622,7 @@ export function mountGeneratorPanel(
     const player = ctx.getCurrentPlayerInstance();
     if (player) {
       player.setStyleLoadout(rnd);
+      ctx.onPlayerEquipmentChanged?.(player);
       updateQualityStats(player.root.userData.unwrapMetrics as UnwrapMetricsSummary | undefined);
       statusEl.textContent = `Equipamento aleatório: ${rnd.weaponMain} + ${rnd.weaponOffhand} · ${rnd.helmet}`;
     } else {
@@ -637,6 +640,7 @@ export function mountGeneratorPanel(
       return;
     }
     const def = player.equipSlot(slot, rarity);
+    ctx.onPlayerEquipmentChanged?.(player);
     updateQualityStats(player.root.userData.unwrapMetrics as UnwrapMetricsSummary | undefined);
     statusEl.textContent = `Equipado ao vivo no bone: ${def.displayName}`;
   });

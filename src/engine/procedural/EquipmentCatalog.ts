@@ -104,9 +104,9 @@ export const MATERIAL_THEMES: Record<MaterialThemeId, MaterialThemeDef> = {
   rarity_auto: {
     id: 'rarity_auto',
     labelPt: 'Automático (Raridade)',
-    metalHex: '#8d99ae',
-    trimHex: '#d4a359',
-    clothHex: '#3f5277',
+    metalHex: '#5d697a',
+    trimHex: '#c5ae7e',
+    clothHex: '#2c3340',
     accentHex: '#4ea8de',
     metalness: 0.72,
     roughness: 0.34,
@@ -309,6 +309,38 @@ export const WEAPON_OFFHAND_STYLES: StyleOptionMeta<WeaponOffhandStyleId>[] = [
   { id: 'quiver_arrow', labelPt: 'Flecha Pronta (Arco)', isMetal: false },
   { id: 'none', labelPt: 'Mão Livre (Vazio)', isMetal: false },
 ];
+
+export interface ClassNormalPaletteSpec {
+  primary: string;
+  secondary: string;
+  trim: string;
+  glow: string;
+}
+
+/**
+ * Rich class-specific base palettes for `rarity: 'normal'` (tier 1) when
+ * `materialTheme` is `'rarity_auto'`, replacing washed-out neutral grays.
+ */
+export const CLASS_NORMAL_PALETTES: Record<PlayerClassId, ClassNormalPaletteSpec> = {
+  knight: {
+    primary: '#5d697a',   // Graphite / blue-steel plate
+    secondary: '#2c3340', // Dark steel joints & under-armor
+    trim: '#c5ae7e',      // Bronze / silver trim
+    glow: '#8fa4bf',
+  },
+  mage: {
+    primary: '#39487a',   // Deep arcane indigo
+    secondary: '#252f54', // Midnight indigo robe folds
+    trim: '#c9a64b',      // Soft gold trim
+    glow: '#62b6eb',
+  },
+  archer: {
+    primary: '#3f5e45',   // Forest green
+    secondary: '#6e4b32', // Tanned leather
+    trim: '#c4a468',      // Brass / tan trim
+    glow: '#6ea864',
+  },
+};
 
 export const CLASS_DEFAULT_STYLE_LOADOUT: Record<PlayerClassId, EquipmentStyleLoadout> = {
   knight: {

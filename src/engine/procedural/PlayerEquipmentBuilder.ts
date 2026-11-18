@@ -16,6 +16,7 @@ import {
 import type { PixelizerMaterialOptions } from '../types';
 import {
   CLASS_DEFAULT_STYLE_LOADOUT,
+  CLASS_NORMAL_PALETTES,
   MATERIAL_THEMES,
   SHELL_CLEARANCE,
   WEAPON_MOUNT_SPEC,
@@ -23,6 +24,7 @@ import {
   type EquipmentStyleLoadout,
   type WeaponMainStyleId,
 } from './EquipmentCatalog';
+import { buildStylizedHairParts } from './CharacterBuilder';
 import {
   bakeTaggedPartsAsset,
   type BakedAssetResult,
@@ -82,11 +84,11 @@ export interface RarityPaletteSpec {
 export const RARITY_COLOR_TABLE: Record<ItemRarity, RarityPaletteSpec> = {
   normal: {
     id: 'normal',
-    labelPt: 'Normal (Neutro)',
-    primary: '#b3b9d1',
-    secondary: '#6d758d',
-    trim: '#dae0ea',
-    glow: '#dae0ea',
+    labelPt: 'Normal (Classe)',
+    primary: '#5d697a',
+    secondary: '#2c3340',
+    trim: '#c5ae7e',
+    glow: '#8fa4bf',
     tierLevel: 1,
   },
   common: {
@@ -164,8 +166,8 @@ const NWL_HERO_SCALE = 1.79 / 1.829; // Exact 1.79m hero height = 108px at 60px/
 const SHELL_COLORS = {
   skin: '#e0a882',
   skinShadow: '#b87b56',
-  undershirt: '#3b1725',
-  undershirtDark: '#141013',
+  undershirt: '#343d4d',
+  undershirtDark: '#2c3340',
   hair: '#3b1725',
   eye: '#285cc4',
 };
@@ -456,24 +458,24 @@ function buildBaseShellSpecs(
     ),
   ]);
 
-  // Head + textured semantic eyes/brows + sculpted rounded hair (preserves head_front landmark)
-  const rawHeadBox = makeBeveledBox(0.214, 0.234, 0.214, 0.036, SHELL_COLORS.skin, {
+  // Head + clean front-facing semantic eyes/brows + compact base skullcap (preserves head_front landmark)
+  const headBox = makeBeveledBox(0.214, 0.234, 0.214, 0.024, SHELL_COLORS.skin, {
     offset: [0, 0.11, 0],
   });
-  const headBox = subdivideGeometryLoop(rawHeadBox, 1, { defaultHex: SHELL_COLORS.skin });
-  rawHeadBox.dispose();
-  const hairCap = makeBeveledBox(0.224, 0.082, 0.224, 0.022, SHELL_COLORS.hair, {
+  const hairCap = makeBeveledBox(0.218, 0.074, 0.218, 0.02, SHELL_COLORS.hair, {
     offset: [0, 0.2, -0.01],
   });
   bakeShellBone(
     'Shell_Head',
     'Head',
     [
-      tagPart(headBox, 'shell_head', 'human_skin', SHELL_COLORS.skin, {
+      tagPart(headBox, 'head_front', 'human_skin', SHELL_COLORS.skin, {
         landmarkKind: 'head_front',
         lockVertical: true,
+        islandScaleBias: 2.4,
       }),
       tagPart(hairCap, 'shell_hair', 'woven_cloth', SHELL_COLORS.hair, {
+        accentHex: SHELL_COLORS.hair,
         lockVertical: true,
       }),
     ],
@@ -576,7 +578,7 @@ interface ModularAttachmentSpec {
  */
 function buildSlotAttachments(
   rig: CanonicalUalRig,
-  _classId: PlayerClassId,
+  classId: PlayerClassId,
   slot: EquipSlot,
   rarity: ItemRarity,
   cfg: InternalFinishConfig,
@@ -585,6 +587,7 @@ function buildSlotAttachments(
   const basePal = RARITY_COLOR_TABLE[rarity];
   const themeId = styleLoadout.materialTheme ?? 'rarity_auto';
   const theme = themeId !== 'rarity_auto' ? MATERIAL_THEMES[themeId] : null;
+  const classNormal = !theme && rarity === 'normal' ? CLASS_NORMAL_PALETTES[classId] : null;
   const pal = theme
     ? {
         ...basePal,
@@ -593,7 +596,16 @@ function buildSlotAttachments(
         trim: theme.trimHex,
         glow: theme.accentHex,
       }
-    : basePal;
+    : classNormal
+      ? {
+          ...basePal,
+          primary: classNormal.primary,
+          secondary: classNormal.secondary,
+          trim: classNormal.trim,
+          glow: classNormal.glow,
+        }
+      : basePal;
+  const paletteScope = theme ? themeId : classNormal ? `normal_${classId}` : rarity;
   const tier = pal.tierLevel;
   const out: ModularAttachmentSpec[] = [];
 
@@ -657,7 +669,7 @@ function applyWeaponGripPivotAndClamp(
       emblemHex: pal.trim,
       emissiveRuneHex: tier >= 3 ? pal.glow : null,
       usePool: true,
-      cacheKey: `nwl_equip:${slot}:${styleKey}:${rarity}:${themeId}:${boneName}`,
+      cacheKey: `nwl_equip:${slot}:${styleKey}:${rarity}:${paletteScope}:${boneName}`,
       inspectUvs: Boolean(opts.inspectUvs),
     });
     disposePartsArray(parts);
@@ -666,7 +678,15 @@ function applyWeaponGripPivotAndClamp(
 
   if (slot === 'helmet') {
     const hStyle = styleLoadout.helmet;
-    if (hStyle === 'none') return out;
+    if (hStyle === 'none') {
+      const hairParts = buildStylizedHairParts(SHELL_COLORS.hair, {
+        style: classId === 'mage' ? 'layered_ponytail' : classId === 'archer' ? 'layered_bob' : 'swept_short',
+        tagPrefix: 'equip_hair',
+        accentHex: SHELL_COLORS.hair,
+      });
+      bakeBoneParts('Head', hairParts, `hair_${classId}`, { isMetal: false, inspectUvs: false });
+      return out;
+    }
     const parts: TaggedGeometryPart[] = [];
     const hw = SHELL_CLEARANCE.headW + SHELL_CLEARANCE.plateMargin * 2.2;
     const hh = SHELL_CLEARANCE.headH + SHELL_CLEARANCE.plateMargin * 1.4;

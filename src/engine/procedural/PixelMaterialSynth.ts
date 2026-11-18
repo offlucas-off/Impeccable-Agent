@@ -84,8 +84,10 @@ export interface TextureQualityMetrics {
 // Bounded Texture Bundle Pool (prevents GPU texture leaks across interactive UI switches)
 // ---------------------------------------------------------------------------
 
-const MAX_POOLED_BUNDLES = 96;
+const MAX_POOLED_BUNDLES = 256;
 const MATERIAL_TEXTURE_POOL = new Map<string, SynthesizedMaterialTextures>();
+const MAX_POOLED_BAKED_ASSETS = 192;
+const BAKED_ASSET_POOL = new Map<string, BakedAssetResult>();
 
 function markTexturePooling(tex: THREE.DataTexture, pooled: boolean): void {
   tex.userData = { ...tex.userData, pooled };
@@ -139,6 +141,10 @@ export function clearPooledMaterialTextures(): void {
     disposeBundleTextures(bundle);
   }
   MATERIAL_TEXTURE_POOL.clear();
+  for (const asset of BAKED_ASSET_POOL.values()) {
+    asset.geometry.dispose();
+  }
+  BAKED_ASSET_POOL.clear();
 }
 
 // ---------------------------------------------------------------------------
@@ -1196,18 +1202,18 @@ function applySemanticLandmark(
     const skinBase = hexToRgb255(isl.baseHex);
     const blushCol: [number, number, number] = [244, 143, 158]; // #f48f9e from Reze body1
 
-    if (w >= 24 && h >= 24) {
+    if (w >= 20 && h >= 20) {
       const cx = (w - 1) * 0.5;
       const eyeY = h * 0.50;
       const eyeOffX = w * 0.22;
-      const eyeRx = Math.max(2.4, w * 0.115);
-      const eyeRy = Math.max(1.8, h * 0.085);
+      const eyeRx = Math.max(2.4, w * 0.118);
+      const eyeRy = Math.max(2.0, h * 0.095);
 
       // 1. Soft peach/coral cheek blush & subsurface nose warmth
       const blushY = h * 0.35;
       const blushOffX = w * 0.26;
       const blushRx = Math.max(2.0, w * 0.14);
-      const blushRy = Math.max(1.5, h * 0.085);
+      const blushRy = Math.max(1.5, h * 0.088);
       for (let ly = Math.max(0, Math.floor(blushY - blushRy * 2)); ly <= Math.min(h - 1, Math.ceil(blushY + blushRy * 2)); ly++) {
         for (let lx = 0; lx < w; lx++) {
           for (const side of [-1, 1]) {
@@ -1215,7 +1221,7 @@ function applySemanticLandmark(
             const dy = (ly - blushY) / blushRy;
             const d2 = dx * dx + dy * dy;
             if (d2 < 2.2) {
-              const weight = Math.exp(-d2 * 1.45) * 0.26;
+              const weight = Math.exp(-d2 * 1.45) * 0.28;
               blendPx(lx, ly, blushCol, weight);
             }
           }
@@ -1258,13 +1264,13 @@ function applySemanticLandmark(
               } else if (irisDist <= 1.0) {
                 const vIris = clamp01(0.5 + iy * 0.5);
                 col = vIris > 0.55 ? mixRgb(irisRgb, upperIris, (vIris - 0.55) / 0.45) : mixRgb(lowerIris, irisRgb, vIris / 0.55);
-                if (irisDist < 0.42) {
-                  col = mixRgb(col, pupilCol, 1 - smoothstep(0.28, 0.42, irisDist));
+                if (irisDist < 0.44) {
+                  col = mixRgb(col, pupilCol, 1 - smoothstep(0.28, 0.44, irisDist));
                 }
-                // Crisp specular catchlight in upper-left of iris
-                const specD = Math.hypot(ix + 0.28, iy - 0.34);
-                if (specD < 0.28) {
-                  col = mixRgb(col, [248, 248, 252], 1 - smoothstep(0.12, 0.28, specD));
+                // Crisp specular catchlight in upper-left of iris (remains legible down to 20px)
+                const specD = Math.hypot(ix + 0.26, iy - 0.32);
+                if (specD < 0.36) {
+                  col = mixRgb(col, [250, 250, 255], 1 - smoothstep(0.14, 0.36, specD));
                 }
               }
 
@@ -1273,7 +1279,7 @@ function applySemanticLandmark(
 
             // Crisp painted upper eyeliner / lash line
             const archY = eyeY + eyeRy * (0.85 - 0.65 * Math.min(1.3, nx * nx));
-            const lashThick = Math.max(0.9, eyeRy * 0.28);
+            const lashThick = Math.max(0.95, eyeRy * 0.30);
             if (Math.abs(nx) <= 1.18 && Math.abs(ly - archY) <= lashThick) {
               const lashAlpha = (1 - smoothstep(lashThick * 0.45, lashThick, Math.abs(ly - archY))) * (1 - smoothstep(0.95, 1.18, Math.abs(nx)));
               blendPx(lx, ly, browRgb, lashAlpha * 0.92, 0.72, undefined, 0.48);
@@ -1282,7 +1288,7 @@ function applySemanticLandmark(
             // Expressive tapered eyebrow arc
             const bx = dx / (eyeRx * 1.15);
             const browCenterY = eyeY + eyeRy * 1.68 + (1 - Math.min(1, bx * bx)) * eyeRy * 0.42;
-            const browThick = Math.max(0.85, eyeRy * 0.24);
+            const browThick = Math.max(0.88, eyeRy * 0.25);
             if (Math.abs(bx) <= 1.05 && Math.abs(ly - browCenterY) <= browThick) {
               const browAlpha = (1 - smoothstep(browThick * 0.4, browThick, Math.abs(ly - browCenterY))) * (1 - smoothstep(0.75, 1.05, Math.abs(bx)));
               blendPx(lx, ly, browRgb, browAlpha * 0.88, 0.78, undefined, 0.62);
@@ -2251,6 +2257,9 @@ export interface BakedAssetOptions extends Omit<UnwrapOptions, 'vertexColorMode'
   dilationPx?: number;
   /** Lock exact texelsPerMeter without adaptive Hi-Fi upscaling */
   exactTexelsPerMeter?: boolean;
+  /** Minimum islandScaleBias applied to `head_front` landmark parts (default 2.6) */
+  uvScaleBias?: number;
+  headFrontScaleBias?: number;
 }
 
 export interface UnwrapMetricsSummary {
@@ -2372,7 +2381,35 @@ function resolveAdaptiveHiFiTexelsPerMeter(
   const paddingPx = Math.max(4, Math.round(options.paddingPx ?? 4));
   const minAtlasSize = options.minAtlasSize ?? 64;
   const maxAtlasSize = options.maxAtlasSize ?? 1024;
+  if (options.maxAtlasSize !== undefined && !options.exactTexelsPerMeter) {
+    const chartOverheadPx = parts.length * 4 * paddingPx * 24;
+    const usablePx = Math.max(
+      maxAtlasSize * maxAtlasSize * 0.22,
+      maxAtlasSize * maxAtlasSize * 0.38 - chartOverheadPx
+    );
+    const maxSafePpm = Math.max(12, Math.floor(Math.sqrt(usablePx / area)));
+    ppm = Math.min(ppm, maxSafePpm);
+  }
   return { texelsPerMeter: ppm, minAtlasSize, maxAtlasSize, paddingPx };
+}
+
+function computePartsCacheSignature(parts: TaggedGeometryPart[]): string {
+  let totalVerts = 0;
+  let totalTris = 0;
+  const headTags: string[] = [];
+  for (let i = 0; i < parts.length; i++) {
+    const p = parts[i];
+    const g = p.geometry;
+    const pos = g.getAttribute('position');
+    const vCnt = pos?.count ?? 0;
+    const tCnt = g.index ? Math.floor(g.index.count / 3) : Math.floor(vCnt / 3);
+    totalVerts += vCnt;
+    totalTris += tCnt;
+    if (i < 3 || p.landmarkKind === 'head_front') {
+      headTags.push(`${p.partTag}:${p.baseHex}`);
+    }
+  }
+  return `${parts.length}:${totalVerts}:${totalTris}:${headTags.join(',')}`;
 }
 
 function measureMinVertexAo(geo: THREE.BufferGeometry): number {
@@ -2487,12 +2524,51 @@ export function bakeTaggedPartsAsset(
     partTriEnds.push({ endTri: runningTris, partTag: p.partTag });
   }
 
+  const headFrontPriority = options.uvScaleBias ?? options.headFrontScaleBias ?? 2.6;
+  const prioritizedParts = parts.map((p) => {
+    if (p.landmarkKind === 'head_front' || p.partTag === 'head_front') {
+      const boosted = Math.max(p.islandScaleBias ?? 1.0, headFrontPriority);
+      return boosted !== p.islandScaleBias ? { ...p, islandScaleBias: boosted } : p;
+    }
+    return p;
+  });
+
   const subdivideEdgeM = options.subdivideMaxEdgeM ?? 0;
   const willSubdivide = subdivideEdgeM > 0;
   const { texelsPerMeter, minAtlasSize, maxAtlasSize, paddingPx } =
-    resolveAdaptiveHiFiTexelsPerMeter(parts, options);
+    resolveAdaptiveHiFiTexelsPerMeter(prioritizedParts, options);
 
-  const unwrapped = unwrapPixelAligned(parts, {
+  const aoStrength = options.aoStrength ?? 0.55;
+  const gtaoStrength = options.gtaoStrength ?? Math.min(0.85, aoStrength);
+  const normalStrength =
+    options.pixelArtSampling === true
+      ? (options.normalStrength ?? 0.36)
+      : Math.max(options.normalStrength ?? 0.48, 0.36);
+
+  const prePoolKey =
+    options.usePool && options.cacheKey
+      ? `${options.cacheKey}:s${seed}:tpm${texelsPerMeter}:max${maxAtlasSize}:sub${subdivideEdgeM}:ao${options.aoRays ?? 16}:${Math.round(aoStrength * 20)}:g${Math.round(gtaoStrength * 20)}:n${Math.round(normalStrength * 20)}:${options.rarityTier ?? 'normal'}:${options.pixelArtSampling ? 'px' : 'hf'}:b${options.partTagToBoneIndex ? 1 : 0}:${computePartsCacheSignature(prioritizedParts)}`
+      : undefined;
+
+  if (prePoolKey) {
+    const cachedAsset = BAKED_ASSET_POOL.get(prePoolKey);
+    if (cachedAsset) {
+      BAKED_ASSET_POOL.delete(prePoolKey);
+      BAKED_ASSET_POOL.set(prePoolKey, cachedAsset);
+      const clonedGeo = cachedAsset.geometry.clone();
+      clonedGeo.userData = { ...cachedAsset.geometry.userData };
+      return {
+        ...cachedAsset,
+        geometry: clonedGeo,
+        dispose: () => {
+          clonedGeo.dispose();
+          cachedAsset.textures?.dispose();
+        },
+      };
+    }
+  }
+
+  const unwrapped = unwrapPixelAligned(prioritizedParts, {
     texelsPerMeter,
     paddingPx,
     minAtlasSize,
@@ -2502,13 +2578,6 @@ export function bakeTaggedPartsAsset(
     computeTangents: !willSubdivide,
     vertexColorMode: 'white_for_ao',
   });
-
-  const aoStrength = options.aoStrength ?? 0.55;
-  const gtaoStrength = options.gtaoStrength ?? Math.min(0.85, aoStrength);
-  const normalStrength =
-    options.pixelArtSampling === true
-      ? (options.normalStrength ?? 0.36)
-      : Math.max(options.normalStrength ?? 0.48, 0.36);
   const effectiveCacheKey = options.cacheKey
     ? `${options.cacheKey}:s${seed}:p${unwrapped.texWidth}x${unwrapped.texHeight}:g${Math.round(gtaoStrength * 20)}:n${Math.round(normalStrength * 20)}:${options.rarityTier ?? 'normal'}:${options.pixelArtSampling ? 'px' : 'hf'}`
     : undefined;
@@ -2652,7 +2721,7 @@ export function bakeTaggedPartsAsset(
   };
   outGeo.userData = { ...outGeo.userData, unwrapMetrics };
 
-  return {
+  const result: BakedAssetResult = {
     geometry: outGeo,
     finishMode,
     textures,
@@ -2665,6 +2734,25 @@ export function bakeTaggedPartsAsset(
       textures.dispose();
     },
   };
+
+  if (prePoolKey) {
+    const templateGeo = outGeo.clone();
+    templateGeo.userData = { ...outGeo.userData };
+    BAKED_ASSET_POOL.set(prePoolKey, {
+      ...result,
+      geometry: templateGeo,
+    });
+    if (BAKED_ASSET_POOL.size > MAX_POOLED_BAKED_ASSETS) {
+      const oldestKey = BAKED_ASSET_POOL.keys().next().value;
+      if (oldestKey !== undefined) {
+        const oldest = BAKED_ASSET_POOL.get(oldestKey);
+        BAKED_ASSET_POOL.delete(oldestKey);
+        oldest?.geometry.dispose();
+      }
+    }
+  }
+
+  return result;
 }
 
 /**

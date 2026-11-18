@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { PixelizerMaterial } from '../../engine/PixelizerMaterial';
+import { PixelizerMaterial, type PixelizerMaterialResources } from '../../engine/PixelizerMaterial';
 import type { VisualStylePresetId } from '../../engine/PixelizerPipeline';
 import {
   buildProceduralUalCharacter,
@@ -24,7 +24,10 @@ import {
 } from '../../engine/procedural/PlayerEquipmentBuilder';
 import type { GeneratedPropResult } from '../../engine/procedural/PropBuilder';
 import {
+  NWL_SPELL_VFX_CATALOG,
+  buildNwlSpellVfx,
   buildSpellVfxShowcase,
+  getSpellVfxRecipe,
   type GeneratedSpellVfxResult,
 } from '../../engine/procedural/SpellVfxBuilder';
 import {
@@ -32,6 +35,16 @@ import {
   type GeneratedStructureResult,
 } from '../../engine/procedural/TilesetStructureSolver';
 import { AnimationLibraryBank } from '../../engine/rigging/AnimationLibraryBank';
+import {
+  conditionClipWithEquipment,
+  detectSubjectEquipment,
+} from '../../engine/steppedAnimation';
+import {
+  InstancedVfxParticlePool,
+  PixelTrailRenderer,
+  VfxLightPool,
+  VfxTimelinePlayer,
+} from '../../engine/vfx';
 import { createNwlPlaySandbox } from '../../sandbox/NwlPlaySandbox';
 import {
   loadModelFromFile,
@@ -51,6 +64,218 @@ import {
   type ActiveStage,
   type StudioContext,
 } from '../state/studioContext';
+
+export interface AutoFrameParams {
+  orthoHeight: number;
+  target: THREE.Vector3;
+  size: THREE.Vector3;
+  center: THREE.Vector3;
+  shadowHalf: number;
+  cameraDistance: number;
+}
+
+/**
+ * Computes Box3-based orthographic camera framing for any loaded preset or generated asset.
+ */
+export function computeAutoFrameParams(
+  subjectRoot: THREE.Object3D,
+  isLargeStructure = false
+): AutoFrameParams {
+  subjectRoot.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(subjectRoot);
+  const size = new THREE.Vector3(1.2, 1.8, 1.2);
+  const center = new THREE.Vector3(0, 0.9, 0);
+  if (!box.isEmpty()) {
+    box.getSize(size);
+    box.getCenter(center);
+  }
+
+  if (isLargeStructure) {
+    const orthoHeight = Number(
+      THREE.MathUtils.clamp(
+        Math.max(size.x, size.z) * 0.84 + size.y * 0.9,
+        8.5,
+        30.0
+      ).toFixed(1)
+    );
+    return {
+      orthoHeight,
+      target: new THREE.Vector3(center.x, Math.max(1.2, center.y * 0.72), center.z),
+      size,
+      center,
+      shadowHalf: 22,
+      cameraDistance: 32,
+    };
+  }
+
+  const safeY = Number.isFinite(size.y) && size.y > 0.05 ? size.y : 1.8;
+  const orthoHeight = Number(THREE.MathUtils.clamp(safeY * 1.65, 2.6, 30.0).toFixed(1));
+  const targetY = Number.isFinite(center.y) ? center.y : Math.max(0.5, safeY * 0.5);
+  return {
+    orthoHeight,
+    target: new THREE.Vector3(
+      Number.isFinite(center.x) ? center.x : 0,
+      targetY,
+      Number.isFinite(center.z) ? center.z : 0
+    ),
+    size,
+    center,
+    shadowHalf: Math.max(6, Math.ceil(Math.max(size.x, safeY, size.z) * 1.2)),
+    cameraDistance: Math.max(12, orthoHeight * 1.8),
+  };
+}
+
+export interface StudioSpellVfxRunner {
+  root: THREE.Group;
+  vfxLayerGroup: THREE.Group;
+  vfx: GeneratedSpellVfxResult;
+  timeline: VfxTimelinePlayer;
+  particlePool: InstancedVfxParticlePool;
+  trailRenderer: PixelTrailRenderer;
+  lightPool: VfxLightPool;
+  durationSec: number;
+  step: (dt: number, motionTest?: boolean) => void;
+  reset: () => void;
+  dispose: () => void;
+}
+
+/**
+ * Wires `VfxTimelinePlayer`, `InstancedVfxParticlePool`, `PixelTrailRenderer`, and `VfxLightPool`
+ * around a `GeneratedSpellVfxResult` for continuous Studio playback and frame-by-frame spritesheet export.
+ */
+export function createStudioSpellVfxRunner(
+  vfx: GeneratedSpellVfxResult,
+  sharedResources?: PixelizerMaterialResources
+): StudioSpellVfxRunner {
+  const root = new THREE.Group();
+  root.name = `StudioVfx_${vfx.id}`;
+  const vfxLayerGroup = new THREE.Group();
+  vfxLayerGroup.name = `StudioVfxLayer_${vfx.id}`;
+
+  const recipe = getSpellVfxRecipe(vfx.id);
+  const durationSec = Math.max(0.25, recipe.totalDurationSec || vfx.meta.durationSec);
+  const particlePool = new InstancedVfxParticlePool(256, sharedResources);
+  const trailRenderer = new PixelTrailRenderer({
+    maxPoints: 28,
+    width: 0.22,
+    lifetimeSec: 0.34,
+    colorHex: vfx.meta.elementColor,
+    sharedResources,
+  });
+  const lightPool = new VfxLightPool(vfxLayerGroup as unknown as THREE.Scene, 6);
+  vfxLayerGroup.add(particlePool.mesh, trailRenderer.mesh);
+  root.add(vfx.root, vfxLayerGroup);
+
+  const isProjectile =
+    vfx.meta.category === 'projectile' ||
+    vfx.id === 'seta_fogo' ||
+    vfx.id === 'adaga_venenosa' ||
+    vfx.id === 'flecha_perfurante' ||
+    vfx.id === 'investida' ||
+    vfx.id === 'salto_sombrio';
+  const isTelegraph = vfx.meta.category === 'telegraph';
+
+  const emitOrigin = new THREE.Vector3(0, 0.55, 0);
+  const computeEmitOrigin = (p: number): THREE.Vector3 => {
+    if (vfx.id === 'meteoro') {
+      return emitOrigin.set(vfx.root.position.x, 0.6 + (1 - p) * 2.8, vfx.root.position.z);
+    }
+    if (isProjectile) {
+      return emitOrigin.set(vfx.root.position.x, 0.55, vfx.root.position.z);
+    }
+    if (isTelegraph) {
+      return emitOrigin.set(vfx.root.position.x, 0.12, vfx.root.position.z);
+    }
+    return emitOrigin.set(
+      vfx.root.position.x + Math.cos(p * Math.PI * 2) * 0.72,
+      0.55,
+      vfx.root.position.z + Math.sin(p * Math.PI * 2) * 0.72
+    );
+  };
+
+  let loopElapsed = 0;
+  let timeline: VfxTimelinePlayer | null = null;
+  timeline = new VfxTimelinePlayer(recipe, {
+    onStageEnter: (stageName) => {
+      const stageDef = recipe.stages.find((s) => s.name === stageName);
+      if (stageDef?.lightColor) {
+        const p = timeline ? timeline.getNormalizedProgress() : 0;
+        lightPool.spawnFlash(
+          computeEmitOrigin(p),
+          stageDef.lightColor,
+          stageDef.lightIntensity ?? 1.8,
+          stageDef.lightDistance ?? 5.5,
+          Math.max(0.15, stageDef.durationSec)
+        );
+      }
+    },
+    onSpawnParticles: (spec) => {
+      const p = timeline ? timeline.getNormalizedProgress() : 0;
+      particlePool.spawnBurst(computeEmitOrigin(p), spec);
+    },
+  });
+
+  const step = (dt: number, motionTest = false) => {
+    const clampedDt = Math.max(0, Math.min(0.1, dt));
+    if (clampedDt > 0 && timeline) {
+      loopElapsed += clampedDt;
+      if (timeline.isComplete()) {
+        timeline.reset();
+        loopElapsed = 0;
+      }
+      timeline.update(clampedDt);
+    }
+
+    const p = timeline ? timeline.getNormalizedProgress() : 0;
+    if (isProjectile) {
+      vfx.root.position.z = (p - 0.5) * 1.8;
+    } else {
+      vfx.root.position.z = 0;
+    }
+    vfx.root.position.x = motionTest ? Math.sin(loopElapsed * 2.4) * 1.0 : 0;
+    vfx.updatePhase(p);
+
+    if (clampedDt > 0) {
+      if (!isTelegraph) {
+        trailRenderer.addPoint(computeEmitOrigin(p));
+      }
+      lightPool.update(clampedDt);
+      particlePool.update(clampedDt);
+      trailRenderer.update(clampedDt);
+    }
+  };
+
+  const reset = () => {
+    loopElapsed = 0;
+    vfx.root.position.set(0, 0, 0);
+    vfx.updatePhase(0);
+    lightPool.clear();
+    timeline?.reset();
+  };
+
+  const dispose = () => {
+    lightPool.dispose(vfxLayerGroup as unknown as THREE.Scene);
+    particlePool.mesh.geometry.dispose();
+    particlePool.material.dispose();
+    trailRenderer.mesh.geometry.dispose();
+    trailRenderer.material.dispose();
+    vfx.dispose();
+  };
+
+  return {
+    root,
+    vfxLayerGroup,
+    vfx,
+    timeline,
+    particlePool,
+    trailRenderer,
+    lightPool,
+    durationSec,
+    step,
+    reset,
+    dispose,
+  };
+}
 
 export interface StageManagerHandle {
   buildStageWrapAndItems: (
@@ -106,38 +331,28 @@ export function createStageManager(
   function applyStageCameraFraming(subjectRoot: THREE.Object3D, isLargeStructure: boolean): void {
     const rngOrtho = ctx.rootElement.querySelector<HTMLInputElement>('#rng-ortho-h');
     const valOrtho = ctx.rootElement.querySelector<HTMLElement>('#val-ortho-h');
-    if (isLargeStructure) {
-      subjectRoot.updateMatrixWorld(true);
-      const box = new THREE.Box3().setFromObject(subjectRoot);
-      const size = new THREE.Vector3();
-      const center = new THREE.Vector3();
-      box.getSize(size);
-      box.getCenter(center);
-      const nextH = Number(
-        Math.max(8.5, Math.min(28.0, Math.max(size.x, size.z) * 0.84 + size.y * 0.9)).toFixed(1)
-      );
-      ctx.pipeline.cameraConfig.orthoHeight = nextH;
-      if (rngOrtho) rngOrtho.value = String(nextH);
-      if (valOrtho) valOrtho.textContent = nextH.toFixed(1);
-      ctx.orbitTarget.set(center.x, Math.max(1.2, center.y * 0.72), center.z);
-      ctx.dirLight.shadow.camera.left = -22;
-      ctx.dirLight.shadow.camera.right = 22;
-      ctx.dirLight.shadow.camera.top = 22;
-      ctx.dirLight.shadow.camera.bottom = -22;
-      ctx.dirLight.shadow.camera.updateProjectionMatrix();
-      ctx.actions.setCameraPose(30, 45, 32);
-    } else {
-      ctx.pipeline.cameraConfig.orthoHeight = 5.8;
-      if (rngOrtho) rngOrtho.value = '5.8';
-      if (valOrtho) valOrtho.textContent = '5.8';
-      ctx.orbitTarget.set(0, 1.0, 0);
-      ctx.dirLight.shadow.camera.left = -6;
-      ctx.dirLight.shadow.camera.right = 6;
-      ctx.dirLight.shadow.camera.top = 6;
-      ctx.dirLight.shadow.camera.bottom = -6;
-      ctx.dirLight.shadow.camera.updateProjectionMatrix();
-      ctx.actions.setCameraPose(30, 45, 12);
+    const frame = computeAutoFrameParams(subjectRoot, isLargeStructure);
+    const zoomLocked = ctx.rootElement.dataset.zoomLocked === 'true';
+
+    if (!zoomLocked) {
+      ctx.pipeline.cameraConfig.orthoHeight = frame.orthoHeight;
+      if (rngOrtho) {
+        const curMax = Number(rngOrtho.max) || 28;
+        if (frame.orthoHeight > curMax) {
+          rngOrtho.max = String(Math.ceil(frame.orthoHeight));
+        }
+        rngOrtho.value = String(frame.orthoHeight);
+      }
+      if (valOrtho) valOrtho.textContent = frame.orthoHeight.toFixed(1);
     }
+
+    ctx.orbitTarget.copy(frame.target);
+    ctx.dirLight.shadow.camera.left = -frame.shadowHalf;
+    ctx.dirLight.shadow.camera.right = frame.shadowHalf;
+    ctx.dirLight.shadow.camera.top = frame.shadowHalf;
+    ctx.dirLight.shadow.camera.bottom = -frame.shadowHalf;
+    ctx.dirLight.shadow.camera.updateProjectionMatrix();
+    ctx.actions.setCameraPose(30, 45, frame.cameraDistance);
   }
 
   function exitPlaySandbox(reloadPreset = true): void {
@@ -316,10 +531,28 @@ export function createStageManager(
     const bank = AnimationLibraryBank.getInstance();
     const applyBankClips = () => {
       if (ctx.activeStage?.subjectRoot !== subjectRoot) return;
-      const allClips = bank.getAll().map((x) => x.clip.clone());
+      const detected = detectSubjectEquipment(subjectRoot);
+      const player =
+        ctx.activePlayerInstance && ctx.activePlayerInstance.root === subjectRoot
+          ? ctx.activePlayerInstance
+          : null;
+      const eq = {
+        hasMainWeapon: player
+          ? (player.styleLoadout.weaponMain as string) !== 'none' || detected.hasMainWeapon
+          : detected.hasMainWeapon,
+        hasShield: player
+          ? player.styleLoadout.weaponOffhand !== 'none' || detected.hasShield
+          : detected.hasShield,
+      };
+      const allClips = bank.getAll().map((x) => {
+        const cloned = x.clip.clone();
+        return eq.hasMainWeapon || eq.hasShield
+          ? conditionClipWithEquipment(cloned, eq)
+          : cloned;
+      });
       if (allClips.length === 0) return;
       ctx.nativeModelClips = allClips;
-      ctx.animCtrl.bindModel(subjectRoot, allClips);
+      ctx.animCtrl.bindModel(subjectRoot, allClips, { equipmentFlags: eq });
       let idx = allClips.findIndex((c) => c.name === preferredName);
       if (idx < 0) idx = pickPreferredClipIndex(allClips);
       ctx.animCtrl.playClip(idx);
@@ -482,24 +715,44 @@ export function createStageManager(
     ctx.nativeModelClips = [];
     ctx.animCtrl.dispose();
     ctx.actions.syncAnimClipSelector([], 0);
+    const runner = createStudioSpellVfxRunner(
+      vfx,
+      ctx.pipeline.getSharedResourcesForMaterial()
+    );
     const { wrapScene, items } = buildStageWrapAndItems(
       vfx.root,
       vfx.meta.labelPt,
       vfx.materials
     );
+    wrapScene.remove(vfx.root);
+    runner.root.add(vfx.root, runner.vfxLayerGroup);
+    wrapScene.add(runner.root);
+
+    let prevT = 0;
+    let steppedViaRenderFrame = false;
+    runner.root.userData.vfxRunner = runner;
+    runner.root.userData.onRenderFrame = (dt: number) => {
+      steppedViaRenderFrame = true;
+      runner.step(dt, ctx.motionCreepTest);
+    };
 
     applyStage({
       name: `Magia / VFX NWL: ${vfx.meta.labelPt}`,
       description: `VFX 3D pixelado sem blur suave (${vfx.triangleCount} tris · Flat Palette LUT · duração ${vfx.meta.durationSec}s).`,
-      subjectRoot: vfx.root,
+      subjectRoot: runner.root,
       sceneRoot: wrapScene,
       items,
       updateAnimation: (t, motionTest) => {
-        const dur = Math.max(0.25, vfx.meta.durationSec);
-        vfx.updatePhase((t % dur) / dur);
-        vfx.root.position.x = motionTest ? Math.sin(t * 1.1) * 1.0 : 0;
+        if (steppedViaRenderFrame) {
+          steppedViaRenderFrame = false;
+          prevT = t;
+          return;
+        }
+        const dt = t >= prevT ? Math.min(0.1, t - prevT) : 0.016;
+        prevT = t;
+        runner.step(dt, motionTest);
       },
-      onCleanup: () => vfx.dispose(),
+      onCleanup: () => runner.dispose(),
     });
   }
 
@@ -717,7 +970,12 @@ export function createStageManager(
         for (const p of city.npcs) {
           if (p.instance.rig) {
             const mx = new THREE.AnimationMixer(p.instance.root);
-            mx.clipAction(idle.clone()).play();
+            const eq = detectSubjectEquipment(p.instance.root);
+            const clip =
+              eq.hasMainWeapon || eq.hasShield
+                ? conditionClipWithEquipment(idle, eq)
+                : idle.clone();
+            mx.clipAction(clip).play();
             npcMixers.push(mx);
           }
         }
@@ -774,7 +1032,12 @@ export function createStageManager(
         if (!clip) return;
         for (const a of actors) {
           const mx = new THREE.AnimationMixer(a.root);
-          mx.clipAction(clip.clone()).play();
+          const eq = detectSubjectEquipment(a.root);
+          const actorClip =
+            eq.hasMainWeapon || eq.hasShield
+              ? conditionClipWithEquipment(clip, eq)
+              : clip.clone();
+          mx.clipAction(actorClip).play();
           mixers.push(mx);
         }
       };
@@ -851,15 +1114,106 @@ export function createStageManager(
 
     if (value === 'nwl_spells_vfx') {
       ctx.loadRequestToken++;
-      const showcase = buildSpellVfxShowcase(ctx.pipeline.getSharedResourcesForMaterial());
+      const sharedRes = ctx.pipeline.getSharedResourcesForMaterial();
+      const showcase = buildSpellVfxShowcase(sharedRes);
+      const vfxLayer = new THREE.Group();
+      vfxLayer.name = 'NWL_Spell_VFX_Showcase_Layer';
+      const particlePool = new InstancedVfxParticlePool(256, sharedRes);
+      const trailRenderer = new PixelTrailRenderer({
+        maxPoints: 32,
+        width: 0.2,
+        lifetimeSec: 0.3,
+        colorHex: '#fa6a0a',
+        sharedResources: sharedRes,
+      });
+      const lightPool = new VfxLightPool(vfxLayer as unknown as THREE.Scene, 6);
+      vfxLayer.add(particlePool.mesh, trailRenderer.mesh);
+      showcase.root.add(vfxLayer);
+
+      const timelines = showcase.vfxItems.map((item, idx) => {
+        const recipe = getSpellVfxRecipe(item.id);
+        let tl: VfxTimelinePlayer | null = null;
+        tl = new VfxTimelinePlayer(recipe, {
+          onStageEnter: (stageName) => {
+            const st = recipe.stages.find((s) => s.name === stageName);
+            if (st?.lightColor) {
+              lightPool.spawnFlash(
+                item.root.position.clone().setY(item.root.position.y + 0.5),
+                st.lightColor,
+                st.lightIntensity ?? 1.6,
+                st.lightDistance ?? 4.5,
+                Math.max(0.15, st.durationSec)
+              );
+            }
+          },
+          onSpawnParticles: (spec) => {
+            particlePool.spawnBurst(
+              item.root.position.clone().setY(item.root.position.y + 0.4),
+              spec
+            );
+          },
+        });
+        // Stagger initial phases so the 9 showcase spells pulse asynchronously
+        if (idx > 0) tl.update((idx * 0.14) % Math.max(0.25, recipe.totalDurationSec));
+        return tl;
+      });
+
+      const stepShowcase = (dt: number) => {
+        const clamped = Math.max(0, Math.min(0.1, dt));
+        if (clamped <= 0) return;
+        for (let i = 0; i < showcase.vfxItems.length; i++) {
+          const tl = timelines[i];
+          if (tl.isComplete()) tl.reset();
+          tl.update(clamped);
+          showcase.vfxItems[i].updatePhase(tl.getNormalizedProgress());
+        }
+        const leadPos = showcase.vfxItems[0]?.root.position;
+        if (leadPos) {
+          const p0 = timelines[0].getNormalizedProgress();
+          trailRenderer.addPoint(
+            new THREE.Vector3(
+              leadPos.x + Math.cos(p0 * Math.PI * 2) * 0.65,
+              leadPos.y + 0.45,
+              leadPos.z + Math.sin(p0 * Math.PI * 2) * 0.65
+            )
+          );
+        }
+        lightPool.update(clamped);
+        particlePool.update(clamped);
+        trailRenderer.update(clamped);
+      };
+
+      let prevT = 0;
+      let steppedViaRenderFrame = false;
+      showcase.root.userData.onRenderFrame = (dt: number) => {
+        steppedViaRenderFrame = true;
+        stepShowcase(dt);
+      };
+
       mountNwlCustomScene({
         name: 'NWL: Magias & VFX 3D Pixelados',
         description: `Catálogo com ${showcase.vfxItems.length} efeitos (projéteis, skills de classe, telegraphs e impactos sem blur suave).`,
         root: showcase.root,
         materials: showcase.materials,
         isLargeStructure: true,
-        onUpdate: (t) => showcase.update(t),
-        onCleanup: () => showcase.dispose(),
+        onUpdate: (t) => {
+          if (steppedViaRenderFrame) {
+            steppedViaRenderFrame = false;
+            prevT = t;
+            return;
+          }
+          const dt = t >= prevT ? Math.min(0.1, t - prevT) : 0.016;
+          prevT = t;
+          stepShowcase(dt);
+        },
+        onCleanup: () => {
+          lightPool.dispose(vfxLayer as unknown as THREE.Scene);
+          particlePool.mesh.geometry.dispose();
+          particlePool.material.dispose();
+          trailRenderer.mesh.geometry.dispose();
+          trailRenderer.material.dispose();
+          showcase.dispose();
+        },
       });
       return;
     }
@@ -935,6 +1289,14 @@ export function createStageManager(
         ctx.pipeline.getSharedResourcesForMaterial()
       );
       mountGeneratedStructure(struct);
+      return;
+    }
+
+    const spellMeta = NWL_SPELL_VFX_CATALOG.find((s) => s.id === value);
+    if (spellMeta) {
+      ctx.loadRequestToken++;
+      const vfx = buildNwlSpellVfx(spellMeta.id, ctx.pipeline.getSharedResourcesForMaterial());
+      mountNwlSpellVfx(vfx);
       return;
     }
 

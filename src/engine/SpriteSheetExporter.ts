@@ -74,13 +74,37 @@ export function captureSingleFrameDataUrl(
   return canvas.toDataURL('image/png');
 }
 
+export interface VfxFrameStepInfo {
+  progress01: number;
+  frameIndex: number;
+  totalFrames: number;
+  directionIndex: number;
+  dtSeconds: number;
+}
+
+export interface VfxTimelineSteppable {
+  update: (dt: number) => void;
+  reset?: () => void;
+  totalDurationSec?: number;
+}
+
+export interface SpriteSheetVfxOptions {
+  /** Optional frame-by-frame VFX callback invoked right before each frame render. */
+  onStepVfxFrame?: (info: VfxFrameStepInfo) => void;
+  /** Optional VfxTimelinePlayer (or compatible stepper) advanced per frame. */
+  vfxTimeline?: VfxTimelineSteppable;
+  /** Total duration in seconds used when stepping `vfxTimeline` (defaults to timeline duration or 1.0s). */
+  vfxDurationSec?: number;
+}
+
 export function exportTurntableSpriteSheet(
   pipeline: PixelizerPipeline,
   scene: THREE.Scene,
   camera: THREE.Camera,
   targetObject: THREE.Object3D,
   options: SpriteSheetExportOptions,
-  animController?: SteppedAnimationController
+  animController?: SteppedAnimationController,
+  vfxOptions?: SpriteSheetVfxOptions
 ): SpriteSheetExportResult {
   const {
     directions,
@@ -129,15 +153,34 @@ export function exportTurntableSpriteSheet(
       ? animController.getClips()[animController.getActiveClipIndex()]?.duration || 1.0
       : 1.0;
 
+  const vfxDuration = Math.max(
+    0.1,
+    vfxOptions?.vfxDurationSec ?? vfxOptions?.vfxTimeline?.totalDurationSec ?? 1.0
+  );
+  const vfxDt = cols > 0 ? vfxDuration / cols : vfxDuration;
+
   for (let d = 0; d < rows; d++) {
     const yawDeg = startYawDeg + (d / rows) * 360;
     targetObject.rotation.y = origYaw + THREE.MathUtils.degToRad(yawDeg);
+    vfxOptions?.vfxTimeline?.reset?.();
 
     for (let f = 0; f < cols; f++) {
       if (animController) {
         const t = cols > 1 ? (f / cols) * clipDuration : origTime;
         animController.setTime(t);
       }
+
+      const dtSeconds = f === 0 ? 0 : vfxDt;
+      if (f > 0) {
+        vfxOptions?.vfxTimeline?.update(vfxDt);
+      }
+      vfxOptions?.onStepVfxFrame?.({
+        progress01: cols > 0 ? f / cols : 0,
+        frameIndex: f,
+        totalFrames: cols,
+        directionIndex: d,
+        dtSeconds,
+      });
 
       pipeline.render(scene, camera, rt);
       pipeline.renderer.readRenderTargetPixels(rt, 0, 0, frameWidth, frameHeight, pixels);
@@ -200,7 +243,7 @@ export function exportTurntableSpriteSheet(
   };
 }
 
-export interface NwlIsometricSheetOptions {
+export interface NwlIsometricSheetOptions extends SpriteSheetVfxOptions {
   targetCharHeightPx?: number; // default 108 (NWL official: 1.79m = 108px, 1m = 60px)
   boxSizePx?: number;          // auto >= max(96, round(charH * 2.4)) to prevent Death01 clipping
   framesPerDirection?: number; // default 8
@@ -561,16 +604,35 @@ export function exportNwlIsometricSheet(
   const clipDuration = animController?.getActiveClip()?.duration || 1.0;
   let clippedFrames = 0;
 
+  const vfxDuration = Math.max(
+    0.1,
+    options.vfxDurationSec ?? options.vfxTimeline?.totalDurationSec ?? 1.0
+  );
+  const vfxDt = cols > 0 ? vfxDuration / cols : vfxDuration;
+
   try {
     for (let d = 0; d < rows; d++) {
       const yawDeg = (d / rows) * 360;
       targetObject.rotation.y = origYaw + THREE.MathUtils.degToRad(yawDeg);
+      options.vfxTimeline?.reset?.();
 
       for (let f = 0; f < cols; f++) {
         if (animController) {
           const t = cols > 1 ? (f / cols) * clipDuration : origTime;
           animController.setTime(t);
         }
+
+        const dtSeconds = f === 0 ? 0 : vfxDt;
+        if (f > 0) {
+          options.vfxTimeline?.update(vfxDt);
+        }
+        options.onStepVfxFrame?.({
+          progress01: cols > 0 ? f / cols : 0,
+          frameIndex: f,
+          totalFrames: cols,
+          directionIndex: d,
+          dtSeconds,
+        });
 
         pipeline.render(scene, isoCam, rt);
         pipeline.renderer.readRenderTargetPixels(rt, 0, 0, boxPx, boxPx, pixels);
