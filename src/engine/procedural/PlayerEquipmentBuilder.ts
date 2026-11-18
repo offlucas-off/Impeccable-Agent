@@ -2251,9 +2251,7 @@ export function buildNwlPlayerCharacter(
             ? 'hand_r'
             : spec.boneName === 'hand_l'
               ? 'hand_l'
-              : spec.boneName === 'Head'
-                ? 'head'
-                : null;
+              : null;
       const mountParent =
         (socketName ? rig.sockets[socketName] : undefined) ??
         rig.boneByName.get(spec.boneName) ??
