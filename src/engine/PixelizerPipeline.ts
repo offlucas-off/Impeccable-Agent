@@ -11,7 +11,11 @@ import {
   FULLSCREEN_VERTEX_SHADER,
 } from './shaders/expansionShader';
 import { OUTLINE_EDGE_FRAGMENT_SHADER } from './shaders/outlineEdgeShader';
-import { UPSCALE_FRAGMENT_SHADER } from './shaders/upscaleShader';
+import {
+  BLOOM_BLUR_FRAGMENT_SHADER,
+  BLOOM_EXTRACT_FRAGMENT_SHADER,
+  UPSCALE_FRAGMENT_SHADER,
+} from './shaders/upscaleShader';
 import {
   computeCameraGrid,
   projectWorldToBufferPixel,
@@ -52,9 +56,13 @@ layout(location = 3) out vec4 gNormalDepth;
 
 uniform vec3 uBgColorSrgb;
 uniform float uBgAlpha;
+uniform float uEncodeBloomAlpha;
 
 void main() {
-  gColor = vec4(uBgColorSrgb, uBgAlpha);
+  float outA = (uEncodeBloomAlpha > 0.5)
+    ? ((uBgAlpha > 0.5) ? 0.5 : 0.0)
+    : uBgAlpha;
+  gColor = vec4(uBgColorSrgb, outA);
   gOutline = vec4(0.0);
   gMeta = vec4(0.0);
   gNormalDepth = vec4(0.5, 0.5, 0.5, 1.0);
@@ -78,6 +86,8 @@ export class PixelizerPipeline {
   private expansionTarget: THREE.WebGLRenderTarget | null = null;
   private outlinedTarget: THREE.WebGLRenderTarget | null = null;
   private rawTarget: THREE.WebGLRenderTarget | null = null;
+  private bloomTargetA: THREE.WebGLRenderTarget | null = null;
+  private bloomTargetB: THREE.WebGLRenderTarget | null = null;
 
   private quadGeo: THREE.BufferGeometry;
   private fsScene: THREE.Scene;
@@ -88,6 +98,8 @@ export class PixelizerPipeline {
   private expansionMat: THREE.ShaderMaterial;
   private outlineMat: THREE.ShaderMaterial;
   private upscaleMat: THREE.ShaderMaterial;
+  private bloomExtractMat: THREE.ShaderMaterial;
+  private bloomBlurMat: THREE.ShaderMaterial;
 
   // Active GPU lookup resources
   private ditherMap = new Map<string, { config: DitherPattern4x4; tex: THREE.DataTexture }>();
@@ -149,6 +161,9 @@ export class PixelizerPipeline {
       debugView: 'final',
       splitCompare: false,
       splitPosition: 0.5,
+      bloomEnabled: false,
+      bloomThreshold: 0.38,
+      bloomIntensity: 0.45,
       ...pipelineConfig,
     };
 
@@ -178,6 +193,7 @@ export class PixelizerPipeline {
       uniforms: {
         uBgColorSrgb: { value: new THREE.Vector3(0.07, 0.08, 0.12) },
         uBgAlpha: { value: 1.0 },
+        uEncodeBloomAlpha: { value: 0.0 },
       },
       depthTest: false,
       depthWrite: false,
@@ -226,6 +242,30 @@ export class PixelizerPipeline {
       depthWrite: false,
     });
 
+    this.bloomExtractMat = new THREE.ShaderMaterial({
+      glslVersion: THREE.GLSL3,
+      vertexShader: FULLSCREEN_VERTEX_SHADER,
+      fragmentShader: BLOOM_EXTRACT_FRAGMENT_SHADER,
+      uniforms: {
+        tSource: { value: null },
+        uBloomThreshold: { value: 0.38 },
+      },
+      depthTest: false,
+      depthWrite: false,
+    });
+
+    this.bloomBlurMat = new THREE.ShaderMaterial({
+      glslVersion: THREE.GLSL3,
+      vertexShader: FULLSCREEN_VERTEX_SHADER,
+      fragmentShader: BLOOM_BLUR_FRAGMENT_SHADER,
+      uniforms: {
+        tSource: { value: null },
+        uTexelStep: { value: new THREE.Vector2(0.002, 0.0) },
+      },
+      depthTest: false,
+      depthWrite: false,
+    });
+
     this.upscaleMat = new THREE.ShaderMaterial({
       glslVersion: THREE.GLSL3,
       vertexShader: FULLSCREEN_VERTEX_SHADER,
@@ -233,6 +273,7 @@ export class PixelizerPipeline {
       uniforms: {
         tPixelized: { value: null },
         tRaw3D: { value: null },
+        tBloom: { value: null },
         uLowResSize: { value: new THREE.Vector2(1, 1) },
         uScreenSize: { value: new THREE.Vector2(1, 1) },
         uSubpixelOffsetUv: { value: new THREE.Vector2(0, 0) },
@@ -242,6 +283,8 @@ export class PixelizerPipeline {
         uShowRawOnly: { value: 0.0 },
         uTransparentBg: { value: 0.0 },
         uBgColorSrgb: { value: new THREE.Vector3(0.07, 0.08, 0.12) },
+        uBloomEnabled: { value: 0.0 },
+        uBloomIntensity: { value: 0.45 },
       },
       depthTest: false,
       depthWrite: false,
@@ -389,6 +432,9 @@ export class PixelizerPipeline {
       this.pipelineConfig.lightColor = '#fff6e8';
       this.pipelineConfig.lightIntensity = 1.4;
       this.pipelineConfig.ambientSkyColor = '#7f93c2';
+      this.pipelineConfig.bloomEnabled = false;
+      this.pipelineConfig.bloomThreshold = 0.38;
+      this.pipelineConfig.bloomIntensity = 0.45;
       if (scene) {
         scene.traverse((obj) => {
           if (obj instanceof THREE.Mesh) {
@@ -426,6 +472,9 @@ export class PixelizerPipeline {
       this.pipelineConfig.lightColor = '#ffd8a8';
       this.pipelineConfig.lightIntensity = 1.65;
       this.pipelineConfig.ambientSkyColor = '#283254';
+      this.pipelineConfig.bloomEnabled = true;
+      this.pipelineConfig.bloomThreshold = 0.35;
+      this.pipelineConfig.bloomIntensity = 0.55;
       if (scene) {
         scene.traverse((obj) => {
           if (obj instanceof THREE.Mesh) {
@@ -531,6 +580,28 @@ export class PixelizerPipeline {
       }
     }
 
+    const bloomW = Math.max(1, Math.floor(passW / 2));
+    const bloomH = Math.max(1, Math.floor(passH / 2));
+    if (
+      this.pipelineConfig.bloomEnabled &&
+      (!this.bloomTargetA ||
+        this.bloomTargetA.width !== bloomW ||
+        this.bloomTargetA.height !== bloomH)
+    ) {
+      this.bloomTargetA?.dispose();
+      this.bloomTargetB?.dispose();
+      const bloomOpts: THREE.RenderTargetOptions = {
+        minFilter: THREE.LinearFilter,
+        magFilter: THREE.LinearFilter,
+        format: THREE.RGBAFormat,
+        type: floatType,
+        depthBuffer: false,
+        stencilBuffer: false,
+      };
+      this.bloomTargetA = new THREE.WebGLRenderTarget(bloomW, bloomH, bloomOpts);
+      this.bloomTargetB = new THREE.WebGLRenderTarget(bloomW, bloomH, bloomOpts);
+    }
+
     const needsRaw =
       this.pipelineConfig.splitCompare || this.pipelineConfig.debugView === 'raw_3d';
     if (
@@ -633,6 +704,7 @@ export class PixelizerPipeline {
       for (const item of materialsList) {
         item.mat.uniforms.uPixelated.value = 0;
         item.mat.uniforms.uUsePixelExpansion.value = 0;
+        item.mat.uniforms.uEncodeBloomAlpha.value = 0;
         item.mat.uniforms.uCameraNear.value =
           (camera as THREE.OrthographicCamera | THREE.PerspectiveCamera).near ?? 0.1;
         item.mat.uniforms.uCameraFar.value =
@@ -645,6 +717,7 @@ export class PixelizerPipeline {
       this.renderer.clearDepth();
       this.clearMat.uniforms.uBgColorSrgb.value.set(bgSrgb.r, bgSrgb.g, bgSrgb.b);
       this.clearMat.uniforms.uBgAlpha.value = bgAlpha;
+      this.clearMat.uniforms.uEncodeBloomAlpha.value = 0;
       this.fsQuad.material = this.clearMat;
       this.renderer.render(this.fsScene, this.fsCamera);
       this.renderer.autoClear = false;
@@ -690,6 +763,7 @@ export class PixelizerPipeline {
       ((cfg.usePixelExpansion && cfg.filterMode === 'only_pixelized') ||
         (cfg.usePixelExpansion && cfg.filterMode === 'full_scene' && camCfg.downscaleRatio <= 2) ||
         isSeedDebug);
+    const encodeBloomAlpha = cfg.bloomEnabled && cfg.debugView === 'final' ? 1 : 0;
 
     const tempVec = new THREE.Vector3();
 
@@ -720,6 +794,7 @@ export class PixelizerPipeline {
       m.uniforms.uPixelSize.value = Math.max(1, effectiveP);
       m.uniforms.uForceFlatDither.value = isCelHard ? 1 : 0;
       m.uniforms.uUsePixelExpansion.value = expansionAllowed && effectiveP > 1 ? 1 : 0;
+      m.uniforms.uEncodeBloomAlpha.value = encodeBloomAlpha;
       m.uniforms.uCameraNear.value =
         (camera as THREE.OrthographicCamera | THREE.PerspectiveCamera).near ?? 0.1;
       m.uniforms.uCameraFar.value =
@@ -743,6 +818,7 @@ export class PixelizerPipeline {
     this.renderer.clearDepth();
     this.clearMat.uniforms.uBgColorSrgb.value.set(bgSrgb.r, bgSrgb.g, bgSrgb.b);
     this.clearMat.uniforms.uBgAlpha.value = bgAlpha;
+    this.clearMat.uniforms.uEncodeBloomAlpha.value = encodeBloomAlpha;
     this.fsQuad.material = this.clearMat;
     this.renderer.render(this.fsScene, this.fsCamera);
 
@@ -764,7 +840,9 @@ export class PixelizerPipeline {
       item.mat.uniforms.uPixelated.value = item.origPixelated ? 1 : 0;
       item.mat.uniforms.uUsePixelExpansion.value = item.origExpand;
       item.mat.uniforms.uForceFlatDither.value = 0;
+      item.mat.uniforms.uEncodeBloomAlpha.value = 0;
     }
+    this.clearMat.uniforms.uEncodeBloomAlpha.value = 0;
 
     // 5. Pass 2: Pixel Expansion (Attempt #3, supports up to 10x10 macropixels)
     const searchRadius = Math.min(6, Math.max(1, Math.ceil(maxPixelSize * 0.5) + 1));
@@ -823,10 +901,46 @@ export class PixelizerPipeline {
     this.renderer.setRenderTarget(this.outlinedTarget);
     this.renderer.render(this.fsScene, this.fsCamera);
 
-    // 7. Pass 4: Upscale + Subpixel Motion + Split Compare -> Screen or Export RenderTarget
+    // 6.5. Optional Pixel-Aligned HDR Emissive Bloom (Extract -> H Blur -> V Blur)
+    const runBloom =
+      cfg.bloomEnabled &&
+      cfg.debugView === 'final' &&
+      Boolean(this.bloomTargetA && this.bloomTargetB);
+    if (runBloom && this.bloomTargetA && this.bloomTargetB) {
+      const bloomW = this.bloomTargetA.width;
+      const bloomH = this.bloomTargetA.height;
+      this.bloomExtractMat.uniforms.tSource.value = this.expansionTarget.textures[0];
+      this.bloomExtractMat.uniforms.uBloomThreshold.value = cfg.bloomThreshold;
+      this.fsQuad.material = this.bloomExtractMat;
+      this.renderer.setRenderTarget(this.bloomTargetA);
+      this.renderer.render(this.fsScene, this.fsCamera);
+
+      this.bloomBlurMat.uniforms.tSource.value = this.bloomTargetA.texture;
+      (this.bloomBlurMat.uniforms.uTexelStep.value as THREE.Vector2).set(
+        1.6 / Math.max(1, bloomW),
+        0.0
+      );
+      this.fsQuad.material = this.bloomBlurMat;
+      this.renderer.setRenderTarget(this.bloomTargetB);
+      this.renderer.render(this.fsScene, this.fsCamera);
+
+      this.bloomBlurMat.uniforms.tSource.value = this.bloomTargetB.texture;
+      (this.bloomBlurMat.uniforms.uTexelStep.value as THREE.Vector2).set(
+        0.0,
+        1.6 / Math.max(1, bloomH)
+      );
+      this.renderer.setRenderTarget(this.bloomTargetA);
+      this.renderer.render(this.fsScene, this.fsCamera);
+    }
+
+    // 7. Pass 4: Upscale + HDR Bloom + Subpixel Motion + Split Compare -> Screen or Export RenderTarget
     this.upscaleMat.uniforms.tPixelized.value = this.outlinedTarget.texture;
     this.upscaleMat.uniforms.tRaw3D.value =
       this.rawTarget?.textures[0] ?? this.outlinedTarget.texture;
+    this.upscaleMat.uniforms.tBloom.value =
+      runBloom && this.bloomTargetA
+        ? this.bloomTargetA.texture
+        : this.outlinedTarget.texture;
     (this.upscaleMat.uniforms.uLowResSize.value as THREE.Vector2).set(passW, passH);
     (this.upscaleMat.uniforms.uScreenSize.value as THREE.Vector2).set(screenW, screenH);
     (this.upscaleMat.uniforms.uSubpixelOffsetUv.value as THREE.Vector2).copy(
@@ -843,6 +957,8 @@ export class PixelizerPipeline {
       bgSrgb.g,
       bgSrgb.b
     );
+    this.upscaleMat.uniforms.uBloomEnabled.value = runBloom ? 1 : 0;
+    this.upscaleMat.uniforms.uBloomIntensity.value = cfg.bloomIntensity;
 
     this.fsQuad.material = this.upscaleMat;
     this.renderer.setRenderTarget(outputTarget);
@@ -867,10 +983,14 @@ export class PixelizerPipeline {
     this.expansionTarget?.dispose();
     this.outlinedTarget?.dispose();
     this.rawTarget?.dispose();
+    this.bloomTargetA?.dispose();
+    this.bloomTargetB?.dispose();
     this.quadGeo.dispose();
     this.clearMat.dispose();
     this.expansionMat.dispose();
     this.outlineMat.dispose();
+    this.bloomExtractMat.dispose();
+    this.bloomBlurMat.dispose();
     this.upscaleMat.dispose();
     for (const d of this.ditherMap.values()) d.tex.dispose();
     for (const r of this.rampMap.values()) r.tex.dispose();

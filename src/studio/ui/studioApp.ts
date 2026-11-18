@@ -7,6 +7,8 @@ import {
 import { exportNwlIsometricSheet } from '../../engine/SpriteSheetExporter';
 import { voxelizeObject3DRigged } from '../../engine/Voxelizer';
 import { exportRiggedAssetToGlb } from '../../engine/rigging/RiggedExporter';
+import { autoRigStaticHumanoidToUal } from '../../engine/rigging/AutoRigBinder';
+import { detectUalSkeletonCompatibility } from '../../engine/rigging/UalRigSpec';
 import type { UnwrapMetricsSummary } from '../../engine/procedural/PixelMaterialSynth';
 import { SteppedAnimationController } from '../../engine/steppedAnimation';
 import type { DebugViewMode } from '../../engine/types';
@@ -115,10 +117,10 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
       </div>
 
       <div class="topbar-center">
-        <label class="btn btn-sm" title="Import .glb, .gltf, .obj, .fbx or .stl">
+        <label class="btn btn-sm" title="Import .glb, .gltf, .obj, .fbx, .stl or .zip">
           ${ICONS.upload}
           <span>Import 3D</span>
-          <input id="file-model-input" type="file" accept=".glb,.gltf,.obj,.fbx,.stl" style="display:none;" />
+          <input id="file-model-input" type="file" accept=".glb,.gltf,.obj,.fbx,.stl,.zip" style="display:none;" />
         </label>
         <button id="btn-split-compare" class="btn btn-sm" type="button" title="Toggle Raw 3D vs Pixelized Split Compare">
           ${ICONS.split}
@@ -153,7 +155,7 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
 
         <div id="drop-overlay" class="drop-overlay">
           <strong>Drop 3D Model Here</strong>
-          <span>Supports .GLB, .GLTF, .OBJ, .FBX, and .STL</span>
+          <span>Supports .GLB, .GLTF, .OBJ, .FBX, .STL, and .ZIP</span>
         </div>
 
         <div id="scene-caption" class="scene-caption">
@@ -563,6 +565,48 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
         });
         stageMgr.bindUalClipsToSubject(voxRes.root, 'Idle_Loop');
       },
+      onAutoRigStaticRequested: () => {
+        if (!ctx.activeStage) return null;
+        const subj = ctx.activeStage.subjectRoot;
+        const compat = detectUalSkeletonCompatibility(subj);
+        if (compat.compatible) {
+          return { detectedPose: 'ual', armAngleDeg: 0, meshCount: 0, alreadyUal: true };
+        }
+        const autoRes = autoRigStaticHumanoidToUal(
+          subj,
+          pipeline.getSharedResourcesForMaterial(),
+          {
+            targetHeightM: 1.79,
+            pixelSize: 3,
+            objectId: 10,
+            name: `${getExportSlug()}_ual`,
+          }
+        );
+        const { wrapScene, items } = stageMgr.buildStageWrapAndItems(
+          autoRes.root,
+          autoRes.name,
+          autoRes.materials
+        );
+        animCtrl.dispose();
+        stageMgr.applyStage({
+          name: `Auto-Rigged UAL: ${ctx.activeStage.name}`,
+          description: `Humanoide estático (${autoRes.detectedPose === 'a_pose' ? `A-Pose ${autoRes.armAngleDeg}° → T-Pose` : 'T-Pose'}) convertido em SkinnedMesh 65 Bones UAL (${autoRes.skinnedMeshes.length} malha(s) · 1.79m).`,
+          subjectRoot: autoRes.root,
+          sceneRoot: wrapScene,
+          items,
+          updateAnimation: (t, motionTest) => {
+            autoRes.root.position.x = motionTest ? Math.sin(t * 1.1) * 1.25 : 0;
+          },
+          onCleanup: () => autoRes.dispose(),
+        });
+        stageMgr.bindUalClipsToSubject(autoRes.root, 'Idle_Loop');
+        return {
+          detectedPose: autoRes.detectedPose,
+          armAngleDeg: autoRes.armAngleDeg,
+          meshCount: autoRes.skinnedMeshes.length,
+          alreadyUal: false,
+        };
+      },
       getSharedMaterialResources: () => pipeline.getSharedResourcesForMaterial(),
       onPropAttachedToSubject: () => {
         stageMgr.refreshStageSceneItems();
@@ -881,6 +925,15 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
     }
     controls.update();
 
+    const shakeOffset = ctx.activeSandbox?.getCameraShakeOffset?.();
+    const hasShake = Boolean(shakeOffset && shakeOffset.lengthSq() > 1e-8);
+    if (hasShake && shakeOffset) {
+      ctx.activeCamera.position.add(shakeOffset);
+      controls.target.add(shakeOffset);
+      ctx.activeCamera.lookAt(controls.target);
+      ctx.activeCamera.updateMatrixWorld();
+    }
+
     pipeline.render(scene, ctx.activeCamera);
     if (ctx.skeletonOverlayEnabled && ctx.skeletonHelper) {
       renderer.setRenderTarget(null);
@@ -888,6 +941,12 @@ export function mountPixelizerStudio(rootElement: HTMLElement): () => void {
       renderer.clearDepth();
       renderer.render(overlayScene, ctx.activeCamera);
       renderer.autoClear = true;
+    }
+
+    if (hasShake && shakeOffset) {
+      ctx.activeCamera.position.sub(shakeOffset);
+      controls.target.sub(shakeOffset);
+      ctx.activeCamera.updateMatrixWorld();
     }
 
     const grid = pipeline.getLastGrid();

@@ -482,7 +482,7 @@ export function buildProceduralProp(
     finishMode,
     texelsPerMeter: ppm,
     seed,
-    aoRays: 16,
+    aoRays: 12,
     aoMaxDist: recommendedSocket === 'floor' ? 0.65 : 0.35,
     aoStrength: options.aoStrength ?? 0.55,
     normalStrength: options.normalStrength ?? 0.36,

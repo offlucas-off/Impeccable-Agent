@@ -1,7 +1,12 @@
 @echo off
+chcp 65001 >nul
 setlocal
 cd /d "%~dp0"
-echo === Pixelizer 3D Engine & UAL AnimViewer Studio ===
+if exist "iniciar_studio.bat" (
+  call "iniciar_studio.bat"
+  exit /b %ERRORLEVEL%
+)
+echo === Pixelizer 3D Engine & NWL Production Studio ===
 if not exist "node_modules" (
   echo Instalando dependencias pela primeira vez...
   call npm install

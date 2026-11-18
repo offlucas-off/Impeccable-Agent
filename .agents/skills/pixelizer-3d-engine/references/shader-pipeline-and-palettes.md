@@ -9,10 +9,10 @@ Detailed reference for editing the 4-pass WebGL2 `GLSL3` rendering pipeline, TBN
 | Pass | Target / Shader | Behavior |
 |---|---|---|
 | **Pass 0** | Shadow Maps (`THREE.BasicShadowMap`) | Casts crisp shadows onto world & characters |
-| **Pass 1** | `objectShader.ts` -> 4 MRT attachments | Skinning + Morphs + Instancing + Lengyel TBN (`USE_TANGENT`) / cotangent fallback + Sparse seed clipping (`1..10`) + Dir/Point/`SpotLight` Cel + Stepped Cel Rim Light + Dual LUT + `screen_macropixel`/`object_uv` Dither |
+| **Pass 1** | `objectShader.ts` -> 4 MRT attachments | Skinning + Morphs + Instancing + Lengyel TBN (`USE_TANGENT`) / cotangent fallback + Sparse seed clipping (`1..10`) + Dir/Point/`SpotLight` Cel + Stepped Cel Rim Light + Dual LUT + `screen_macropixel`/`object_uv` Dither + optional HDR bloom alpha |
 | **Pass 2** | `expansionShader.ts` | Nearest-depth `Attempt #3` expansion across `[-uSearchRadius..+uSearchRadius]` (up to `±6` for `10×10`), packing `pixelSize + outlineSteps` in `gMeta.g` & winner delta in `gMeta.b` |
 | **Pass 3** | `outlineEdgeShader.ts` | Depth-tested silhouettes by `objectId` (`outlineWidthSteps`: `1 px` or bold `2 px` Boss/Ink ring), deterministic 1-macropixel normal creases, staircase depth edges, and light-reactive bevel edges |
-| **Pass 4** | `upscaleShader.ts` | Pixel-Art AA (Cole Cecil filter) or Nearest upscale + camera subpixel motion compensation + live A/B split compare |
+| **Pass 4** | `upscaleShader.ts` + half-res bloom targets | `BLOOM_EXTRACT_FRAGMENT_SHADER` + separable H/V 9-tap `BLOOM_BLUR_FRAGMENT_SHADER` (`1.6 / bloomDim`) + Pixel-Art AA (Cole Cecil) / Nearest upscale + additive HDR bloom composite + subpixel motion + A/B split compare |
 
 ### TBN Tangent Contract (`PixelizerMaterial.ts` & `objectShader.ts`)
 
@@ -24,9 +24,9 @@ Detailed reference for editing the 4-pass WebGL2 `GLSL3` rendering pipeline, TBN
   - `rimColor`, `rimIntensity`, `rimPower`, `rimSteppedThreshold`: Stepped Fresnel backlight (`smoothstep` / crisp cel band) applied before LUT quantization.
   - `ditherSpace?: 'screen_macropixel' | 'object_uv'`: Locks Bayer dithering either to screen macropixel grid or texture-space texels (`uAlbedoSize`) to eliminate dithering swim on moving/animated limbs.
 
-### MRT Color Attachments
+### MRT Color Attachments & HDR Bloom Alpha Channel
 
-- `location = 0` (`gColor`, `RGBA16F` or `RGBA8` fallback): Final LUT-graded sRGB albedo + alpha.
+- `location = 0` (`gColor`, `RGBA16F` or `RGBA8` fallback): Final LUT-graded sRGB albedo in `.rgb`. When `uEncodeBloomAlpha > 0.5`, `.a` encodes HDR emission above threshold (`0.5` = opaque neutral geometry, `> 0.5` = emissive pixels up to `1.0`, `0.0` = transparent background). When `bloomEnabled === false`, `.a` retains pure binary/transparent mask (`uBgAlpha`).
 - `location = 1` (`gOutline`, `RGBA8`): `rgb` silhouette color in sRGB, `a` outline alpha.
 - `location = 2` (`gMeta`, `RGBA8`): `r = objectId / 255`, `g = (pixelSize + (outlineSteps >= 2 ? 16 : 0)) / 32`, `b = packedDelta ((dx+7)*16 + (dy+7))`, `a = bevelWeight`.
 - `location = 3` (`gNormalDepth`, `RGBA16F` or `RGBA8`): `rg = octahedral view normal`, `b = edgeHighlight` (`<0.5` darken, `>0.5` lighten), `a = linear depth [0..1]`.
@@ -79,6 +79,6 @@ To add a built-in palette, append an entry to `BUILTIN_PALETTES`:
 - **Dither patterns (`src/engine/dither.ts`)**: `4×4` (16 ints `0..16`) or `8×8` (64 ints `0..64`).
 - **Lighting Ramps (`BUILTIN_LIGHTING_RAMPS`)**: Sorted `{ position, color }` stops (`smooth: false` for crisp cel bands). Keep shadow stop `0.0` lifted (`#2b2042`..`#454860`) so dark armors/hides retain readable silhouette edges.
 - **Visual Style Presets (`applyVisualStylePreset` in `PixelizerPipeline.ts`)**:
-  - `'nwl_snes'` (Official Default): `snes_pal_nwl`, `bayer4x4`, `three_band`, `pixelSize: 3`, `outlineWidthSteps: 1`, `rimIntensity: 0`, `ditherSpace: 'screen_macropixel'`, `filterMode: 'only_pixelized'`.
-  - `'hades_lab'` (*Hades Graphic Ink v2*): `hades_ink`, `bayer4x4`, `hades_graphic_ink`, `pixelSize: 1`, `outlineWidthSteps: 2`, `rimIntensity: 0.72` (`#ffd8a8` / `#249fde`), `ditherSpace: 'object_uv'`, crisp ink `#07060b`. Compatible with all `textured_ao` assets.
+  - `'nwl_snes'` (Official Default): `snes_pal_nwl`, `bayer4x4`, `three_band`, `pixelSize: 3`, `outlineWidthSteps: 1`, `rimIntensity: 0`, `ditherSpace: 'screen_macropixel'`, `filterMode: 'only_pixelized'`, `bloomEnabled: false` (`bloomThreshold: 0.38`, `bloomIntensity: 0.45`).
+  - `'hades_lab'` (*Hades Graphic Ink v2*): `hades_ink`, `bayer4x4`, `hades_graphic_ink`, `pixelSize: 1`, `outlineWidthSteps: 2`, `rimIntensity: 0.72` (`#ffd8a8` / `#249fde`), `ditherSpace: 'object_uv'`, crisp ink `#07060b`, `bloomEnabled: true` (`bloomThreshold: 0.35`, `bloomIntensity: 0.55`). Compatible with all `textured_ao` assets.
 - **Render Telemetry**: `pipeline.getRenderStats()` returns `{ drawCalls, triangles, passWidth, passHeight, lastRenderMs, avgRenderMs }`.

@@ -741,7 +741,7 @@ export function subdivideForAo(
 }
 
 // ---------------------------------------------------------------------------
-// 4B. Texel-Space Heightfield GTAO + Curvature Wear + Vertical Grime Ramp
+// 4B. 3D Dihedral Curvature -> 2D UV Island Bake + Texel GTAO + Wear + Zenithal Grime
 // ---------------------------------------------------------------------------
 
 export interface TexelGtaoOptions {
@@ -749,6 +749,255 @@ export interface TexelGtaoOptions {
   gtaoRadiusPx?: number;
   curvatureStrength?: number;
   verticalGrimeStrength?: number;
+  curvatureMap?: Float32Array | null;
+}
+
+/**
+ * Computes welded 3D edge dihedral signed curvature (`[-1..+1]`, positive = convex ridge,
+ * negative = concave crease/cavity) and rasterizes/interpolates it into the 2D UV island texels.
+ */
+export function bake3DCurvatureToUvIslands(
+  geo: THREE.BufferGeometry,
+  islands: Pick<UvIslandMeta, 'pxBounds' | 'triIndices'>[],
+  texWidth: number,
+  texHeight: number
+): Float32Array {
+  const nTex = Math.max(1, texWidth * texHeight);
+  const out = new Float32Array(nTex);
+  const pos = geo.getAttribute('position');
+  const uv = geo.getAttribute('uv');
+  if (!pos || !uv || pos.count < 3) return out;
+  if (!geo.getAttribute('normal')) geo.computeVertexNormals();
+  const norm = geo.getAttribute('normal');
+  const idx = geo.getIndex();
+  const vCount = pos.count;
+  const triCount = idx ? Math.floor(idx.count / 3) : Math.floor(vCount / 3);
+  if (triCount === 0) return out;
+
+  // 1) Compute per-triangle face normal and centroid, plus welded vertex position keys
+  const q = (v: number) => Math.round(v * 2000);
+  const vertPosKey = new Array<string>(vCount);
+  const posKeyToVerts = new Map<string, number[]>();
+
+  for (let i = 0; i < vCount; i++) {
+    const pk = `${q(pos.getX(i))},${q(pos.getY(i))},${q(pos.getZ(i))}`;
+    vertPosKey[i] = pk;
+    let list = posKeyToVerts.get(pk);
+    if (!list) {
+      list = [];
+      posKeyToVerts.set(pk, list);
+    }
+    list.push(i);
+  }
+
+  const triNormals = new Float32Array(triCount * 3);
+  const triCenters = new Float32Array(triCount * 3);
+  const edgeToTris = new Map<string, number[]>();
+
+  for (let t = 0; t < triCount; t++) {
+    const i0 = idx ? idx.getX(t * 3) : t * 3;
+    const i1 = idx ? idx.getX(t * 3 + 1) : t * 3 + 1;
+    const i2 = idx ? idx.getX(t * 3 + 2) : t * 3 + 2;
+
+    const ax = pos.getX(i0),
+      ay = pos.getY(i0),
+      az = pos.getZ(i0);
+    const bx = pos.getX(i1),
+      by = pos.getY(i1),
+      bz = pos.getZ(i1);
+    const cx = pos.getX(i2),
+      cy = pos.getY(i2),
+      cz = pos.getZ(i2);
+
+    triCenters[t * 3 + 0] = (ax + bx + cx) / 3;
+    triCenters[t * 3 + 1] = (ay + by + cy) / 3;
+    triCenters[t * 3 + 2] = (az + bz + cz) / 3;
+
+    const e1x = bx - ax,
+      e1y = by - ay,
+      e1z = bz - az;
+    const e2x = cx - ax,
+      e2y = cy - ay,
+      e2z = cz - az;
+    let nx = e1y * e2z - e1z * e2y;
+    let ny = e1z * e2x - e1x * e2z;
+    let nz = e1x * e2y - e1y * e2x;
+    const l = Math.hypot(nx, ny, nz);
+    if (l > 1e-10) {
+      nx /= l;
+      ny /= l;
+      nz /= l;
+    } else {
+      nx = norm.getX(i0);
+      ny = norm.getY(i0);
+      nz = norm.getZ(i0);
+    }
+    triNormals[t * 3 + 0] = nx;
+    triNormals[t * 3 + 1] = ny;
+    triNormals[t * 3 + 2] = nz;
+
+    const ks = [vertPosKey[i0], vertPosKey[i1], vertPosKey[i2]];
+    for (let e = 0; e < 3; e++) {
+      const ka = ks[e];
+      const kb = ks[(e + 1) % 3];
+      if (ka === kb) continue;
+      const ek = ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
+      let list = edgeToTris.get(ek);
+      if (!list) {
+        list = [];
+        edgeToTris.set(ek, list);
+      }
+      list.push(t);
+    }
+  }
+
+  // 2) Accumulate signed dihedral curvature onto welded position keys
+  const curvSumByPosKey = new Map<string, number>();
+  const curvCntByPosKey = new Map<string, number>();
+  const addCurv = (pk: string, val: number) => {
+    curvSumByPosKey.set(pk, (curvSumByPosKey.get(pk) ?? 0) + val);
+    curvCntByPosKey.set(pk, (curvCntByPosKey.get(pk) ?? 0) + 1);
+  };
+
+  for (const [ek, tList] of edgeToTris) {
+    if (tList.length < 2) continue;
+    const sep = ek.indexOf('|');
+    const pkA = ek.slice(0, sep);
+    const pkB = ek.slice(sep + 1);
+
+    for (let i = 0; i < tList.length; i++) {
+      for (let j = i + 1; j < tList.length; j++) {
+        const tA = tList[i];
+        const tB = tList[j];
+        const nAx = triNormals[tA * 3 + 0],
+          nAy = triNormals[tA * 3 + 1],
+          nAz = triNormals[tA * 3 + 2];
+        const nBx = triNormals[tB * 3 + 0],
+          nBy = triNormals[tB * 3 + 1],
+          nBz = triNormals[tB * 3 + 2];
+        const dotN = Math.max(-1, Math.min(1, nAx * nBx + nAy * nBy + nAz * nBz));
+        if (dotN > 0.996) continue;
+
+        const dCx = triCenters[tB * 3 + 0] - triCenters[tA * 3 + 0];
+        const dCy = triCenters[tB * 3 + 1] - triCenters[tA * 3 + 1];
+        const dCz = triCenters[tB * 3 + 2] - triCenters[tA * 3 + 2];
+        const dLen = Math.hypot(dCx, dCy, dCz) || 1;
+        const nDiffX = nBx - nAx;
+        const nDiffY = nBy - nAy;
+        const nDiffZ = nBz - nAz;
+        // Positive when normals diverge outward across the edge (convex ridge), negative in concave cavity
+        const signDot = (nDiffX * dCx + nDiffY * dCy + nDiffZ * dCz) / dLen;
+        const mag = Math.min(1, Math.sqrt(Math.max(0, 1 - dotN) * 0.85));
+        const signedCurv = signDot >= 0 ? mag : -mag;
+        addCurv(pkA, signedCurv);
+        addCurv(pkB, signedCurv);
+      }
+    }
+  }
+
+  const vertCurv = new Float32Array(vCount);
+  for (let i = 0; i < vCount; i++) {
+    const pk = vertPosKey[i];
+    const cnt = curvCntByPosKey.get(pk) ?? 0;
+    if (cnt > 0) {
+      vertCurv[i] = Math.max(-1, Math.min(1, (curvSumByPosKey.get(pk) ?? 0) / cnt));
+    }
+  }
+
+  // 3) Rasterize triangle barycentric 3D curvature into 2D UV islands + dilate inside each island box
+  const writtenMask = new Uint8Array(nTex);
+  for (const isl of islands) {
+    const ix0 = Math.max(0, isl.pxBounds.x);
+    const iy0 = Math.max(0, isl.pxBounds.y);
+    const ix1 = Math.min(texWidth - 1, isl.pxBounds.x + isl.pxBounds.w - 1);
+    const iy1 = Math.min(texHeight - 1, isl.pxBounds.y + isl.pxBounds.h - 1);
+    if (ix1 < ix0 || iy1 < iy0) continue;
+
+    for (const t of isl.triIndices) {
+      if (t < 0 || t >= triCount) continue;
+      const i0 = idx ? idx.getX(t * 3) : t * 3;
+      const i1 = idx ? idx.getX(t * 3 + 1) : t * 3 + 1;
+      const i2 = idx ? idx.getX(t * 3 + 2) : t * 3 + 2;
+
+      const x0 = uv.getX(i0) * texWidth,
+        y0 = uv.getY(i0) * texHeight;
+      const x1 = uv.getX(i1) * texWidth,
+        y1 = uv.getY(i1) * texHeight;
+      const x2 = uv.getX(i2) * texWidth,
+        y2 = uv.getY(i2) * texHeight;
+
+      const c0 = vertCurv[i0],
+        c1 = vertCurv[i1],
+        c2 = vertCurv[i2];
+
+      const minX = Math.max(ix0, Math.floor(Math.min(x0, x1, x2) - 0.5));
+      const maxX = Math.min(ix1, Math.ceil(Math.max(x0, x1, x2) + 0.5));
+      const minY = Math.max(iy0, Math.floor(Math.min(y0, y1, y2) - 0.5));
+      const maxY = Math.min(iy1, Math.ceil(Math.max(y0, y1, y2) + 0.5));
+
+      const denom = (y1 - y2) * (x0 - x2) + (x2 - x1) * (y0 - y2);
+      const isDegenerate = Math.abs(denom) < 1e-6;
+      const avgC = (c0 + c1 + c2) / 3;
+
+      for (let py = minY; py <= maxY; py++) {
+        const cy = py + 0.5;
+        for (let px = minX; px <= maxX; px++) {
+          const cx = px + 0.5;
+          const tidx = py * texWidth + px;
+          if (isDegenerate) {
+            out[tidx] = avgC;
+            writtenMask[tidx] = 1;
+            continue;
+          }
+          let w0 = ((y1 - y2) * (cx - x2) + (x2 - x1) * (cy - y2)) / denom;
+          let w1 = ((y2 - y0) * (cx - x2) + (x0 - x2) * (cy - y2)) / denom;
+          let w2 = 1 - w0 - w1;
+          if (w0 >= -0.25 && w1 >= -0.25 && w2 >= -0.25) {
+            w0 = Math.max(0, Math.min(1, w0));
+            w1 = Math.max(0, Math.min(1, w1));
+            w2 = Math.max(0, Math.min(1, w2));
+            const wSum = w0 + w1 + w2 || 1;
+            const val = (w0 * c0 + w1 * c1 + w2 * c2) / wSum;
+            if (!writtenMask[tidx] || Math.abs(val) > Math.abs(out[tidx])) {
+              out[tidx] = Math.max(-1, Math.min(1, val));
+              writtenMask[tidx] = 1;
+            }
+          }
+        }
+      }
+    }
+
+    // Fill any uncovered border texels inside isl.pxBounds from nearest written neighbor in island
+    for (let pass = 0; pass < 2; pass++) {
+      for (let py = iy0; py <= iy1; py++) {
+        for (let px = ix0; px <= ix1; px++) {
+          const tidx = py * texWidth + px;
+          if (writtenMask[tidx]) continue;
+          let sum = 0;
+          let cnt = 0;
+          for (let dy = -1; dy <= 1; dy++) {
+            const ny = py + dy;
+            if (ny < iy0 || ny > iy1) continue;
+            for (let dx = -1; dx <= 1; dx++) {
+              const nx = px + dx;
+              if (nx < ix0 || nx > ix1) continue;
+              const nIdx = ny * texWidth + nx;
+              if (writtenMask[nIdx]) {
+                sum += out[nIdx];
+                cnt++;
+              }
+            }
+          }
+          if (cnt > 0) {
+            out[tidx] = sum / cnt;
+            writtenMask[tidx] = 1;
+          }
+        }
+      }
+    }
+  }
+
+  return out;
 }
 
 const DIR_X = [1, -1, 0, 0, 1, -1, 1, -1];
@@ -756,8 +1005,8 @@ const DIR_Y = [0, 0, 1, -1, 1, 1, -1, -1];
 const DIR_INV_LEN = [1, 1, 1, 1, 0.70710678, 0.70710678, 0.70710678, 0.70710678];
 
 /**
- * Applies horizon heightfield ambient occlusion (GTAO 8-directional), discrete curvature bevel
- * catchlight, and vertical grime/moss gradient strictly clamped inside each island's pixel bounds.
+ * Applies horizon heightfield ambient occlusion (GTAO 8-directional), discrete curvature + 3D dihedral
+ * bevel catchlight, zenithal world-Y gradient, and vertical grime/moss strictly clamped inside each island's pixel bounds.
  * Respects `DataTexture` `flipY = false` convention: smaller `y` = bottom (`v = 0`), larger `y` = top (`v = 1`).
  */
 export function applyHeightGtaoAndWear(
@@ -765,14 +1014,30 @@ export function applyHeightGtaoAndWear(
   coverageMask: Uint8Array,
   texWidth: number,
   texHeight: number,
-  islands: Pick<UvIslandMeta, 'pxBounds' | 'materialKind' | 'lockVertical' | 'landmarkKind'>[],
+  islands: (Pick<UvIslandMeta, 'pxBounds' | 'materialKind' | 'lockVertical' | 'landmarkKind'> &
+    Partial<Pick<UvIslandMeta, 'worldYMin' | 'worldYMax' | 'avgNormalY'>>)[],
   albedoRgba: Uint8Array,
   options: TexelGtaoOptions = {}
 ): void {
   const gtaoStrength = Math.max(0, Math.min(1, options.gtaoStrength ?? 0.55));
   const radius = Math.max(1, Math.min(6, Math.round(options.gtaoRadiusPx ?? 3)));
-  const curveStrength = Math.max(0, Math.min(0.5, options.curvatureStrength ?? 0.2));
-  const grimeStrength = Math.max(0, Math.min(0.6, options.verticalGrimeStrength ?? 0.22));
+  const curveStrength = Math.max(0, Math.min(0.55, options.curvatureStrength ?? 0.24));
+  const grimeStrength = Math.max(0, Math.min(0.6, options.verticalGrimeStrength ?? 0.24));
+  const curvatureMap = options.curvatureMap ?? null;
+
+  // Determine overall world-Y bounds across all islands for cohesive zenithal lighting (+10% crown, -16% base)
+  let globalYMin = Infinity;
+  let globalYMax = -Infinity;
+  for (const isl of islands) {
+    if (typeof isl.worldYMin === 'number' && Number.isFinite(isl.worldYMin)) {
+      if (isl.worldYMin < globalYMin) globalYMin = isl.worldYMin;
+    }
+    if (typeof isl.worldYMax === 'number' && Number.isFinite(isl.worldYMax)) {
+      if (isl.worldYMax > globalYMax) globalYMax = isl.worldYMax;
+    }
+  }
+  const hasGlobalWorldY = globalYMax > globalYMin + 0.05 && Number.isFinite(globalYMin);
+  const globalYSpan = hasGlobalWorldY ? Math.max(0.1, globalYMax - globalYMin) : 1.0;
 
   for (const isl of islands) {
     const x0 = Math.max(0, isl.pxBounds.x);
@@ -787,15 +1052,39 @@ export function applyHeightGtaoAndWear(
       isl.materialKind === 'human_skin' ||
       isl.materialKind === 'runic_glow';
 
+    const islW = Math.max(1, x1 - x0 + 1);
     const islH = Math.max(1, y1 - y0 + 1);
+    const islYMin = typeof isl.worldYMin === 'number' ? isl.worldYMin : 0;
+    const islYMax = typeof isl.worldYMax === 'number' ? isl.worldYMax : 1;
+    const avgNormY = typeof isl.avgNormalY === 'number' ? isl.avgNormalY : 0;
+
     for (let y = y0; y <= y1; y++) {
       // Convention flipY = false => y0 is bottom (v=0), y1 is top (v=1)
       const vFrac = islH > 1 ? (y - y0) / (islH - 1) : 0.5;
+      // Chunky 2-3px cluster cell coordinates for cohesive pixel-art edge wear
+      const clusterY = Math.floor((y - y0) / 2);
+
+      // Compute world-Y fraction [0..1] for zenithal gradient
+      let zenithFactor = 0;
+      if (!skipHeavyDirt) {
+        if (hasGlobalWorldY) {
+          const estY = isl.lockVertical
+            ? islYMin + vFrac * (islYMax - islYMin)
+            : (islYMin + islYMax) * 0.5;
+          const yNorm = Math.max(0, Math.min(1, (estY - globalYMin) / globalYSpan));
+          // Cohesive zenithal ramp: -16% at base (yNorm=0) up to +10% at crown (yNorm=1), plus upward-normal boost
+          zenithFactor = -0.16 * (1 - yNorm) + 0.1 * yNorm + Math.max(-0.04, Math.min(0.05, avgNormY * 0.05));
+        } else if (isl.lockVertical) {
+          zenithFactor = -0.12 * (1 - vFrac) + 0.08 * vFrac;
+        }
+      }
+
       for (let x = x0; x <= x1; x++) {
         const idx = y * texWidth + x;
         if (!coverageMask[idx]) continue;
 
         const hCenter = heightField[idx];
+        const clusterX = Math.floor((x - x0) / 2);
 
         // 1) 8-direction height horizon AO clamped to island bounds
         let maxHorizonSum = 0;
@@ -809,7 +1098,7 @@ export function applyHeightGtaoAndWear(
             const ny = Math.max(y0, Math.min(y1, y + dy * step));
             const dH = heightField[ny * texWidth + nx] - hCenter;
             if (dH > 0) {
-              const slope = (dH * 4.2 * invLen) / step;
+              const slope = (dH * 4.4 * invLen) / step;
               if (slope > bestSlope) bestSlope = slope;
             }
           }
@@ -818,13 +1107,34 @@ export function applyHeightGtaoAndWear(
         const rawAo = maxHorizonSum * 0.125;
         const ao = 1 - (1 - rawAo) * gtaoStrength;
 
-        // 2) Discrete 4-neighbor Laplacian curvature for subtle edge highlight vs pocket shade
+        // 2) Discrete 4-neighbor Laplacian curvature + 3D dihedral curvature (chunky 2x2 cluster pooled)
         const hL = heightField[y * texWidth + Math.max(x0, x - 1)];
         const hR = heightField[y * texWidth + Math.min(x1, x + 1)];
         const hD = heightField[Math.max(y0, y - 1) * texWidth + x];
         const hU = heightField[Math.min(y1, y + 1) * texWidth + x];
-        const curvature = (hCenter - 0.25 * (hL + hR + hD + hU)) * 3.0;
-        const curveDelta = Math.max(-0.18, Math.min(0.18, curvature * curveStrength));
+        const curvature2D = (hCenter - 0.25 * (hL + hR + hD + hU)) * 3.0;
+
+        let curv3D = 0;
+        if (curvatureMap && idx < curvatureMap.length) {
+          // Pool 3D curvature over 2x2 texel block so edge wear forms chunky >=2-3px pixel-art clusters
+          const cx0 = Math.min(x1, x0 + clusterX * 2);
+          const cy0 = Math.min(y1, y0 + clusterY * 2);
+          const cx1 = Math.min(x1, cx0 + 1);
+          const cy1 = Math.min(y1, cy0 + 1);
+          curv3D =
+            0.25 *
+            (curvatureMap[cy0 * texWidth + cx0] +
+              curvatureMap[cy0 * texWidth + cx1] +
+              curvatureMap[cy1 * texWidth + cx0] +
+              curvatureMap[cy1 * texWidth + cx1]);
+        }
+
+        const curveDelta2D = Math.max(-0.18, Math.min(0.18, curvature2D * curveStrength));
+        const curveDelta3D =
+          curv3D >= 0
+            ? Math.min(0.22, curv3D * 0.22)
+            : Math.max(-0.22, curv3D * 0.24);
+        const totalCurveDelta = Math.max(-0.26, Math.min(0.24, curveDelta2D + curveDelta3D));
 
         // 3) Hue-shifted shading & vertical dirt/moss near lower vFrac when world-vertical
         const rgbaOffset = idx * 4;
@@ -832,60 +1142,66 @@ export function applyHeightGtaoAndWear(
         let g = albedoRgba[rgbaOffset + 1];
         let b = albedoRgba[rgbaOffset + 2];
 
-        const isBrightOrSkin =
+        const isMetalOrArmor =
           isl.materialKind === 'forged_steel' ||
           isl.materialKind === 'rarity_armor' ||
-          isl.materialKind === 'brushed_gold' ||
-          isl.materialKind === 'human_skin' ||
-          isl.materialKind === 'goblin_skin';
-        const minShade = isBrightOrSkin ? 0.72 : 0.64;
-        const shadeFactor = Math.max(minShade, Math.min(1.16, ao + curveDelta));
+          isl.materialKind === 'brushed_gold';
+        const isSkin =
+          isl.materialKind === 'human_skin' || isl.materialKind === 'goblin_skin';
+        // Deep cavity occlusion floors: 0.48 for stone/wood/cloth, 0.54 for metal/armor, 0.68 for skin
+        const minShade = isSkin ? 0.68 : isMetalOrArmor ? 0.54 : 0.48;
+        const shadeFactor = Math.max(
+          minShade,
+          Math.min(1.22, ao + totalCurveDelta + zenithFactor)
+        );
         if (shadeFactor < 1.0) {
-          // Subtle cool hue-shift without turning neutral steel/wood violet
-          const shadowMix = (1 - shadeFactor) * 0.24;
-          r = r * shadeFactor * (1 - shadowMix) + 32 * shadowMix;
-          g = g * shadeFactor * (1 - shadowMix) + 34 * shadowMix;
-          b = b * shadeFactor * (1 - shadowMix) + 52 * shadowMix;
+          // Deep indigo/umber cavity shadow shift
+          const shadowMix = (1 - shadeFactor) * 0.3;
+          r = r * shadeFactor * (1 - shadowMix) + 30 * shadowMix;
+          g = g * shadeFactor * (1 - shadowMix) + 30 * shadowMix;
+          b = b * shadeFactor * (1 - shadowMix) + 48 * shadowMix;
         } else if (shadeFactor > 1.0) {
-          // Warm highlight shift on raised ridges/edges
-          const hiMix = Math.min(0.22, (shadeFactor - 1.0) * 1.25);
-          r = r + (242 - r) * hiMix;
-          g = g + (236 - g) * hiMix;
-          b = b + (216 - b) * hiMix * 0.85;
+          // Warm ivory/silver highlight shift on raised convex ridges & edges (+14%..+22%)
+          const hiMix = Math.min(0.24, (shadeFactor - 1.0) * 1.15);
+          const targetR = isMetalOrArmor ? 228 : 240;
+          const targetG = isMetalOrArmor ? 232 : 234;
+          const targetB = isMetalOrArmor ? 240 : 218;
+          r = r + (targetR - r) * hiMix;
+          g = g + (targetG - g) * hiMix;
+          b = b + (targetB - b) * hiMix;
         }
 
         if (isl.lockVertical && !skipHeavyDirt && grimeStrength > 0.01) {
-          const bottomMask = Math.max(0, 1 - vFrac * 2.1); // bottom 45% gets grounded grime/moss
+          const bottomMask = Math.max(0, 1 - vFrac * 2.0); // bottom 50% gets grounded grime/moss
           if (bottomMask > 0) {
-            const effGrime = isBrightOrSkin ? grimeStrength * 0.45 : grimeStrength * 0.75;
+            const effGrime = isSkin ? grimeStrength * 0.35 : isMetalOrArmor ? grimeStrength * 0.52 : grimeStrength * 0.8;
             const tint = bottomMask * effGrime;
             if (isl.materialKind === 'mossy_cobble' || isl.materialKind === 'stone_masonry') {
-              r = r * (1 - tint) + 58 * tint;
-              g = g * (1 - tint) + 84 * tint;
-              b = b * (1 - tint) + 46 * tint;
+              r = r * (1 - tint) + 54 * tint;
+              g = g * (1 - tint) + 82 * tint;
+              b = b * (1 - tint) + 44 * tint;
             } else {
-              r = r * (1 - tint) + 42 * tint;
-              g = g * (1 - tint) + 38 * tint;
-              b = b * (1 - tint) + 46 * tint;
+              r = r * (1 - tint) + 38 * tint;
+              g = g * (1 - tint) + 34 * tint;
+              b = b * (1 - tint) + 42 * tint;
             }
           }
         }
 
-        const islW = Math.max(1, x1 - x0 + 1);
         const quantStep =
           isl.landmarkKind === 'none' &&
           isl.materialKind !== 'runic_glow' &&
           islW >= 8 &&
           islH >= 8
-            ? 8
+            ? 6
             : 0;
 
-        // Strict ProPixelizer/Hytale rule: never clip to pure #000000 or #ffffff
+        // Clamp texels strictly within [18..242] to preserve shadow & highlight headrooms under LUT grading
         const q = (v: number) =>
           quantStep > 0 ? Math.round(v / quantStep) * quantStep : Math.round(v);
-        albedoRgba[rgbaOffset + 0] = Math.max(12, Math.min(244, q(r)));
-        albedoRgba[rgbaOffset + 1] = Math.max(12, Math.min(244, q(g)));
-        albedoRgba[rgbaOffset + 2] = Math.max(12, Math.min(244, q(b)));
+        albedoRgba[rgbaOffset + 0] = Math.max(18, Math.min(242, q(r)));
+        albedoRgba[rgbaOffset + 1] = Math.max(18, Math.min(242, q(g)));
+        albedoRgba[rgbaOffset + 2] = Math.max(18, Math.min(242, q(b)));
       }
     }
   }

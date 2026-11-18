@@ -199,11 +199,22 @@ export function buildEnterableNwlHouse(
   const portaPivot = new THREE.Group();
   portaPivot.name = `${spec.id}_porta`;
 
-  // --- PART 1: BASE (Floor + Rear Wall + Side Walls + Interior Props) ---
+  // --- PART 1: BASE (Floor + Stepped Stone Plinth + Quoins + Enxaimel Timber + Windows + Interior Props) ---
   const baseParts: TaggedGeometryPart[] = [];
   const floor = makeBeveledBox(w, 0.16, d, 0.018, CITY_COLORS.woodDark, { offset: [0, 0.08, 0] });
   baseParts.push(
     tagPart(floor, `${spec.id}_floor`, 'wood_planks', CITY_COLORS.woodDark, { lockVertical: false })
+  );
+
+  // Stepped exterior stone foundation plinth along rear & side walls
+  const plinthBack = makeBeveledBox(w + 0.18, 0.42, wallT + 0.14, 0.024, CITY_COLORS.stoneSlate, {
+    offset: [0, 0.21, -d * 0.5 + wallT * 0.45],
+  });
+  baseParts.push(
+    tagPart(plinthBack, `${spec.id}_plinth_back`, 'mossy_cobble', CITY_COLORS.stoneSlate, {
+      accentHex: CITY_COLORS.grass,
+      lockVertical: true,
+    })
   );
 
   const rug = makeBeveledBox(w - 1.1, 0.04, d - 1.1, 0.012, spec.roofColor, {
@@ -223,21 +234,93 @@ export function buildEnterableNwlHouse(
     })
   );
 
+  // Rear horizontal timber belt + diagonal enxaimel cross-braces
+  const backBelt = makeBeveledBox(w + 0.08, 0.14, wallT + 0.08, 0.018, CITY_COLORS.woodDark, {
+    offset: [0, wallH * 0.52, -d * 0.5 + wallT * 0.48],
+  });
+  baseParts.push(
+    tagPart(backBelt, `${spec.id}_back_belt`, 'timber_frame', CITY_COLORS.woodDark, {
+      lockVertical: true,
+    })
+  );
+  for (const [bIdx, sx] of [-1, 1].entries()) {
+    const brace = makeBeveledBox(0.11, 1.32, wallT + 0.07, 0.015, CITY_COLORS.woodDark);
+    brace.rotateZ(sx * 0.46);
+    brace.translate(sx * (w * 0.28), wallH * 0.74, -d * 0.5 + wallT * 0.48);
+    baseParts.push(
+      tagPart(brace, `${spec.id}_back_brace_${bIdx}`, 'timber_frame', CITY_COLORS.woodDark, {
+        lockVertical: false,
+      })
+    );
+  }
+
   for (const [sIdx, sx] of [-1, 1].entries()) {
     const sideWall = makeBeveledBox(wallT, wallH, d, 0.025, spec.wallColor, {
       offset: [sx * (w * 0.5 - wallT * 0.5), wallH * 0.5, 0],
     });
+    const plinthSide = makeBeveledBox(wallT + 0.14, 0.42, d + 0.12, 0.024, CITY_COLORS.stoneSlate, {
+      offset: [sx * (w * 0.5 - wallT * 0.45), 0.21, 0],
+    });
     const post = makeBeveledBox(wallT + 0.12, wallH + 0.1, wallT + 0.12, 0.02, spec.trimColor, {
       offset: [sx * (w * 0.5 - wallT * 0.4), (wallH + 0.1) * 0.5, -d * 0.5 + wallT * 0.4],
+    });
+    const sideBelt = makeBeveledBox(wallT + 0.08, 0.14, d + 0.06, 0.018, CITY_COLORS.woodDark, {
+      offset: [sx * (w * 0.5 - wallT * 0.48), wallH * 0.52, 0],
+    });
+    // Protruding medieval window frame + sill on each side wall
+    const winFrame = makeBeveledBox(0.14, 0.86, 0.94, 0.018, CITY_COLORS.woodDark, {
+      offset: [sx * (w * 0.5 + 0.03), 1.72, 0],
+    });
+    const winSill = makeBeveledBox(0.22, 0.11, 1.12, 0.018, CITY_COLORS.stoneLight, {
+      offset: [sx * (w * 0.5 + 0.06), 1.25, 0],
+    });
+    const winPane = makeBeveledBox(0.08, 0.64, 0.72, 0.01, CITY_COLORS.goldBright, {
+      offset: [sx * (w * 0.5 + 0.02), 1.72, 0],
     });
     baseParts.push(
       tagPart(sideWall, `${spec.id}_sidewall_${sIdx}`, 'plaster_wall', spec.wallColor, {
         lockVertical: true,
       }),
+      tagPart(plinthSide, `${spec.id}_plinth_side_${sIdx}`, 'mossy_cobble', CITY_COLORS.stoneSlate, {
+        accentHex: CITY_COLORS.grass,
+        lockVertical: true,
+      }),
       tagPart(post, `${spec.id}_post_${sIdx}`, 'timber_frame', spec.trimColor, {
+        lockVertical: true,
+      }),
+      tagPart(sideBelt, `${spec.id}_side_belt_${sIdx}`, 'timber_frame', CITY_COLORS.woodDark, {
+        lockVertical: true,
+      }),
+      tagPart(winFrame, `${spec.id}_win_frame_${sIdx}`, 'timber_frame', CITY_COLORS.woodDark, {
+        lockVertical: true,
+      }),
+      tagPart(winSill, `${spec.id}_win_sill_${sIdx}`, 'stone_masonry', CITY_COLORS.stoneLight, {
+        lockVertical: true,
+      }),
+      tagPart(winPane, `${spec.id}_win_pane_${sIdx}`, 'runic_glow', CITY_COLORS.goldBright, {
         lockVertical: true,
       })
     );
+
+    // 4 alternating corner stone quoins along each rear vertical corner edge
+    for (let q = 0; q < 4; q++) {
+      const isEven = q % 2 === 0;
+      const qW = isEven ? 0.44 : 0.32;
+      const qD = isEven ? 0.32 : 0.44;
+      const qY = 0.62 + q * 0.62;
+      const quoin = makeBeveledBox(qW, 0.34, qD, 0.022, CITY_COLORS.stoneLight, {
+        offset: [
+          sx * (w * 0.5 - qW * 0.36),
+          qY,
+          -d * 0.5 + qD * 0.36,
+        ],
+      });
+      baseParts.push(
+        tagPart(quoin, `${spec.id}_quoin_rear_${sIdx}_${q}`, 'stone_masonry', CITY_COLORS.stoneLight, {
+          lockVertical: true,
+        })
+      );
+    }
   }
 
   // Interior Profession Furniture (clearly visible when capa hides!)
@@ -389,18 +472,52 @@ export function buildEnterableNwlHouse(
     );
   }
 
-  // --- PART 2: CAPA (Front wall with doorway + Sloped Pitched Roof + Shop Signage) ---
+  // --- PART 2: CAPA (Front wall with doorway + Sloped Pitched Roof + Chimney + Corbels + Shop Signage) ---
   const capaParts: TaggedGeometryPart[] = [];
   const sideDoorW = (w - doorW) * 0.5;
   for (const [fIdx, sx] of [-doorW * 0.5 - sideDoorW * 0.5, doorW * 0.5 + sideDoorW * 0.5].entries()) {
     const fw = makeBeveledBox(sideDoorW, wallH, wallT, 0.025, spec.wallColor, {
       offset: [sx, wallH * 0.5, d * 0.5 - wallT * 0.5],
     });
+    const frontPlinth = makeBeveledBox(sideDoorW + 0.08, 0.42, wallT + 0.14, 0.024, CITY_COLORS.stoneSlate, {
+      offset: [sx, 0.21, d * 0.5 - wallT * 0.45],
+    });
+    const frontBelt = makeBeveledBox(sideDoorW + 0.04, 0.14, wallT + 0.08, 0.018, CITY_COLORS.woodDark, {
+      offset: [sx, wallH * 0.52, d * 0.5 - wallT * 0.48],
+    });
     capaParts.push(
       tagPart(fw, `${spec.id}_front_wall_${fIdx}`, 'plaster_wall', spec.wallColor, {
         lockVertical: true,
+      }),
+      tagPart(frontPlinth, `${spec.id}_front_plinth_${fIdx}`, 'mossy_cobble', CITY_COLORS.stoneSlate, {
+        accentHex: CITY_COLORS.grass,
+        lockVertical: true,
+      }),
+      tagPart(frontBelt, `${spec.id}_front_belt_${fIdx}`, 'timber_frame', CITY_COLORS.woodDark, {
+        lockVertical: true,
       })
     );
+
+    // Front corner stone quoins (4 alternating blocks per front vertical corner)
+    const cornerDir = fIdx === 0 ? -1 : 1;
+    for (let q = 0; q < 4; q++) {
+      const isEven = q % 2 === 0;
+      const qW = isEven ? 0.44 : 0.32;
+      const qD = isEven ? 0.32 : 0.44;
+      const qY = 0.62 + q * 0.62;
+      const quoin = makeBeveledBox(qW, 0.34, qD, 0.022, CITY_COLORS.stoneLight, {
+        offset: [
+          cornerDir * (w * 0.5 - qW * 0.36),
+          qY,
+          d * 0.5 - qD * 0.36,
+        ],
+      });
+      capaParts.push(
+        tagPart(quoin, `${spec.id}_quoin_front_${fIdx}_${q}`, 'stone_masonry', CITY_COLORS.stoneLight, {
+          lockVertical: true,
+        })
+      );
+    }
   }
   const lintelH = wallH - doorH;
   const lintel = makeBeveledBox(doorW, lintelH, wallT, 0.02, spec.trimColor, {
@@ -438,6 +555,37 @@ export function buildEnterableNwlHouse(
     })
   );
 
+  // Stone chimney stack with stepped crown cap breaking upper roof silhouette
+  const chimX = spec.id === 'forja' ? 1.2 : -w * 0.24;
+  const chimZ = -d * 0.24;
+  const chimBaseY = wallH + peakH * 0.38;
+  const chimStack = makeBeveledBox(0.58, 1.32, 0.58, 0.028, CITY_COLORS.stoneSlate, {
+    offset: [chimX, chimBaseY + 0.66, chimZ],
+  });
+  const chimCap = makeBeveledBox(0.72, 0.16, 0.72, 0.022, CITY_COLORS.stoneLight, {
+    offset: [chimX, chimBaseY + 1.36, chimZ],
+  });
+  capaParts.push(
+    tagPart(chimStack, `${spec.id}_chimney_stack`, 'stone_masonry', CITY_COLORS.stoneSlate, {
+      lockVertical: true,
+    }),
+    tagPart(chimCap, `${spec.id}_chimney_cap`, 'stone_masonry', CITY_COLORS.stoneLight, {
+      lockVertical: true,
+    })
+  );
+
+  // Eave support corbel brackets under front roof overhang
+  for (const [cIdx, cx] of [-w * 0.34, -doorW * 0.55, doorW * 0.55, w * 0.34].entries()) {
+    const corbel = makeBeveledBox(0.14, 0.28, 0.26, 0.016, CITY_COLORS.woodDark, {
+      offset: [cx, wallH - 0.14, d * 0.5 + 0.08],
+    });
+    capaParts.push(
+      tagPart(corbel, `${spec.id}_eave_corbel_${cIdx}`, 'timber_frame', CITY_COLORS.woodDark, {
+        lockVertical: true,
+      })
+    );
+  }
+
   const sign = makeBeveledBox(1.15, 0.42, 0.14, 0.02, CITY_COLORS.gold, {
     offset: [0, doorH + 0.35, d * 0.5 + 0.12],
   });
@@ -471,7 +619,7 @@ export function buildEnterableNwlHouse(
     finishMode,
     texelsPerMeter: 32,
     seed,
-    aoRays: 12,
+    aoRays: 8,
     aoStrength,
     normalStrength,
     emissiveRuneHex: spec.id === 'forja' ? CITY_COLORS.ember : CITY_COLORS.goldBright,
@@ -485,12 +633,13 @@ export function buildEnterableNwlHouse(
     finishMode,
     texelsPerMeter: 32,
     seed: seed + 7,
-    aoRays: 12,
+    aoRays: 8,
     aoStrength,
     normalStrength,
     emblemHex: CITY_COLORS.goldBright,
     usePool: true,
     cacheKey: `city_house:${spec.id}:capa`,
+    inspectUvs: false,
   });
   for (const p of capaParts) p.geometry.dispose();
 
@@ -498,12 +647,13 @@ export function buildEnterableNwlHouse(
     finishMode,
     texelsPerMeter: 32,
     seed: seed + 13,
-    aoRays: 10,
+    aoRays: 8,
     aoStrength,
     normalStrength,
     emblemHex: CITY_COLORS.goldBright,
     usePool: true,
     cacheKey: `city_house:${spec.id}:porta`,
+    inspectUvs: false,
   });
   for (const p of portaParts) p.geometry.dispose();
 
@@ -1019,6 +1169,7 @@ export function buildNwlStarterCity(
     emissiveRuneHex: CITY_COLORS.portalEdge,
     usePool: true,
     cacheKey: 'city:portal_arch',
+    inspectUvs: false,
   });
   for (const p of portalArchParts) p.geometry.dispose();
 
@@ -1070,6 +1221,7 @@ export function buildNwlStarterCity(
     emissiveRuneHex: CITY_COLORS.portalCore,
     usePool: true,
     cacheKey: 'city:portal_core',
+    inspectUvs: false,
   });
   for (const p of portalCoreParts) p.geometry.dispose();
 
@@ -1181,7 +1333,7 @@ export function buildNwlStarterCity(
   houseSpecs.forEach((hs, i) => {
     const h = buildEnterableNwlHouse(hs, sharedResources, 41 + i * 3, {
       finishMode,
-      seed: seed + i * 29,
+      seed: 401,
       aoStrength,
       normalStrength,
     });
@@ -1212,7 +1364,7 @@ export function buildNwlStarterCity(
         pixelSize: px,
         objectId: 70 + i,
         finishMode,
-        seed: seed + i * 19,
+        seed: 202,
         aoStrength,
         normalStrength,
       },

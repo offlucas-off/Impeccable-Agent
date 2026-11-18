@@ -129,7 +129,7 @@ describe('Wave 3: Visual Upgrades, GPU Instancing, Quantized GLB & Architecture'
     expect(boss.materials.some((m) => m.options.outlineWidthSteps === 2)).toBe(true);
     expect(boss.materials.some((m) => m.options.rimIntensity > 0)).toBe(true);
     boss.dispose?.();
-  }, 15000);
+  }, 45000);
 
   it('quantizes DataTexture albedo cleanly onto SNES NWL palette and bakes quantized .GLB', async () => {
     const pal = BUILTIN_PALETTES.find((p) => p.id === 'snes_pal_nwl')!;

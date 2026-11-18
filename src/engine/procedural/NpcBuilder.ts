@@ -640,7 +640,7 @@ export function buildNwlNpc(
       finishMode,
       texelsPerMeter: 64,
       seed: seed + parts.length * 11,
-      aoRays: 10,
+      aoRays: 8,
       aoMaxDist: 0.32,
       aoStrength,
       normalStrength,

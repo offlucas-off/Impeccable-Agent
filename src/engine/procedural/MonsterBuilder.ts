@@ -24,8 +24,10 @@ import {
   makeDomeShieldGeometry,
   makeLatheProfile,
   makePauldronShellGeometry,
+  makePleatedTabardGeometry,
   makeRecurveBowGeometry,
   makeSdfOrganicMesh,
+  makeSegmentedBeveledBox,
   makeSwordBladeGeometry,
   sdEllipsoid,
   sminPoly,
@@ -331,7 +333,7 @@ export function buildNwlMonster(
     });
   };
 
-  addBakedBone('Monster_Pelvis', 'pelvis', [
+  const pelvisParts: TaggedGeometryPart[] = [
     tagPart(
       makeBeveledBoneSegmentBox(
         pelvisLen * 1.15,
@@ -362,7 +364,45 @@ export function buildNwlMonster(
       spec.trimColor,
       { accentHex: spec.accentColor }
     ),
-  ]);
+    // Rigid bone-mounted pleated battle-loincloth / war-tabard
+    tagPart(
+      makePleatedTabardGeometry(
+        0.15 * bulk,
+        0.22 * bulk,
+        0.24 * bulk,
+        0.032 * bulk,
+        3,
+        spec.armorColor,
+        { offset: [0, -0.06 * bulk, 0.115 * bulk], flareZ: 0.022 * bulk }
+      ),
+      'm_pelvis_loincloth_front',
+      isBoss ? 'magma_obsidian' : 'woven_cloth',
+      spec.armorColor,
+      { accentHex: spec.accentColor }
+    ),
+  ];
+  if (id === 'orcs.orc_04' || id === 'orcs.goblin_06' || isBoss) {
+    for (const [tIdx, sx] of [-1, 1].entries()) {
+      const tasset = makePleatedTabardGeometry(
+        0.1 * bulk,
+        0.14 * bulk,
+        0.19 * bulk,
+        0.032 * bulk,
+        2,
+        spec.trimColor,
+        { flareZ: 0.016 * bulk }
+      );
+      tasset.rotateY(sx * (Math.PI * 0.5));
+      tasset.rotateZ(sx * -0.15);
+      tasset.translate(sx * 0.15 * bulk, -0.03 * bulk, 0);
+      pelvisParts.push(
+        tagPart(tasset, `m_pelvis_tasset_${tIdx}`, armorRecipe, spec.trimColor, {
+          accentHex: spec.accentColor,
+        })
+      );
+    }
+  }
+  addBakedBone('Monster_Pelvis', 'pelvis', pelvisParts);
 
   addBakedBone('Monster_Spine1', 'spine_01', [
     tagPart(
@@ -382,15 +422,21 @@ export function buildNwlMonster(
     ),
   ]);
 
-  addBakedBone('Monster_Spine2', 'spine_02', [
+  const spine2Parts: TaggedGeometryPart[] = [
     tagPart(
-      makeBeveledBoneSegmentBox(
+      makeSegmentedBeveledBox(
+        0.34 * bulk,
         spine2Len * 1.12,
-        0.16 * bulk,
-        0.115 * bulk,
-        0.19 * bulk,
-        0.13 * bulk,
+        0.24 * bulk,
         0.016,
+        2,
+        2,
+        2,
+        (x, y, z) => {
+          const vNorm = spine2Len > 1e-4 ? y / (spine2Len * 0.56) : 0;
+          const taper = 1.0 + vNorm * 0.11;
+          return [x * taper, y + spine2Len * 0.54, z];
+        },
         spec.armorColor
       ),
       'm_spine2_armor',
@@ -398,9 +444,20 @@ export function buildNwlMonster(
       spec.armorColor,
       { accentHex: spec.accentColor }
     ),
-  ]);
+  ];
+  if (id === 'orcs.orc_04' || id === 'orcs.goblin_06') {
+    const strap = makeBeveledBox(0.36 * bulk, 0.048 * bulk, 0.26 * bulk, 0.01, spec.trimColor);
+    strap.rotateZ(0.34);
+    strap.translate(0, spine2Len * 0.54, 0);
+    spine2Parts.push(
+      tagPart(strap, 'm_spine2_harness', 'stitched_leather', spec.trimColor, {
+        accentHex: spec.accentColor,
+      })
+    );
+  }
+  addBakedBone('Monster_Spine2', 'spine_02', spine2Parts);
 
-  // Upper chest (+ sculpted SDF musculature + glowing chest rune + dorsal spines for Boss Demon)
+  // Upper chest (+ higher-resolution Taubin-smoothed SDF musculature + glowing chest rune + dorsal spines for Boss Demon)
   const chestParts: TaggedGeometryPart[] = [
     tagPart(
       makeBeveledBoneSegmentBox(
@@ -469,7 +526,7 @@ export function buildNwlMonster(
       },
       [-0.27 * bulk, 0.01, -0.17 * bulk],
       [0.27 * bulk, spine3Len * 1.04, 0.21 * bulk],
-      11,
+      16,
       spec.skinColor,
       { flatShaded: true }
     );
@@ -511,7 +568,7 @@ export function buildNwlMonster(
       );
     }
   }
-  addBakedBone('Monster_Spine3', 'spine_03', chestParts, isBoss);
+  addBakedBone('Monster_Spine3', 'spine_03', chestParts, false);
 
   addBakedBone('Monster_Neck', 'neck_01', [
     tagPart(
@@ -665,7 +722,7 @@ export function buildNwlMonster(
       );
     }
   }
-  addBakedBone('Monster_Head', 'Head', headParts, true);
+  addBakedBone('Monster_Head', 'Head', headParts, false);
 
   // Arms, Pauldrons & Weapons
   for (const side of ['l', 'r'] as const) {
@@ -685,8 +742,8 @@ export function buildNwlMonster(
         spec.skinColor
       ),
     ];
-    if (id === 'orcs.orc_04' || isBoss) {
-      const pScale = isBoss ? 1.05 * bulk : 0.78 * bulk;
+    if (id === 'orcs.orc_04' || id === 'orcs.goblin_06' || isBoss) {
+      const pScale = isBoss ? 1.05 * bulk : id === 'orcs.orc_04' ? 0.82 * bulk : 0.64 * bulk;
       const pauldron = makePauldronShellGeometry(
         0.24 * pScale,
         0.18 * pScale,
@@ -695,26 +752,26 @@ export function buildNwlMonster(
         spec.armorColor
       );
       if (side === 'r') pauldron.rotateY(Math.PI);
-      pauldron.translate(side === 'l' ? 0.04 : -0.04, 0.06, 0);
+      pauldron.translate(side === 'l' ? 0.025 : -0.025, 0.025, 0);
       uParts.push(
         tagPart(pauldron, `m_pauldron_${side}`, armorRecipe, spec.armorColor, {
           accentHex: spec.accentColor,
           lockVertical: false,
         })
       );
-      if (isBoss) {
+      if (isBoss || id === 'orcs.orc_04') {
         const pSpike = makeCurvedHornGeometry(
           4,
           0.042,
           0.008,
-          0.19,
+          isBoss ? 0.19 : 0.13,
           side === 'l' ? 0.04 : -0.04,
           0.01,
           5,
           spec.accentColor
         );
         pSpike.rotateZ(side === 'l' ? -0.78 : 0.78);
-        pSpike.translate(side === 'l' ? 0.09 * bulk : -0.09 * bulk, 0.07, 0);
+        pSpike.translate(side === 'l' ? 0.08 * bulk : -0.08 * bulk, 0.055, 0);
         uParts.push(
           tagPart(pSpike, `demon_pauldron_horn_${side}`, 'bone_ivory', spec.accentColor, {
             lockVertical: false,

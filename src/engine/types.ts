@@ -178,6 +178,9 @@ export interface PipelineConfig {
   debugView: DebugViewMode;
   splitCompare: boolean;
   splitPosition: number; // 0..1
+  bloomEnabled: boolean;
+  bloomThreshold: number;
+  bloomIntensity: number;
 }
 
 export interface SteppedAnimationConfig {

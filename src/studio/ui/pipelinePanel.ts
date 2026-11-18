@@ -167,6 +167,30 @@ export function mountPipelinePanel(
     </div>
 
     <div class="ctrl-section">
+      <div class="ctrl-section-head"><span>HDR Emissive Bloom (Pixel-Aligned)</span></div>
+      <div class="ctrl-section-body">
+        <div class="field-row">
+          <label class="field-label" for="chk-bloom-enabled">Enable HDR Bloom</label>
+          <input id="chk-bloom-enabled" type="checkbox" />
+        </div>
+        <div class="slider-row">
+          <div class="slider-head">
+            <span>Bloom Threshold</span>
+            <span id="val-bloom-thresh" class="slider-val">0.38</span>
+          </div>
+          <input id="rng-bloom-thresh" type="range" min="0.10" max="1.20" step="0.02" value="0.38" />
+        </div>
+        <div class="slider-row">
+          <div class="slider-head">
+            <span>Bloom Intensity</span>
+            <span id="val-bloom-int" class="slider-val">0.45</span>
+          </div>
+          <input id="rng-bloom-int" type="range" min="0" max="1.80" step="0.05" value="0.45" />
+        </div>
+      </div>
+    </div>
+
+    <div class="ctrl-section">
       <div class="ctrl-section-head"><span>Sun Light &amp; Stage</span></div>
       <div class="ctrl-section-body">
         <div class="slider-row">
@@ -236,6 +260,11 @@ export function mountPipelinePanel(
   const selGlobalDitherSpace = container.querySelector<HTMLSelectElement>('#sel-global-dither-space')!;
   const rngGlobalRim = container.querySelector<HTMLInputElement>('#rng-global-rim')!;
   const valGlobalRim = container.querySelector<HTMLElement>('#val-global-rim')!;
+  const chkBloomEnabled = container.querySelector<HTMLInputElement>('#chk-bloom-enabled')!;
+  const rngBloomThresh = container.querySelector<HTMLInputElement>('#rng-bloom-thresh')!;
+  const valBloomThresh = container.querySelector<HTMLElement>('#val-bloom-thresh')!;
+  const rngBloomInt = container.querySelector<HTMLInputElement>('#rng-bloom-int')!;
+  const valBloomInt = container.querySelector<HTMLElement>('#val-bloom-int')!;
 
   const bindCheck = (id: string, fn: (checked: boolean) => void) => {
     const el = container.querySelector<HTMLInputElement>(id)!;
@@ -333,6 +362,10 @@ export function mountPipelinePanel(
     patchAllPixelizedMaterials({ rimIntensity: v });
   });
 
+  bindCheck('#chk-bloom-enabled', (v) => (ctx.pipeline.pipelineConfig.bloomEnabled = v));
+  bindRange('#rng-bloom-thresh', '#val-bloom-thresh', (v) => v.toFixed(2), (v) => (ctx.pipeline.pipelineConfig.bloomThreshold = v));
+  bindRange('#rng-bloom-int', '#val-bloom-int', (v) => v.toFixed(2), (v) => (ctx.pipeline.pipelineConfig.bloomIntensity = v));
+
   bindRange('#rng-light-az', '#val-light-az', (v) => `${v}°`, (v) => {
     ctx.lightAzimuthDeg = v;
     ctx.actions.updateSunDirection();
@@ -384,6 +417,11 @@ export function mountPipelinePanel(
     valEdgeHlStr.textContent = cfg.edgeHighlightStrength.toFixed(2);
     rngBevelStr.value = String(cfg.edgeBevelStrength);
     valBevelStr.textContent = cfg.edgeBevelStrength.toFixed(2);
+    chkBloomEnabled.checked = cfg.bloomEnabled;
+    rngBloomThresh.value = String(cfg.bloomThreshold);
+    valBloomThresh.textContent = cfg.bloomThreshold.toFixed(2);
+    rngBloomInt.value = String(cfg.bloomIntensity);
+    valBloomInt.textContent = cfg.bloomIntensity.toFixed(2);
     colLight.value = cfg.lightColor;
     colAmbient.value = cfg.ambientSkyColor;
     colBg.value = cfg.backgroundColor;

@@ -172,6 +172,7 @@ export class PixelizerMaterial extends THREE.ShaderMaterial {
         uCameraNear: { value: 0.1 },
         uCameraFar: { value: 100.0 },
         uIsOrthographic: { value: 1.0 },
+        uEncodeBloomAlpha: { value: 0.0 },
       },
     ]);
 
@@ -220,14 +221,26 @@ export class PixelizerMaterial extends THREE.ShaderMaterial {
     const o = this.options;
     const white = getFallbackWhiteTexture();
 
-    if (o.albedoMap instanceof THREE.DataTexture) {
-      enforcePixelArtTextureSampling(o.albedoMap, 'albedo');
-    }
-    if (o.normalMap instanceof THREE.DataTexture) {
-      enforcePixelArtTextureSampling(o.normalMap, 'normal');
-    }
-    if (o.emissionMap instanceof THREE.DataTexture) {
-      enforcePixelArtTextureSampling(o.emissionMap, 'emission');
+    if (o.pixelated) {
+      if (o.albedoMap) {
+        enforcePixelArtTextureSampling(o.albedoMap, 'albedo');
+      }
+      if (o.normalMap) {
+        enforcePixelArtTextureSampling(o.normalMap, 'normal');
+      }
+      if (o.emissionMap) {
+        enforcePixelArtTextureSampling(o.emissionMap, 'emission');
+      }
+    } else {
+      if (o.albedoMap instanceof THREE.DataTexture) {
+        enforcePixelArtTextureSampling(o.albedoMap, 'albedo');
+      }
+      if (o.normalMap instanceof THREE.DataTexture) {
+        enforcePixelArtTextureSampling(o.normalMap, 'normal');
+      }
+      if (o.emissionMap instanceof THREE.DataTexture) {
+        enforcePixelArtTextureSampling(o.emissionMap, 'emission');
+      }
     }
 
     const wantTangent = Boolean(o.useVertexTangents && o.normalMap);
@@ -351,10 +364,8 @@ export function convertStandardMaterialToPixelizer(
   const mat = new PixelizerMaterial(opts, sharedResources);
   if (src) {
     mat.side = src.side;
-    if (src.vertexColors && hasVertexColorAttr) {
-      mat.vertexColors = true;
-    }
-  } else if (hasVertexColorAttr) {
+  }
+  if (hasVertexColorAttr) {
     mat.vertexColors = true;
   }
   return mat;

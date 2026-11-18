@@ -126,6 +126,13 @@ export interface SandboxStateSnapshot {
   lastEventText: string;
 }
 
+export interface SandboxCombatJuiceState {
+  hitStopRemaining: number;
+  shakeIntensity: number;
+  activeFloatingCount: number;
+  spellCooldowns: number[];
+}
+
 export interface PlaySandboxHandle {
   root: THREE.Group;
   hudElement: HTMLElement;
@@ -137,6 +144,8 @@ export interface PlaySandboxHandle {
   update: (dt: number) => void;
   getState: () => SandboxStateSnapshot;
   getCameraTarget: () => THREE.Vector3;
+  getCameraShakeOffset: () => THREE.Vector3;
+  getCombatJuiceState: () => SandboxCombatJuiceState;
   dispose: () => void;
 }
 
@@ -146,6 +155,9 @@ export function createNwlPlaySandbox(
   callbacks: {
     onExitSandbox: () => void;
     onZoneOrActorChanged?: () => void;
+    projectWorldToScreen?: (
+      worldPos: THREE.Vector3
+    ) => { x: number; y: number; visible: boolean } | null;
     finishOptions?: {
       finishMode?: FinishMode;
       seed?: number;
@@ -236,7 +248,80 @@ export function createNwlPlaySandbox(
   let simTime = 0;
   let lastEventText = 'Bem-vindo à Cidade Principal dos Portais!';
 
+  interface FloatingNumberItem {
+    el: HTMLElement;
+    worldPos: THREE.Vector3;
+    velocityY: number;
+    offsetX: number;
+    age: number;
+    duration: number;
+  }
+
+  let hitStopTimer = 0;
+  let shakeIntensity = 0;
+  const shakeOffset = new THREE.Vector3();
+  const floatingNumbers: FloatingNumberItem[] = [];
+  const MAX_FLOATING_NUMBERS = 24;
+
   const keysPressed = new Set<string>();
+
+  const addShake = (amount: number) => {
+    shakeIntensity = Math.min(0.65, shakeIntensity + amount);
+  };
+
+  const triggerHitStop = (sec: number) => {
+    hitStopTimer = Math.max(hitStopTimer, Math.min(0.06, sec));
+  };
+
+  let elFloatingLayer: HTMLElement | null = null;
+
+  const spawnFloatingText = (
+    worldPos: THREE.Vector3,
+    text: string,
+    kind: 'normal' | 'crit' | 'heal' | 'player_hit' = 'normal'
+  ) => {
+    if (!elFloatingLayer) return;
+    while (floatingNumbers.length >= MAX_FLOATING_NUMBERS) {
+      floatingNumbers.shift()?.el.remove();
+    }
+    const doc = elFloatingLayer.ownerDocument ?? document;
+    const el = doc.createElement('span');
+    el.className =
+      kind === 'crit'
+        ? 'sb-float-num is-crit'
+        : kind === 'heal'
+          ? 'sb-float-num is-heal'
+          : kind === 'player_hit'
+            ? 'sb-float-num is-player-hit'
+            : 'sb-float-num';
+    el.textContent = text;
+    elFloatingLayer.appendChild(el);
+
+    const item: FloatingNumberItem = {
+      el,
+      worldPos: worldPos.clone().add(
+        new THREE.Vector3(
+          (Math.random() - 0.5) * 0.35,
+          1.35,
+          (Math.random() - 0.5) * 0.35
+        )
+      ),
+      velocityY: kind === 'crit' ? 1.85 : 1.35,
+      offsetX: (Math.random() - 0.5) * 14,
+      age: 0,
+      duration: kind === 'crit' ? 0.92 : 0.72,
+    };
+
+    const proj = callbacks.projectWorldToScreen?.(item.worldPos);
+    if (proj && proj.visible) {
+      el.style.display = 'block';
+      el.style.left = `${(proj.x + item.offsetX).toFixed(1)}px`;
+      el.style.top = `${proj.y.toFixed(1)}px`;
+    } else if (callbacks.projectWorldToScreen) {
+      el.style.display = 'none';
+    }
+    floatingNumbers.push(item);
+  };
 
   const clearDynamicEntities = () => {
     for (const p of projectiles) {
@@ -260,6 +345,13 @@ export function createNwlPlaySandbox(
       e.telegraph?.dispose();
     }
     enemies = [];
+    for (const fn of floatingNumbers) {
+      fn.el.remove();
+    }
+    floatingNumbers.length = 0;
+    hitStopTimer = 0;
+    shakeIntensity = 0;
+    shakeOffset.set(0, 0, 0);
   };
 
   const attachSpellPointLight = (id: NwlSpellVfxId, targetRoot: THREE.Object3D): void => {
@@ -437,12 +529,21 @@ export function createNwlPlaySandbox(
 
   // Combat Execution Helpers
   const hitEnemiesInRadius = (center: THREE.Vector3, radius: number, dmg: number) => {
+    const isHeavy = dmg >= 30;
     for (const e of enemies) {
       if (e.dead) continue;
       const dist = e.instance.root.position.distanceTo(center);
       if (dist <= radius) {
         e.hp = Math.max(0, e.hp - dmg);
         spawnVfxAt('impact_spark', e.instance.root.position.clone(), 0, 0.3);
+        spawnFloatingText(
+          e.instance.root.position,
+          isHeavy ? `${Math.round(dmg)}!` : `${Math.round(dmg)}`,
+          isHeavy ? 'crit' : 'normal'
+        );
+        addShake(isHeavy ? 0.24 : 0.12);
+        if (isHeavy) triggerHitStop(0.04);
+
         if (e.hp <= 0) {
           e.dead = true;
           e.telegraph?.root.removeFromParent();
@@ -450,6 +551,13 @@ export function createNwlPlaySandbox(
           e.telegraph = undefined;
           e.instance.root.rotation.x = -Math.PI * 0.45;
           e.instance.root.position.y = 0.2;
+          addShake(e.role === 'boss' ? 0.38 : 0.22);
+          triggerHitStop(0.055);
+          spawnFloatingText(
+            e.instance.root.position.clone().add(new THREE.Vector3(0, 0.35, 0)),
+            'KILL!',
+            'crit'
+          );
           // Guaranteed rarity drop on defeat! Boss drops Epic or Legendary!
           const slot = EQUIP_SLOTS[Math.floor(Math.random() * EQUIP_SLOTS.length)];
           const rarity: ItemRarity =
@@ -466,6 +574,9 @@ export function createNwlPlaySandbox(
         if (!d.broken && d.worldPos.distanceTo(center) <= radius) {
           d.shatter();
           spawnVfxAt('impact_spark', d.worldPos.clone(), 0, 0.25);
+          addShake(0.14);
+          triggerHitStop(0.025);
+          spawnFloatingText(d.worldPos, 'QUEBRADO!', 'normal');
           if (Math.random() > 0.35) {
             const slot = EQUIP_SLOTS[Math.floor(Math.random() * EQUIP_SLOTS.length)];
             const rarity = ITEM_RARITIES[Math.floor(Math.random() * 4)];
@@ -520,6 +631,7 @@ export function createNwlPlaySandbox(
       }
       spawnVfxAt(spell.vfxId, hero.root.position.clone(), heroYaw);
       hitEnemiesInRadius(hero.root.position, spell.range, spell.damage);
+      addShake(0.12);
     } else if (spell.isProjectile) {
       const vfx = buildNwlSpellVfx(spell.vfxId, res(), 176);
       attachSpellPointLight(spell.vfxId, vfx.root);
@@ -541,9 +653,11 @@ export function createNwlPlaySandbox(
           ? hero.root.position.clone().addScaledVector(forward, 3.2)
           : hero.root.position.clone();
       spawnVfxAt(spell.vfxId, targetPos, heroYaw);
+      addShake(spell.vfxId === 'meteoro' ? 0.34 : 0.16);
       hitEnemiesInRadius(targetPos, spell.range, spell.damage);
     }
     lastEventText = `Magia lançada: ${spell.labelPt}!`;
+    syncSpellCooldownUi();
     syncHud();
   };
 
@@ -564,6 +678,7 @@ export function createNwlPlaySandbox(
         d.mesh.geometry.dispose();
         d.mat.dispose();
         lootDrops.splice(i, 1);
+        spawnFloatingText(hero.root.position, `+${def.slot.toUpperCase()}`, 'heal');
         lastEventText = `Equipado: ${def.displayName}`;
         syncHud();
         return;
@@ -589,7 +704,13 @@ export function createNwlPlaySandbox(
         return;
       }
       if (hero.root.position.distanceTo(dungeon.altarPos) < 2.2) {
+        const healed = Math.max(0, heroMaxHp - heroHp);
         heroHp = heroMaxHp;
+        spawnFloatingText(
+          hero.root.position,
+          healed > 0 ? `+${Math.round(healed)} HP` : 'HP FULL',
+          'heal'
+        );
         lastEventText = 'Altar Sagrado ativado: HP restaurado ao máximo!';
         syncHud();
         return;
@@ -601,9 +722,11 @@ export function createNwlPlaySandbox(
   };
 
   // Build Sandbox Overlay HUD inside stageContainer
-  const hudElement = document.createElement('div');
+  const hudDoc = stageContainer.ownerDocument ?? document;
+  const hudElement = hudDoc.createElement('div');
   hudElement.className = 'nwl-sandbox-hud';
   hudElement.innerHTML = `
+    <div class="sb-floating-layer" id="sb-floating-layer"></div>
     <div class="sb-top-bar">
       <div class="sb-status-pill">
         <strong id="sb-zone-title">Cidade Principal dos Portais</strong>
@@ -644,6 +767,7 @@ export function createNwlPlaySandbox(
   `;
   stageContainer.appendChild(hudElement);
 
+  elFloatingLayer = hudElement.querySelector<HTMLElement>('#sb-floating-layer');
   const elZone = hudElement.querySelector<HTMLElement>('#sb-zone-title')!;
   const elHp = hudElement.querySelector<HTMLElement>('#sb-hp-text')!;
   const elBoss = hudElement.querySelector<HTMLElement>('#sb-boss-badge')!;
@@ -653,17 +777,44 @@ export function createNwlPlaySandbox(
   const selRaritySet = hudElement.querySelector<HTMLSelectElement>('#sb-rarity-set')!;
   const btnPortal = hudElement.querySelector<HTMLButtonElement>('#sb-btn-portal')!;
 
+  function syncSpellCooldownUi(): void {
+    const list = CLASS_SPELLS[hero.classId];
+    const btns = elSpellRow.querySelectorAll<HTMLButtonElement>('.sb-spell-btn');
+    btns.forEach((btn, i) => {
+      const sp = list[i];
+      const rem = spellCooldowns[i] ?? 0;
+      const onCd = rem > 0.01 && Boolean(sp && sp.cooldownSec > 0);
+      btn.classList.toggle('is-on-cooldown', onCd);
+      const tag = btn.querySelector<HTMLElement>('.sb-cd-tag');
+      if (onCd && sp) {
+        const pct = Math.min(100, Math.max(0, (rem / sp.cooldownSec) * 100));
+        btn.style.setProperty('--cd-pct', `${pct.toFixed(1)}%`);
+        if (tag) {
+          tag.style.display = 'inline';
+          tag.textContent = `${rem.toFixed(1)}s`;
+        }
+      } else {
+        btn.style.removeProperty('--cd-pct');
+        if (tag) {
+          tag.style.display = 'none';
+          tag.textContent = '';
+        }
+      }
+    });
+  }
+
   const renderSpellBar = () => {
     const list = CLASS_SPELLS[hero.classId];
     elSpellRow.innerHTML = list
       .map(
         (sp, idx) =>
-          `<button class="sb-spell-btn" data-sp="${idx}" type="button" style="border-color:${sp.cooldownSec > 0 ? RARITY_COLOR_TABLE[hero.loadout.weapon].glow : '#323a4a'}"><b>[${sp.key}]</b> ${sp.labelPt}</button>`
+          `<button class="sb-spell-btn" data-sp="${idx}" type="button" style="border-color:${sp.cooldownSec > 0 ? RARITY_COLOR_TABLE[hero.loadout.weapon].glow : '#323a4a'}"><b>[${sp.key}]</b> ${sp.labelPt}<span class="sb-cd-tag" style="display:none;"></span></button>`
       )
       .join('');
     elSpellRow.querySelectorAll<HTMLButtonElement>('.sb-spell-btn').forEach((btn) => {
       btn.addEventListener('click', () => triggerSpell(Number(btn.dataset.sp) || 0));
     });
+    syncSpellCooldownUi();
   };
 
   function syncHud(): void {
@@ -687,7 +838,7 @@ export function createNwlPlaySandbox(
   selClass.addEventListener('change', () => {
     hero.setClass(selClass.value as PlayerClassId);
     renderSpellBar();
-    lastEventText = `Classe alterada para ${selClass.selectedOptions[0].text}`;
+    lastEventText = `Classe alterada para ${selClass.selectedOptions?.[0]?.text ?? selClass.value}`;
     callbacks.onZoneOrActorChanged?.();
     syncHud();
   });
@@ -704,11 +855,12 @@ export function createNwlPlaySandbox(
   hudElement.querySelector('#sb-btn-exit')!.addEventListener('click', () => callbacks.onExitSandbox());
 
   const onKeyDown = (e: KeyboardEvent) => {
-    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
+    const targetTag = (e.target as { tagName?: string } | null)?.tagName;
+    if (targetTag === 'INPUT' || targetTag === 'SELECT') return;
     const k = e.key.toLowerCase();
     keysPressed.add(k);
     if (k === ' ') {
-      e.preventDefault();
+      e.preventDefault?.();
       triggerBasicAttack();
     } else if (k === 'shift') {
       triggerDodge();
@@ -721,14 +873,61 @@ export function createNwlPlaySandbox(
   const onKeyUp = (e: KeyboardEvent) => {
     keysPressed.delete(e.key.toLowerCase());
   };
-  window.addEventListener('keydown', onKeyDown);
-  window.addEventListener('keyup', onKeyUp);
+  if (typeof window !== 'undefined') {
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+  }
 
   renderSpellBar();
   enterZone('city');
 
   const update = (dt: number) => {
     const clampedDt = Math.min(0.05, Math.max(0.001, dt));
+
+    if (shakeIntensity > 0.0001) {
+      const t = simTime * 55 + hitStopTimer * 80;
+      shakeOffset.set(
+        Math.sin(t * 1.7) * shakeIntensity * 0.35,
+        Math.cos(t * 2.3) * shakeIntensity * 0.28,
+        Math.sin(t * 1.3 + 1.1) * shakeIntensity * 0.35
+      );
+      shakeIntensity = Math.max(0, shakeIntensity - clampedDt * 2.6);
+    } else {
+      shakeIntensity = 0;
+      shakeOffset.set(0, 0, 0);
+    }
+
+    for (let i = floatingNumbers.length - 1; i >= 0; i--) {
+      const fn = floatingNumbers[i];
+      fn.age += clampedDt;
+      fn.worldPos.y += fn.velocityY * clampedDt;
+      fn.velocityY = Math.max(0.2, fn.velocityY - clampedDt * 1.4);
+      if (fn.age >= fn.duration) {
+        fn.el.remove();
+        floatingNumbers.splice(i, 1);
+        continue;
+      }
+      const alpha =
+        fn.age > fn.duration * 0.65
+          ? 1 - (fn.age - fn.duration * 0.65) / (fn.duration * 0.35)
+          : 1;
+      fn.el.style.opacity = alpha.toFixed(2);
+      const proj = callbacks.projectWorldToScreen?.(fn.worldPos);
+      if (proj && proj.visible) {
+        fn.el.style.display = 'block';
+        fn.el.style.left = `${(proj.x + fn.offsetX).toFixed(1)}px`;
+        fn.el.style.top = `${proj.y.toFixed(1)}px`;
+      } else if (callbacks.projectWorldToScreen) {
+        fn.el.style.display = 'none';
+      }
+    }
+    syncSpellCooldownUi();
+
+    if (hitStopTimer > 0) {
+      hitStopTimer = Math.max(0, hitStopTimer - clampedDt);
+      return;
+    }
+
     simTime += clampedDt;
     if (dodgeTimer > 0) dodgeTimer = Math.max(0, dodgeTimer - clampedDt);
     if (attackTimer > 0) attackTimer = Math.max(0, attackTimer - clampedDt);
@@ -802,6 +1001,7 @@ export function createNwlPlaySandbox(
         d.mesh.geometry.dispose();
         d.mat.dispose();
         lootDrops.splice(i, 1);
+        spawnFloatingText(hero.root.position, `+${def.slot.toUpperCase()}`, 'heal');
         lastEventText = `Equipado automaticamente: ${def.displayName}`;
         syncHud();
       }
@@ -874,6 +1074,9 @@ export function createNwlPlaySandbox(
               heroHp = Math.max(0, heroHp - e.damage);
               invulnTimer = 0.5;
               spawnVfxAt('impact_spark', hero.root.position.clone(), 0, 0.25);
+              addShake(0.28);
+              triggerHitStop(0.045);
+              spawnFloatingText(hero.root.position, `-${Math.round(e.damage)}`, 'player_hit');
               if (heroHp <= 0) {
                 lastEventText = 'Você caiu nas Ruínas! Retornando à Cidade...';
                 enterZone('city');
@@ -904,6 +1107,9 @@ export function createNwlPlaySandbox(
           heroHp = Math.max(0, heroHp - p.damage);
           invulnTimer = 0.5;
           spawnVfxAt('impact_spark', hero.root.position.clone(), 0, 0.25);
+          addShake(0.24);
+          triggerHitStop(0.04);
+          spawnFloatingText(hero.root.position, `-${Math.round(p.damage)}`, 'player_hit');
           hit = true;
           if (heroHp <= 0) {
             enterZone('city');
@@ -978,9 +1184,18 @@ export function createNwlPlaySandbox(
       };
     },
     getCameraTarget: () => hero.root.position.clone().add(new THREE.Vector3(0, 1.0, 0)),
+    getCameraShakeOffset: () => shakeOffset.clone(),
+    getCombatJuiceState: () => ({
+      hitStopRemaining: hitStopTimer,
+      shakeIntensity,
+      activeFloatingCount: floatingNumbers.length,
+      spellCooldowns: [...spellCooldowns],
+    }),
     dispose: () => {
-      window.removeEventListener('keydown', onKeyDown);
-      window.removeEventListener('keyup', onKeyUp);
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('keydown', onKeyDown);
+        window.removeEventListener('keyup', onKeyUp);
+      }
       hudElement.remove();
       clearDynamicEntities();
       city?.dispose();

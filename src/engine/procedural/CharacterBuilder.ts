@@ -727,7 +727,7 @@ export function buildProceduralUalCharacter(
       cacheKey: `ual_skin:${archetype}:${profile}`,
       partTagToBoneIndex,
       subdivideMaxEdgeM: 0,
-      inspectUvs: true,
+      inspectUvs: false,
     });
     for (const p of worldParts) p.geometry.dispose();
     keyMetrics = baked.unwrapMetrics;

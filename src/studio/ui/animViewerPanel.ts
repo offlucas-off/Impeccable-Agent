@@ -19,6 +19,13 @@ import { buildProceduralProp, type PropKind } from '../../engine/procedural/Prop
 import type { PixelizerMaterialResources } from '../../engine/PixelizerMaterial';
 import type { SteppedAnimationController } from '../../engine/steppedAnimation';
 
+export interface AutoRigStaticReport {
+  detectedPose: 't_pose' | 'a_pose' | 'ual';
+  armAngleDeg: number;
+  meshCount: number;
+  alreadyUal?: boolean;
+}
+
 export interface AnimViewerHostContext {
   getSubjectRoot: () => THREE.Object3D | null;
   getNativeClips: () => THREE.AnimationClip[];
@@ -28,6 +35,7 @@ export interface AnimViewerHostContext {
   getSkeletonOverlayEnabled: () => boolean;
   setSkeletonOverlayEnabled: (enabled: boolean) => void;
   onVoxelizeRiggedRequested: () => void;
+  onAutoRigStaticRequested?: () => AutoRigStaticReport | null;
   getSharedMaterialResources: () => PixelizerMaterialResources;
   onPropAttachedToSubject: (propRoot: THREE.Object3D) => void;
   getExportSlug: () => string;
@@ -91,6 +99,9 @@ export function mountAnimViewerPanel(
           </button>
           <button id="av-btn-voxelize-rig" class="btn btn-sm" type="button" title="Convert active mesh into voxel SkinnedMesh preserving 65-bone UAL rig">
             Voxelize Preserving Rig
+          </button>
+          <button id="av-btn-autorig" class="btn btn-sm" type="button" style="grid-column:span 2;" title="Auto-Rig static humanoid mesh (T-Pose or A-Pose) onto canonical 65-bone UAL skeleton">
+            Auto-Rig Static → UAL (65 Bones + 85 Clips)
           </button>
         </div>
 
@@ -327,6 +338,36 @@ export function mountAnimViewerPanel(
 
   container.querySelector('#av-btn-voxelize-rig')!.addEventListener('click', () => {
     ctx.onVoxelizeRiggedRequested();
+  });
+
+  container.querySelector('#av-btn-autorig')!.addEventListener('click', () => {
+    if (!ctx.onAutoRigStaticRequested) return;
+    const subj = ctx.getSubjectRoot();
+    if (!subj) {
+      exportStatusEl.textContent = 'Nenhum modelo ativo no palco para Auto-Rig UAL.';
+      return;
+    }
+    try {
+      const report = ctx.onAutoRigStaticRequested();
+      if (!report) {
+        exportStatusEl.textContent = 'Não foi possível aplicar Auto-Rig UAL ao palco atual.';
+        return;
+      }
+      if (report.alreadyUal) {
+        exportStatusEl.textContent = 'Modelo já possui esqueleto compatível UAL 65 Bones.';
+      } else {
+        const poseLabel =
+          report.detectedPose === 'a_pose'
+            ? `A-Pose (${report.armAngleDeg}° → T-Pose)`
+            : 'T-Pose';
+        exportStatusEl.textContent =
+          `Auto-Rig UAL 65B concluído [${poseLabel} · ${report.meshCount} malha(s)] — Idle_Loop ativo!`;
+      }
+      refreshRigBadge();
+      renderClipList();
+    } catch (err) {
+      exportStatusEl.textContent = `Auto-Rig falhou: ${err instanceof Error ? err.message : String(err)}`;
+    }
   });
 
   container.querySelector('#av-btn-equip')!.addEventListener('click', () => {

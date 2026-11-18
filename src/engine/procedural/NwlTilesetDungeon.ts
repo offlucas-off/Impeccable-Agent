@@ -453,6 +453,7 @@ export function buildNwlTilesetCatalog(
     emissiveRuneHex: RUINS_PAL.portalBlue,
     usePool: true,
     cacheKey: `nwl_cat_floor:${biome}`,
+    inspectUvs: false,
   });
   for (const p of floorParts) p.geometry.dispose();
 
@@ -466,6 +467,7 @@ export function buildNwlTilesetCatalog(
     emissiveRuneHex: RUINS_PAL.ember,
     usePool: true,
     cacheKey: `nwl_cat_pieces:${biome}`,
+    inspectUvs: false,
   });
   for (const p of pieceParts) p.geometry.dispose();
 
@@ -1299,6 +1301,7 @@ export function buildGreenRuinsFloor1(
       normalStrength,
       usePool: true,
       cacheKey: `nwl_ruins_dest:${dc.kind}`,
+      inspectUvs: false,
     });
     for (const p of intactParts) p.geometry.dispose();
 
@@ -1331,6 +1334,7 @@ export function buildGreenRuinsFloor1(
       normalStrength,
       usePool: true,
       cacheKey: `nwl_ruins_broken:${dc.kind}`,
+      inspectUvs: false,
     });
     for (const p of brokenParts) p.geometry.dispose();
 

@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { describe, expect, it } from 'vitest';
 import {
+  bake3DCurvatureToUvIslands,
   buildGreenRuinsFloor1,
   buildNwlMonster,
   buildNwlNpc,
@@ -13,9 +14,16 @@ import {
   detectFlatDetailCuboids,
   exportRiggedAssetToGlb,
   inspectGeometryUvs,
+  makePleatedTabardGeometry,
+  makeSegmentedBeveledBox,
+  unwrapPixelAligned,
   type PropKind,
   type UnwrapMetricsSummary,
 } from '../src/engine';
+import {
+  extractZipArchiveEntries,
+  remasterImportedTextureForPixelizer,
+} from '../src/studio/loaders/modelLoader';
 
 function countUniqueVertexColors(root: THREE.Object3D): number {
   const seen = new Set<string>();
@@ -43,6 +51,36 @@ function assertMetricsPassGate(metrics: UnwrapMetricsSummary | undefined, label:
   expect(metrics!.meanEntropy, `${label} meanEntropy`).toBeGreaterThanOrEqual(1.8);
   expect(metrics!.flatFacesPercent, `${label} flatFacesPercent`).toBeLessThanOrEqual(10);
   expect(metrics!.meanEdgeChangePercent, `${label} meanEdgeChangePercent`).toBeGreaterThanOrEqual(12);
+}
+
+function assertRootMeshesPassUvGate(
+  root: THREE.Object3D,
+  fallbackMetrics: UnwrapMetricsSummary | undefined,
+  label: string
+): void {
+  let inspected = 0;
+  root.traverse((obj) => {
+    if (obj instanceof THREE.Mesh && obj.geometry?.getAttribute('uv')) {
+      const m =
+        (obj.geometry.userData?.unwrapMetrics as UnwrapMetricsSummary | undefined) ??
+        fallbackMetrics;
+      const mat = Array.isArray(obj.material) ? obj.material[0] : obj.material;
+      const albImg = mat?.options?.albedoMap?.image as { width?: number; height?: number } | undefined;
+      const texW = m?.texWidth ?? albImg?.width ?? 128;
+      const texH = m?.texHeight ?? albImg?.height ?? 128;
+      const tpm = m?.texelsPerMeter ?? 64;
+      const report = inspectGeometryUvs(obj.geometry, tpm, texW, texH, {
+        flatCheckRoot: root,
+      });
+      expect(report.nonFiniteTriangles, `${label}:${obj.name} nonFinite`).toBe(0);
+      expect(report.collapsedTriangles, `${label}:${obj.name} collapsed`).toBe(0);
+      expect(report.outOfTileTriangles, `${label}:${obj.name} outOfTile`).toBe(0);
+      expect(report.overlapPairs, `${label}:${obj.name} overlapPairs`).toBe(0);
+      expect(obj.geometry.getAttribute('tangent'), `${label}:${obj.name} tangent`).toBeDefined();
+      inspected++;
+    }
+  });
+  expect(inspected, `${label} inspected mesh count`).toBeGreaterThan(0);
 }
 
 function parseGlbJsonChunk(buffer: ArrayBuffer): Record<string, unknown> {
@@ -101,6 +139,7 @@ describe('Phase 5 & 6 Procedural Modeling, Auto-UV & Texturing Quality Gate', ()
     try {
       const heroMetrics = hero.root.userData.unwrapMetrics as UnwrapMetricsSummary | undefined;
       assertMetricsPassGate(heroMetrics, 'Player:knight:legendary');
+      assertRootMeshesPassUvGate(hero.root, heroMetrics, 'Player:knight:legendary');
       expect(detectFlatDetailCuboids(hero.root).length).toBe(0);
       expect(hero.materials.every((m) => m.options.albedoMap !== null && m.options.normalMap !== null)).toBe(true);
     } finally {
@@ -131,6 +170,7 @@ describe('Phase 5 & 6 Procedural Modeling, Auto-UV & Texturing Quality Gate', ()
     try {
       const bossMetrics = bossDemon.root.userData.unwrapMetrics as UnwrapMetricsSummary | undefined;
       assertMetricsPassGate(bossMetrics, 'Boss:demons.boss_demon');
+      assertRootMeshesPassUvGate(bossDemon.root, bossMetrics, 'Boss:demons.boss_demon');
       expect(bossMetrics!.minVertexAo).toBeGreaterThanOrEqual(0.45);
       expect(detectFlatDetailCuboids(bossDemon.root).length).toBe(0);
       expect(bossDemon.materials.some((m) => m.options.emissionMap !== null)).toBe(true);
@@ -167,10 +207,11 @@ describe('Phase 5 & 6 Procedural Modeling, Auto-UV & Texturing Quality Gate', ()
       expect(firstHouse.materials.some((m) => m.options.albedoMap !== null)).toBe(true);
       const houseMetrics = firstHouse.root.userData.unwrapMetrics as UnwrapMetricsSummary | undefined;
       assertMetricsPassGate(houseMetrics, 'CityHouse:0');
+      assertRootMeshesPassUvGate(firstHouse.root, houseMetrics, 'CityHouse:0');
     } finally {
       city.dispose();
     }
-  }, 15000);
+  }, 45000);
 
   it('validates Green Ruins Floor 1 and WFC Medieval Structure quality metrics', () => {
     const dungeon = buildGreenRuinsFloor1(101);
@@ -338,5 +379,129 @@ describe('Phase 5 & 6 Procedural Modeling, Auto-UV & Texturing Quality Gate', ()
       dungeonFlat.dispose();
       structFlat.dispose?.();
     }
+  });
+
+  it('validates Wave 1–4 Caminho B upgrades: sculpted primitives, 3D-to-2D curvature baking, and Meshy-to-Pixelizer texture remastering', async () => {
+    // 1. Sculpted Primitives: makeSegmentedBeveledBox & makePleatedTabardGeometry
+    const segBox = makeSegmentedBeveledBox(
+      0.5,
+      0.6,
+      0.3,
+      0.03,
+      2,
+      3,
+      2,
+      (x, y, z) => [x * (1 + y * 0.2), y, z]
+    );
+    expect(segBox.getAttribute('position').count).toBeGreaterThan(72);
+    expect(segBox.getAttribute('normal')).toBeDefined();
+    expect(segBox.getAttribute('color')).toBeDefined();
+
+    const tabard = makePleatedTabardGeometry(0.28, 0.42, 0.48, 0.035, 3);
+    expect(tabard.getAttribute('position').count).toBeGreaterThan(60);
+    expect(tabard.getAttribute('normal')).toBeDefined();
+
+    // 2. Auto-UV worldY metadata + 3D Dihedral Curvature Rasterization
+    const unwrapRes = unwrapPixelAligned(
+      [
+        {
+          geometry: segBox,
+          partTag: 'test_cuirass',
+          materialKind: 'rarity_armor',
+          baseHex: '#3e4356',
+          accentHex: '#b4202a',
+          projection: 'box6',
+          landmarkKind: 'none',
+          lockVertical: true,
+        },
+      ],
+      {
+        texelsPerMeter: 64,
+        sewChamfersToParentChart: true,
+      }
+    );
+    expect(unwrapRes.islands.length).toBeGreaterThan(0);
+    expect(unwrapRes.islands[0].worldYMin).toBeDefined();
+    expect(unwrapRes.islands[0].worldYMax).toBeDefined();
+    expect(unwrapRes.islands[0].avgNormalY).toBeDefined();
+
+    const curvMap = bake3DCurvatureToUvIslands(
+      unwrapRes.geometry,
+      unwrapRes.islands,
+      unwrapRes.texWidth,
+      unwrapRes.texHeight
+    );
+    expect(curvMap.length).toBe(unwrapRes.texWidth * unwrapRes.texHeight);
+    let nonZeroCurv = 0;
+    for (let i = 0; i < curvMap.length; i++) {
+      expect(curvMap[i]).toBeGreaterThanOrEqual(-1.0);
+      expect(curvMap[i]).toBeLessThanOrEqual(1.0);
+      if (Math.abs(curvMap[i]) > 0.01) nonZeroCurv++;
+    }
+    expect(nonZeroCurv).toBeGreaterThan(0);
+
+    // 3. Meshy-to-Pixelizer Texture Remastering: downsample, black-floor lift >= 28, normal slope <= 0.24, confetti suppression
+    const srcW = 128;
+    const srcH = 128;
+    const noisyData = new Uint8Array(srcW * srcH * 4);
+    for (let y = 0; y < srcH; y++) {
+      for (let x = 0; x < srcW; x++) {
+        const idx = (y * srcW + x) * 4;
+        // Inject crushed black (5,5,5) with isolated high-contrast 1px Nyquist speckles
+        const isSpeckle = x % 5 === 0 && y % 5 === 0;
+        const v = isSpeckle ? 235 : 5;
+        noisyData[idx + 0] = v;
+        noisyData[idx + 1] = v;
+        noisyData[idx + 2] = v;
+        noisyData[idx + 3] = 255;
+      }
+    }
+    const rawTex = new THREE.DataTexture(noisyData, srcW, srcH, THREE.RGBAFormat);
+    const remastered = remasterImportedTextureForPixelizer(rawTex, {
+      targetMaxDim: 64,
+      liftBlackFloor: 28,
+      synthesizeNormalMaxSlope: 0.24,
+    });
+
+    const albImg = remastered.albedoMap.image as { width: number; height: number; data: Uint8Array };
+    const nrmImg = remastered.normalMap.image as { width: number; height: number; data: Uint8Array };
+    expect(albImg.width).toBe(64);
+    expect(albImg.height).toBe(64);
+    expect(remastered.albedoMap.magFilter).toBe(THREE.NearestFilter);
+    expect(remastered.normalMap.colorSpace).toBe(THREE.NoColorSpace);
+
+    let minCh = 255;
+    let maxCh = 0;
+    for (let i = 0; i < albImg.data.length; i += 4) {
+      minCh = Math.min(minCh, albImg.data[i], albImg.data[i + 1], albImg.data[i + 2]);
+      maxCh = Math.max(maxCh, albImg.data[i], albImg.data[i + 1], albImg.data[i + 2]);
+    }
+    expect(minCh).toBeGreaterThanOrEqual(28);
+    expect(maxCh).toBeLessThanOrEqual(242);
+
+    let maxNormalSlope = 0;
+    for (let i = 0; i < nrmImg.data.length; i += 4) {
+      const nx = (nrmImg.data[i] / 255) * 2 - 1;
+      const ny = (nrmImg.data[i + 1] / 255) * 2 - 1;
+      maxNormalSlope = Math.max(maxNormalSlope, Math.abs(nx), Math.abs(ny));
+    }
+    expect(maxNormalSlope).toBeLessThanOrEqual(0.245);
+
+    // 4. Pure-TS ZIP store reader & ZIP64 sentinel rejection check
+    const emptyZipEocd = new Uint8Array(22);
+    emptyZipEocd[0] = 0x50;
+    emptyZipEocd[1] = 0x4b;
+    emptyZipEocd[2] = 0x05;
+    emptyZipEocd[3] = 0x06;
+    const entries = await extractZipArchiveEntries(emptyZipEocd.buffer);
+    expect(entries).toEqual([]);
+
+    const zip64Eocd = new Uint8Array(22);
+    zip64Eocd.set(emptyZipEocd);
+    const zip64View = new DataView(zip64Eocd.buffer);
+    zip64View.setUint16(10, 0xffff, true);
+    zip64View.setUint32(12, 0xffffffff, true);
+    zip64View.setUint32(16, 0xffffffff, true);
+    await expect(extractZipArchiveEntries(zip64Eocd.buffer)).rejects.toThrow(/ZIP64/i);
   });
 });

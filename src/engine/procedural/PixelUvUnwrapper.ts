@@ -19,6 +19,9 @@ export interface UvIslandMeta {
   uvBounds: { u0: number; v0: number; u1: number; v1: number };
   texelsPerMeter: number;
   triIndices: number[];
+  worldYMin?: number;
+  worldYMax?: number;
+  avgNormalY?: number;
 }
 
 export interface UnwrappedAtlasResult {
@@ -39,6 +42,8 @@ export interface UnwrapOptions {
   maxAtlasSize?: number;
   computeTangents?: boolean;
   islandChartCosThreshold?: number;
+  /** Default `true`: unfolds and sews narrow chamfer/bevel strips (`<= 45 deg`) onto their parent chart without overlap. */
+  sewChamfersToParentChart?: boolean;
   /** Default `'white_for_ao'` prevents double-multiplying baseHex (`albedoMap * vertexColor`) so vertexColor stores pure grayscale AO. */
   vertexColorMode?: 'white_for_ao' | 'preserve';
 }
@@ -260,7 +265,8 @@ function buildTriangleAdjacency(tris: RawTriangle[]): number[][] {
 function splitChartsWithoutFoldOrSelfOverlap(
   part: TaggedGeometryPart,
   tris: RawTriangle[],
-  cosThreshold: number
+  cosThreshold: number,
+  sewChamfers = true
 ): RawChart[] {
   const adj = buildTriangleAdjacency(tris);
   const visited = new Uint8Array(tris.length);
@@ -324,14 +330,58 @@ function splitChartsWithoutFoldOrSelfOverlap(
         ? canonical
         : chartBasisFromNormal(finalAvgN, part.lockVertical !== false);
 
+    // Optional chamfer sewing: attach narrow adjacent bevel triangles (cos >= 0.707, <= 45 deg)
+    // to major non-landmark panels when unfolding them introduces zero self-overlap and stays within density bounds.
+    const hasSpecialLandmark = Boolean(part.landmarkKind && part.landmarkKind !== 'none');
+    if (sewChamfers && !hasSpecialLandmark && cluster.length >= 1) {
+      let mainArea = 0;
+      for (const ti of cluster) mainArea += tris[ti].area3D;
+      const maxChamferTriArea = Math.min(0.0035, mainArea * 0.14);
+
+      const sewCandidates: number[] = [];
+      for (const ti of cluster) {
+        for (const nb of adj[ti]) {
+          if (visited[nb]) continue;
+          const nbTri = tris[nb];
+          if (nbTri.area3D > maxChamferTriArea) continue;
+          const dFrame = dot3(nbTri.normal, frame.normal);
+          if (dFrame >= 0.78 && dot3(nbTri.normal, tris[ti].normal) >= 0.707) {
+            if (!sewCandidates.includes(nb)) {
+              sewCandidates.push(nb);
+            }
+          }
+        }
+      }
+
+      if (sewCandidates.length > 0) {
+        const testTris = [...cluster, ...sewCandidates];
+        const testUs: number[] = [];
+        const testVs: number[] = [];
+        for (const ti of testTris) {
+          const tr = tris[ti];
+          for (const pt of [tr.p0, tr.p1, tr.p2]) {
+            testUs.push(dot3(pt, frame.tangent));
+            testVs.push(dot3(pt, frame.bitangent));
+          }
+        }
+        if (!clusterHasLocalUvOverlap(testUs, testVs)) {
+          for (const sc of sewCandidates) {
+            visited[sc] = 1;
+            cluster.push(sc);
+          }
+        }
+      }
+    }
+
     // Sub-check cluster triangles individually: if any single triangle deviates too far or flips winding vs frame.normal,
     // peel it out into its own mini-chart so zero folds / zero density outliers occur!
     const validCluster: number[] = [];
     const rejected: number[] = [];
+    const minValidDot = sewChamfers && !hasSpecialLandmark ? 0.78 : 0.88;
     for (const ti of cluster) {
       const tr = tris[ti];
       const d = dot3(tr.normal, frame.normal);
-      if (d >= 0.88) {
+      if (d >= minValidDot) {
         validCluster.push(ti);
       } else {
         rejected.push(ti);
@@ -600,6 +650,7 @@ export function unwrapPixelAligned(
   const minAtlasSize = Math.max(32, options.minAtlasSize ?? 64);
   const maxAtlasSize = Math.max(minAtlasSize, options.maxAtlasSize ?? 1024);
   const cosThreshold = options.islandChartCosThreshold ?? 0.91;
+  const sewChamfers = options.sewChamfersToParentChart !== false;
 
   // 1) Extract coherent planar/smooth charts per part
   const allCharts: RawChart[] = [];
@@ -608,7 +659,7 @@ export function unwrapPixelAligned(
   for (const part of parts) {
     const tris = buildPartTriangles(part.geometry);
     partTrianglesList.push(tris);
-    const charts = splitChartsWithoutFoldOrSelfOverlap(part, tris, cosThreshold);
+    const charts = splitChartsWithoutFoldOrSelfOverlap(part, tris, cosThreshold, sewChamfers);
     allCharts.push(...charts);
   }
 
@@ -754,6 +805,10 @@ export function unwrapPixelAligned(
     const triOffset = partTriGlobalStart[pIdx];
     const islandId = islands.length;
     const globalTris: number[] = [];
+    let worldYMin = Infinity;
+    let worldYMax = -Infinity;
+    let sumNormalY = 0;
+    let vertSampleCount = 0;
 
     for (let tiIdx = 0; tiIdx < ch.triIndices.length; tiIdx++) {
       const localTriIdx = ch.triIndices[tiIdx];
@@ -776,6 +831,13 @@ export function unwrapPixelAligned(
         const vertIdx = globalTriIdx * 3 + k;
         outUvs[vertIdx * 2 + 0] = pxU / chosenW;
         outUvs[vertIdx * 2 + 1] = pxV / chosenH;
+
+        const wy = outPositions[vertIdx * 3 + 1];
+        const ny = outNormals[vertIdx * 3 + 1];
+        if (wy < worldYMin) worldYMin = wy;
+        if (wy > worldYMax) worldYMax = wy;
+        sumNormalY += ny;
+        vertSampleCount++;
       }
     }
 
@@ -799,6 +861,9 @@ export function unwrapPixelAligned(
       },
       texelsPerMeter: ppm,
       triIndices: globalTris,
+      worldYMin: Number.isFinite(worldYMin) ? worldYMin : 0,
+      worldYMax: Number.isFinite(worldYMax) ? worldYMax : 1,
+      avgNormalY: vertSampleCount > 0 ? sumNormalY / vertSampleCount : ch.normal[1],
     });
   }
 

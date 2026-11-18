@@ -155,6 +155,7 @@ uniform float uForceFlatDither;
 uniform float uCameraNear;
 uniform float uCameraFar;
 uniform float uIsOrthographic;
+uniform float uEncodeBloomAlpha;
 
 vec3 samplePaletteDualLut(vec3 srgbColor, vec2 ditherCoord) {
   vec3 c = clamp(srgbColor, 0.0, 1.0);
@@ -370,7 +371,8 @@ void main() {
   // Add HDR emission + stepped rim light
   vec3 emissionSample = (uHasEmissionMap > 0.5) ? texture(uEmissionMap, vUv).rgb : vec3(1.0);
   vec3 emissiveTint = mix(vec3(1.0), vVertexColor.rgb, uEmissiveVertexColorWeight);
-  vec3 emissionSrgb = linearToSrgb(emissionSample * uEmissionColorLinear * emissiveTint * uEmissionIntensity);
+  vec3 emitLinear = emissionSample * uEmissionColorLinear * emissiveTint * uEmissionIntensity;
+  vec3 emissionSrgb = linearToSrgb(emitLinear);
   vec3 combinedSrgb = celSrgb + rimSrgb + emissionSrgb;
 
   // Color grading via dual Palette LUT + 4x4/8x8 ordered dither
@@ -384,7 +386,12 @@ void main() {
   float wideFlag = (uOutlineWidthSteps >= 1.5) ? 16.0 : 0.0;
   float encodedMetaG = (uPixelated > 0.5) ? clamp((clampedP + wideFlag) / 32.0, 0.0, 1.0) : 0.0;
 
-  gColor = vec4(combinedSrgb, 1.0);
+  float emitBoost = max(emitLinear.r, max(emitLinear.g, emitLinear.b));
+  float encodedAlpha = (uEncodeBloomAlpha > 0.5)
+    ? (0.5 + 0.5 * clamp(emitBoost / 1.5, 0.0, 1.0))
+    : 1.0;
+
+  gColor = vec4(combinedSrgb, encodedAlpha);
   gOutline = (uPixelated > 0.5)
     ? vec4(uOutlineColorSrgb, uOutlineAlpha)
     : vec4(0.0);

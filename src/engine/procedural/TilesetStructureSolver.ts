@@ -348,7 +348,7 @@ export function buildProceduralStructure(
           const prop = buildProceduralProp(
             {
               kind: chosenProp,
-              seed: Math.floor(rng() * 9999),
+              seed: 700 + (cells.length % 2),
               visualStyle,
               objectId: 40 + cells.length,
               pixelSize: visualStyle === 'voxel' ? 1 : px,

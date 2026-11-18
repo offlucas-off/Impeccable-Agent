@@ -36,14 +36,19 @@ Eliminate boxy flat cuboids (`detectFlatDetailCuboids` enforces zero `1x1` flat 
 - `bakeVertexAoAndCreases(geo, opts)` traces multi-ray hemisphere occlusion against a pure-TS median-split `TriBvh` and clamps shadows cleanly to prevent jagged "dark fang" triangle artifacts.
 - `applyHeightGtaoAndWear(...)` adds 8-directional island-clamped horizon GTAO, discrete Laplacian bevel catchlights, vertical grime (`lockVertical` bottom weighting), and clean `8`-step quantization (`[12..244]`) on non-landmark surfaces.
 
+### Stage E: High-Poly Decimation (`src/engine/procedural/MeshSimplifier.ts`)
+- `simplifyRawIndexedOrNonIndexedBuffers(...)` and `simplifyGeometryForPixelArt(geo, opts)` run `O(V + T)` spatial vertex-clustering in pure TypeScript without tearing UV seam islands or normal creases.
+- Automatically invoked (off-thread via `objZipWorker.ts` or synchronous fallback) when external `.zip`/`.obj`/`.glb` imports exceed `45,000` triangles, decimating down cleanly to `~24,000` triangles while preserving bounds, UVs, and normals.
+
 ---
 
-## 2. Canonical 65-Bone UAL Rig (`src/engine/rigging/`)
+## 2. Canonical 65-Bone UAL Rig & Static Auto-Rig (`src/engine/rigging/`)
 
 - `UalRigSpec.ts` loads `src/data/ualSkeletonSpec.json` (65 bones: 17 structural + 48 fingers) and provides `createCanonicalUalRig(profile, scale)`.
 - `AnimationLibraryBank.ts` loads `./animations/ual_master_library.glb` (`getClip(name)` returns `THREE.AnimationClip | null`).
 - **Bone Local `+Y` Convention**: `makeBeveledBoneSegmentBox(length, ...)` starts at `y = 0` and extends to `y = length`. Shoulder pauldrons/ridges anchor near `y ≈ -0.02..+0.03` on `upperarm_l/r`.
 - **Single-atlas Skinned Binding**: Pass `partTagToBoneIndex` into `bakeTaggedPartsAsset` to receive aligned `perVertexBoneIndices` for merged `SkinnedMesh` binding without corrupting skin weights.
+- **Static Humanoid Auto-Rig (`autoRigStaticHumanoidToUal` in `AutoRigBinder.ts`)**: Normalizes arbitrary static T-Pose or A-Pose humanoids into canonical `1.79 m` UAL height, measures shoulder-to-wrist arm slope (`armAngleDeg >= 14°` -> `'a_pose'`), rotates `upperarm_l`/`upperarm_r` around `+Z` to build matched capsule weights, applies Linear Blend Skinning deltas to straighten bind vertices into canonical T-Pose rest space, clones `PixelizerMaterial` + tangents, and binds live 65-bone `SkinnedMesh`es compatible with all 85+ UAL clips and `.GLB` export.
 
 ---
 

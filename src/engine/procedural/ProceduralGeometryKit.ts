@@ -421,6 +421,309 @@ function makeBeveledTaperedHexahedron(
   return finishAccumToGeometry(acc, hexColor, shadeJitter, offset);
 }
 
+/**
+ * Segmented watertight beveled cuboid with subdivided interior grids (`segsX × segsY × segsZ`)
+ * and optional deterministic 3D vertex warp callback `warpFn(x, y, z) => [x', y', z']`.
+ * Enables sculpted V-taper armor plates, weathered stone blocks, and sagging timber beams
+ * while preserving 45-degree edge chamfers for Pass 3 crease highlights.
+ */
+export function makeSegmentedBeveledBox(
+  width: number,
+  height: number,
+  depth: number,
+  bevel = 0.02,
+  segsX = 2,
+  segsY = 2,
+  segsZ = 2,
+  warpFn?: (x: number, y: number, z: number) => [number, number, number],
+  hexColor = '#ffffff',
+  options: {
+    offset?: [number, number, number];
+    shadeJitter?: number;
+    originBottom?: boolean;
+  } = {}
+): THREE.BufferGeometry {
+  const nx = Math.max(1, Math.min(12, Math.round(segsX)));
+  const ny = Math.max(1, Math.min(12, Math.round(segsY)));
+  const nz = Math.max(1, Math.min(12, Math.round(segsZ)));
+  const minDim = Math.min(Math.abs(width), Math.abs(height), Math.abs(depth));
+  const c = Math.max(0.001, Math.min(bevel, minDim * 0.34));
+  const hw = width * 0.5;
+  const hh = height * 0.5;
+  const hd = depth * 0.5;
+  const yBias = options.originBottom ? hh : 0;
+  const off: [number, number, number] = [
+    options.offset?.[0] ?? 0,
+    (options.offset?.[1] ?? 0) + yBias,
+    options.offset?.[2] ?? 0,
+  ];
+
+  // Map grid indices (ix in 0..nx+2, iy in 0..ny+2, iz in 0..nz+2) to box with chamfer margin c at ends
+  const axisCoord = (idx: number, n: number, half: number, ch: number): number => {
+    if (idx <= 0) return -half;
+    if (idx >= n + 2) return half;
+    const inner = Math.max(0.001, half - ch);
+    const t = (idx - 1) / n; // 0..1 across interior face
+    return -inner + t * (2 * inner);
+  };
+
+  const evalPt = (ix: number, iy: number, iz: number): [number, number, number] => {
+    let x = axisCoord(ix, nx, hw, c);
+    let y = axisCoord(iy, ny, hh, c);
+    let z = axisCoord(iz, nz, hd, c);
+
+    // Project boundary ring points onto the 26-face chamfer hull
+    const onX = ix === 0 ? -1 : ix === nx + 2 ? 1 : 0;
+    const onY = iy === 0 ? -1 : iy === ny + 2 ? 1 : 0;
+    const onZ = iz === 0 ? -1 : iz === nz + 2 ? 1 : 0;
+    const bCount = Math.abs(onX) + Math.abs(onY) + Math.abs(onZ);
+    if (bCount >= 2) {
+      // Retract along active boundary axes so bevel edges & corner triangles sit at 45 degrees
+      const retract = bCount === 2 ? c * 0.2929 : c * 0.4226;
+      if (onX !== 0) x -= onX * retract;
+      if (onY !== 0) y -= onY * retract;
+      if (onZ !== 0) z -= onZ * retract;
+    }
+
+    if (warpFn) {
+      return warpFn(x, y, z);
+    }
+    return [x, y, z];
+  };
+
+  const acc = createAccum();
+  const NX = nx + 2;
+  const NY = ny + 2;
+  const NZ = nz + 2;
+
+  // Emit all 6 topological sides of the (NX × NY × NZ) grid cube
+  // +Z (iz = NZ) & -Z (iz = 0)
+  for (let iy = 0; iy < NY; iy++) {
+    for (let ix = 0; ix < NX; ix++) {
+      const u0 = ix / NX,
+        u1 = (ix + 1) / NX;
+      const v0 = iy / NY,
+        v1 = (iy + 1) / NY;
+      pushQuadWithHint(
+        acc,
+        evalPt(ix, iy, NZ),
+        evalPt(ix + 1, iy, NZ),
+        evalPt(ix + 1, iy + 1, NZ),
+        evalPt(ix, iy + 1, NZ),
+        [u0, v0],
+        [u1, v0],
+        [u1, v1],
+        [u0, v1],
+        [0, 0, 1]
+      );
+      pushQuadWithHint(
+        acc,
+        evalPt(ix + 1, iy, 0),
+        evalPt(ix, iy, 0),
+        evalPt(ix, iy + 1, 0),
+        evalPt(ix + 1, iy + 1, 0),
+        [u0, v0],
+        [u1, v0],
+        [u1, v1],
+        [u0, v1],
+        [0, 0, -1]
+      );
+    }
+  }
+
+  // +X (ix = NX) & -X (ix = 0)
+  for (let iy = 0; iy < NY; iy++) {
+    for (let iz = 0; iz < NZ; iz++) {
+      const u0 = iz / NZ,
+        u1 = (iz + 1) / NZ;
+      const v0 = iy / NY,
+        v1 = (iy + 1) / NY;
+      pushQuadWithHint(
+        acc,
+        evalPt(NX, iy, iz + 1),
+        evalPt(NX, iy, iz),
+        evalPt(NX, iy + 1, iz),
+        evalPt(NX, iy + 1, iz + 1),
+        [u0, v0],
+        [u1, v0],
+        [u1, v1],
+        [u0, v1],
+        [1, 0, 0]
+      );
+      pushQuadWithHint(
+        acc,
+        evalPt(0, iy, iz),
+        evalPt(0, iy, iz + 1),
+        evalPt(0, iy + 1, iz + 1),
+        evalPt(0, iy + 1, iz),
+        [u0, v0],
+        [u1, v0],
+        [u1, v1],
+        [u0, v1],
+        [-1, 0, 0]
+      );
+    }
+  }
+
+  // +Y (iy = NY) & -Y (iy = 0)
+  for (let iz = 0; iz < NZ; iz++) {
+    for (let ix = 0; ix < NX; ix++) {
+      const u0 = ix / NX,
+        u1 = (ix + 1) / NX;
+      const v0 = iz / NZ,
+        v1 = (iz + 1) / NZ;
+      pushQuadWithHint(
+        acc,
+        evalPt(ix, NY, iz + 1),
+        evalPt(ix + 1, NY, iz + 1),
+        evalPt(ix + 1, NY, iz),
+        evalPt(ix, NY, iz),
+        [u0, v0],
+        [u1, v0],
+        [u1, v1],
+        [u0, v1],
+        [0, 1, 0]
+      );
+      pushQuadWithHint(
+        acc,
+        evalPt(ix, 0, iz),
+        evalPt(ix + 1, 0, iz),
+        evalPt(ix + 1, 0, iz + 1),
+        evalPt(ix, 0, iz + 1),
+        [u0, v0],
+        [u1, v0],
+        [u1, v1],
+        [u0, v1],
+        [0, -1, 0]
+      );
+    }
+  }
+
+  return finishAccumToGeometry(acc, hexColor, options.shadeJitter ?? 0, off);
+}
+
+/**
+ * Sculpted flared A-frame pleated tabard / battle-coat tail or tasset plate with vertical fold pleats.
+ * Spans vertically from `y = -height * 0.5` to `+height * 0.5` (or `y = 0 .. height` when `originTop` / `originBottom`),
+ * widening from `topW` at the waist to `bottomW` at the hem for dark-fantasy warrior silhouettes without cloth physics.
+ */
+export function makePleatedTabardGeometry(
+  topW = 0.22,
+  bottomW = 0.32,
+  height = 0.34,
+  depth = 0.042,
+  pleats = 3,
+  hexColor = '#285cc4',
+  options: {
+    offset?: [number, number, number];
+    flareZ?: number;
+    shadeJitter?: number;
+  } = {}
+): THREE.BufferGeometry {
+  const nPleats = Math.max(1, Math.min(7, Math.round(pleats)));
+  const uCols = nPleats * 2 + 2;
+  const vRows = 4;
+  const flareZ = options.flareZ ?? 0.028;
+  const halfT = Math.max(0.008, depth * 0.38);
+  const pleatAmp = Math.max(0.006, depth * 0.36);
+  const acc = createAccum();
+
+  const sampleGrid = (iu: number, iv: number, isFront: boolean): [number, number, number] => {
+    const u = iu / uCols; // 0..1 left to right
+    const v = iv / vRows; // 0 = bottom hem, 1 = top waist
+    const spanW = bottomW * (1 - v) + topW * v;
+    const x = (u - 0.5) * spanW;
+    const y = (v - 0.5) * height;
+    // Pleat wave stronger toward bottom hem, smooth at waist
+    const wave = Math.sin(u * nPleats * Math.PI * 2) * pleatAmp * (0.35 + 0.65 * (1 - v));
+    const sweepZ = (1 - v) * (1 - v) * flareZ;
+    const z = wave + sweepZ + (isFront ? halfT : -halfT);
+    return [x, y, z];
+  };
+
+  for (let iv = 0; iv < vRows; iv++) {
+    const v0 = iv / vRows,
+      v1 = (iv + 1) / vRows;
+    for (let iu = 0; iu < uCols; iu++) {
+      const u0 = iu / uCols,
+        u1 = (iu + 1) / uCols;
+      const f00 = sampleGrid(iu, iv, true);
+      const f10 = sampleGrid(iu + 1, iv, true);
+      const f11 = sampleGrid(iu + 1, iv + 1, true);
+      const f01 = sampleGrid(iu, iv + 1, true);
+      pushQuadWithHint(acc, f00, f10, f11, f01, [u0, v0], [u1, v0], [u1, v1], [u0, v1], [0, 0, 1]);
+
+      const b00 = sampleGrid(iu, iv, false);
+      const b10 = sampleGrid(iu + 1, iv, false);
+      const b11 = sampleGrid(iu + 1, iv + 1, false);
+      const b01 = sampleGrid(iu, iv + 1, false);
+      pushQuadWithHint(acc, b10, b00, b01, b11, [u0, v0], [u1, v0], [u1, v1], [u0, v1], [0, 0, -1]);
+    }
+  }
+
+  // Watertight bottom hem & top waist caps
+  for (let iu = 0; iu < uCols; iu++) {
+    const u0 = iu / uCols,
+      u1 = (iu + 1) / uCols;
+    pushQuadWithHint(
+      acc,
+      sampleGrid(iu, 0, false),
+      sampleGrid(iu + 1, 0, false),
+      sampleGrid(iu + 1, 0, true),
+      sampleGrid(iu, 0, true),
+      [u0, 0],
+      [u1, 0],
+      [u1, 1],
+      [u0, 1],
+      [0, -1, 0]
+    );
+    pushQuadWithHint(
+      acc,
+      sampleGrid(iu, vRows, true),
+      sampleGrid(iu + 1, vRows, true),
+      sampleGrid(iu + 1, vRows, false),
+      sampleGrid(iu, vRows, false),
+      [u0, 0],
+      [u1, 0],
+      [u1, 1],
+      [u0, 1],
+      [0, 1, 0]
+    );
+  }
+
+  // Watertight left & right side edges
+  for (let iv = 0; iv < vRows; iv++) {
+    const v0 = iv / vRows,
+      v1 = (iv + 1) / vRows;
+    pushQuadWithHint(
+      acc,
+      sampleGrid(0, iv, false),
+      sampleGrid(0, iv, true),
+      sampleGrid(0, iv + 1, true),
+      sampleGrid(0, iv + 1, false),
+      [0, v0],
+      [1, v0],
+      [1, v1],
+      [0, v1],
+      [-1, 0, 0]
+    );
+    pushQuadWithHint(
+      acc,
+      sampleGrid(uCols, iv, true),
+      sampleGrid(uCols, iv, false),
+      sampleGrid(uCols, iv + 1, false),
+      sampleGrid(uCols, iv + 1, true),
+      [0, v0],
+      [1, v0],
+      [1, v1],
+      [0, v1],
+      [1, 0, 0]
+    );
+  }
+
+  return finishAccumToGeometry(acc, hexColor, options.shadeJitter ?? 0, options.offset ?? [0, 0, 0]);
+}
+
 // ---------------------------------------------------------------------------
 // 2. Lathe / Revolved Profiles, Curved Horns & Pauldron Shells
 // ---------------------------------------------------------------------------
@@ -760,7 +1063,8 @@ export function makeCurvedHornGeometry(
 }
 
 /**
- * Curved multi-segment armored shoulder pauldron shell with outer/inner thickness (centered near origin).
+ * Curved multi-segment armored shoulder pauldron shell with tiered overlapping lames,
+ * raised trim border, and outer/inner thickness (centered near origin).
  */
 export function makePauldronShellGeometry(
   width = 0.26,
@@ -771,15 +1075,19 @@ export function makePauldronShellGeometry(
 ): THREE.BufferGeometry {
   const acc = createAccum();
   const uSegs = 4;
-  const vSegs = 3;
+  const vSegs = 4;
 
   const sample = (uIdx: number, vIdx: number, outer: boolean): [number, number, number] => {
-    const u = (uIdx / uSegs - 0.5) * Math.PI * 0.92; // forward-back wrap
-    const v = (vIdx / vSegs) * Math.PI * 0.54; // 0 = crest, 1 = flared outer rim
-    const rScale = outer ? 1.0 : Math.max(0.55, 1.0 - thickness / Math.max(0.12, width));
-    const x = Math.sin(v) * width * 0.55 * rScale;
-    const y = (Math.cos(v) - 0.45) * height * 0.72 * rScale;
-    const z = Math.sin(u) * Math.max(0.35, Math.sin(v) * 0.85 + 0.32) * depth * 0.5 * rScale;
+    const u = (uIdx / uSegs - 0.5) * Math.PI * 0.94; // forward-back wrap
+    const v = (vIdx / vSegs) * Math.PI * 0.56; // 0 = crest, 1 = flared outer rim
+    const baseScale = outer ? 1.0 : Math.max(0.55, 1.0 - thickness / Math.max(0.12, width));
+    // Tiered overlapping lame step + raised lower rim lip on outer shell
+    const lameStep = outer ? (vIdx === 2 ? 1.06 : vIdx === vSegs ? 1.08 : 1.0) : 1.0;
+    const ridgeSpine = outer && uIdx === uSegs / 2 ? 1.05 : 1.0;
+    const rScale = baseScale * lameStep * ridgeSpine;
+    const x = Math.sin(v) * width * 0.56 * rScale;
+    const y = (Math.cos(v) - 0.45) * height * 0.74 * rScale - (outer && vIdx >= 3 ? 0.008 : 0);
+    const z = Math.sin(u) * Math.max(0.36, Math.sin(v) * 0.86 + 0.32) * depth * 0.5 * rScale;
     return [x, y, z];
   };
 
@@ -861,7 +1169,8 @@ export function makePauldronShellGeometry(
 // ---------------------------------------------------------------------------
 
 /**
- * Tapered diamond cross-section sword blade starting at y=0 and rising along +Y to `bodyLen + tipLen`.
+ * Tapered hex-fuller / diamond cross-section sword blade starting at y=0 and rising along +Y to `bodyLen + tipLen`.
+ * Features a central fuller groove channel bounded by twin blood-ridge bevels for crisp Pass 3 specular & crease read.
  */
 export function makeSwordBladeGeometry(
   width = 0.08,
@@ -873,47 +1182,73 @@ export function makeSwordBladeGeometry(
   const acc = createAccum();
   const hw0 = width * 0.5;
   const hw1 = width * 0.42;
-  const ht0 = thickness * 0.5;
-  const ht1 = thickness * 0.4;
-  const edgeTh = Math.max(0.004, thickness * 0.14);
+  const hf0 = width * 0.18;
+  const hf1 = width * 0.14;
+  const ht0 = thickness * 0.52;
+  const ht1 = thickness * 0.42;
+  const hg0 = thickness * 0.32; // recessed central fuller groove depth
+  const hg1 = thickness * 0.28;
+  const fullY = bodyLen * 0.78;
 
-  // Base oct-diamond at y=0, upper ring at y=bodyLen, tip at y=bodyLen+tipLen
+  // Base ring at y=0, fuller termination ring at y=fullY, shoulder ring at y=bodyLen, tip at y=bodyLen+tipLen
   const pR0: [number, number, number] = [hw0, 0, 0];
   const pL0: [number, number, number] = [-hw0, 0, 0];
-  const pF0: [number, number, number] = [0, 0, ht0];
-  const pB0: [number, number, number] = [0, 0, -ht0];
+  const fFR0: [number, number, number] = [hf0, 0, ht0];
+  const fFC0: [number, number, number] = [0, 0, hg0];
+  const fFL0: [number, number, number] = [-hf0, 0, ht0];
+  const fBR0: [number, number, number] = [hf0, 0, -ht0];
+  const fBC0: [number, number, number] = [0, 0, -hg0];
+  const fBL0: [number, number, number] = [-hf0, 0, -ht0];
+
+  const hwM = hw0 * 0.22 + hw1 * 0.78;
+  const pRM: [number, number, number] = [hwM, fullY, 0];
+  const pLM: [number, number, number] = [-hwM, fullY, 0];
+  const fFRM: [number, number, number] = [hf1, fullY, ht1];
+  const fFCM: [number, number, number] = [0, fullY, hg1];
+  const fFLM: [number, number, number] = [-hf1, fullY, ht1];
+  const fBRM: [number, number, number] = [hf1, fullY, -ht1];
+  const fBCM: [number, number, number] = [0, fullY, -hg1];
+  const fBLM: [number, number, number] = [-hf1, fullY, -ht1];
 
   const pR1: [number, number, number] = [hw1, bodyLen, 0];
   const pL1: [number, number, number] = [-hw1, bodyLen, 0];
   const pF1: [number, number, number] = [0, bodyLen, ht1];
   const pB1: [number, number, number] = [0, bodyLen, -ht1];
-
   const tip: [number, number, number] = [0, bodyLen + tipLen, 0];
 
-  // Bevel panels (4 crisp bevel facets along shaft + 4 tip bevel facets)
-  pushQuadWithHint(acc, pR0, pF0, pF1, pR1, [0, 0], [1, 0], [1, 0.8], [0, 0.8], [1, 0, 1]);
-  pushQuadWithHint(acc, pF0, pL0, pL1, pF1, [0, 0], [1, 0], [1, 0.8], [0, 0.8], [-1, 0, 1]);
-  pushQuadWithHint(acc, pL0, pB0, pB1, pL1, [0, 0], [1, 0], [1, 0.8], [0, 0.8], [-1, 0, -1]);
-  pushQuadWithHint(acc, pB0, pR0, pR1, pB1, [0, 0], [1, 0], [1, 0.8], [0, 0.8], [1, 0, -1]);
+  // Lower shaft with central fuller groove + twin bevels (front +Z and back -Z)
+  pushQuadWithHint(acc, pR0, fFR0, fFRM, pRM, [0, 0], [0.35, 0], [0.35, 0.65], [0, 0.65], [1, 0, 1]);
+  pushQuadWithHint(acc, fFR0, fFC0, fFCM, fFRM, [0.35, 0], [0.5, 0], [0.5, 0.65], [0.35, 0.65], [-0.2, 0, 1]);
+  pushQuadWithHint(acc, fFC0, fFL0, fFLM, fFCM, [0.5, 0], [0.65, 0], [0.65, 0.65], [0.5, 0.65], [0.2, 0, 1]);
+  pushQuadWithHint(acc, fFL0, pL0, pLM, fFLM, [0.65, 0], [1, 0], [1, 0.65], [0.65, 0.65], [-1, 0, 1]);
 
-  pushTriWithHint(acc, pR1, pF1, tip, [0, 0.8], [1, 0.8], [0.5, 1], [1, 0.3, 1]);
-  pushTriWithHint(acc, pF1, pL1, tip, [0, 0.8], [1, 0.8], [0.5, 1], [-1, 0.3, 1]);
-  pushTriWithHint(acc, pL1, pB1, tip, [0, 0.8], [1, 0.8], [0.5, 1], [-1, 0.3, -1]);
-  pushTriWithHint(acc, pB1, pR1, tip, [0, 0.8], [1, 0.8], [0.5, 1], [1, 0.3, -1]);
+  pushQuadWithHint(acc, pL0, fBL0, fBLM, pLM, [0, 0], [0.35, 0], [0.35, 0.65], [0, 0.65], [-1, 0, -1]);
+  pushQuadWithHint(acc, fBL0, fBC0, fBCM, fBLM, [0.35, 0], [0.5, 0], [0.5, 0.65], [0.35, 0.65], [0.2, 0, -1]);
+  pushQuadWithHint(acc, fBC0, fBR0, fBRM, fBCM, [0.5, 0], [0.65, 0], [0.65, 0.65], [0.5, 0.65], [-0.2, 0, -1]);
+  pushQuadWithHint(acc, fBR0, pR0, pRM, fBRM, [0.65, 0], [1, 0], [1, 0.65], [0.65, 0.65], [1, 0, -1]);
 
-  // Base cap
-  pushQuadWithHint(
-    acc,
-    pR0,
-    [pB0[0], 0, Math.min(-edgeTh, pB0[2])],
-    pL0,
-    [pF0[0], 0, Math.max(edgeTh, pF0[2])],
-    [0, 0],
-    [1, 0],
-    [1, 1],
-    [0, 1],
-    [0, -1, 0]
-  );
+  // Upper fuller-to-diamond transition (fullY -> bodyLen)
+  pushQuadWithHint(acc, pRM, fFRM, pF1, pR1, [0, 0.65], [0.4, 0.65], [0.5, 0.82], [0, 0.82], [1, 0, 1]);
+  pushTriWithHint(acc, fFRM, fFCM, pF1, [0.35, 0.65], [0.5, 0.65], [0.5, 0.82], [0, 0.1, 1]);
+  pushTriWithHint(acc, fFCM, fFLM, pF1, [0.5, 0.65], [0.65, 0.65], [0.5, 0.82], [0, 0.1, 1]);
+  pushQuadWithHint(acc, fFLM, pLM, pL1, pF1, [0.6, 0.65], [1, 0.65], [1, 0.82], [0.5, 0.82], [-1, 0, 1]);
+
+  pushQuadWithHint(acc, pLM, fBLM, pB1, pL1, [0, 0.65], [0.4, 0.65], [0.5, 0.82], [0, 0.82], [-1, 0, -1]);
+  pushTriWithHint(acc, fBLM, fBCM, pB1, [0.35, 0.65], [0.5, 0.65], [0.5, 0.82], [0, 0.1, -1]);
+  pushTriWithHint(acc, fBCM, fBRM, pB1, [0.5, 0.65], [0.65, 0.65], [0.5, 0.82], [0, 0.1, -1]);
+  pushQuadWithHint(acc, fBRM, pRM, pR1, pB1, [0.6, 0.65], [1, 0.65], [1, 0.82], [0.5, 0.82], [1, 0, -1]);
+
+  // Pointed diamond tip bevels (bodyLen -> bodyLen+tipLen)
+  pushTriWithHint(acc, pR1, pF1, tip, [0, 0.82], [1, 0.82], [0.5, 1], [1, 0.3, 1]);
+  pushTriWithHint(acc, pF1, pL1, tip, [0, 0.82], [1, 0.82], [0.5, 1], [-1, 0.3, 1]);
+  pushTriWithHint(acc, pL1, pB1, tip, [0, 0.82], [1, 0.82], [0.5, 1], [-1, 0.3, -1]);
+  pushTriWithHint(acc, pB1, pR1, tip, [0, 0.82], [1, 0.82], [0.5, 1], [1, 0.3, -1]);
+
+  // Base cap at y=0
+  pushTriWithHint(acc, pR0, fBR0, fFR0, [1, 0.5], [0.7, 0], [0.7, 1], [0, -1, 0]);
+  pushQuadWithHint(acc, fFR0, fBR0, fBC0, fFC0, [0.7, 1], [0.7, 0], [0.5, 0], [0.5, 1], [0, -1, 0]);
+  pushQuadWithHint(acc, fFC0, fBC0, fBL0, fFL0, [0.5, 1], [0.5, 0], [0.3, 0], [0.3, 1], [0, -1, 0]);
+  pushTriWithHint(acc, fFL0, fBL0, pL0, [0.3, 1], [0.3, 0], [0, 0.5], [0, -1, 0]);
 
   return finishAccumToGeometry(acc, hexColor);
 }
@@ -1163,7 +1498,8 @@ export interface PitchedRoofResult {
 
 /**
  * Generates a real sloped roof (`gable` or `hip`) with overhanging eaves, slab thickness,
- * soffit undersides, ridge beam cap, and triangular masonry/timber gable fills.
+ * soffit undersides, catenary ridge sag, protruding eave rafter tails, stepped gable bargeboards,
+ * and triangular masonry/timber gable fills.
  * Base rests at local `y = 0` and rises to `peakHeight`.
  */
 export function makePitchedRoofGeometry(
@@ -1177,12 +1513,15 @@ export function makePitchedRoofGeometry(
     roofHex?: string;
     trimHex?: string;
     gableHex?: string;
+    ridgeSag?: number;
+    rafterCount?: number;
   } = {}
 ): PitchedRoofResult {
   const style = options.style ?? 'gable';
   const roofHex = options.roofHex ?? '#8a3e38';
   const trimHex = options.trimHex ?? '#4a3322';
   const gableHex = options.gableHex ?? '#c9beaa';
+  const sag = options.ridgeSag ?? Math.min(0.08, peakHeight * 0.055);
 
   const hw = width * 0.5 + overhang;
   const hd = depth * 0.5 + overhang;
@@ -1190,61 +1529,98 @@ export function makePitchedRoofGeometry(
   const bHd = depth * 0.5;
   const accRoof = createAccum();
   const accGable = createAccum();
+  const trimParts: THREE.BufferGeometry[] = [];
 
   if (style === 'gable') {
-    // Ridge along Z axis (x = 0)
-    const ridgeTop: [number, number, number][] = [
-      [0, peakHeight + slabThickness, hd],
-      [0, peakHeight + slabThickness, -hd],
-    ];
-    const ridgeBot: [number, number, number][] = [
-      [0, peakHeight, hd],
-      [0, peakHeight, -hd],
-    ];
+    // Segmented ridge along Z axis (4 span segments for subtle catenary mid-span sag)
+    const zSegs = 4;
+    for (let s = 0; s < zSegs; s++) {
+      const f0 = s / zSegs;
+      const f1 = (s + 1) / zSegs;
+      const z0 = hd - f0 * (2 * hd);
+      const z1 = hd - f1 * (2 * hd);
+      // Parabolic catenary sag: 0 at gable ends (f=0,1), max at mid-span (f=0.5)
+      const sag0 = 4 * f0 * (1 - f0) * sag;
+      const sag1 = 4 * f1 * (1 - f1) * sag;
+      const eaveSag0 = sag0 * 0.25;
+      const eaveSag1 = sag1 * 0.25;
 
-    const eaveRTopFront: [number, number, number] = [hw, slabThickness, hd];
-    const eaveRTopBack: [number, number, number] = [hw, slabThickness, -hd];
-    const eaveRBotFront: [number, number, number] = [hw, 0, hd];
-    const eaveRBotBack: [number, number, number] = [hw, 0, -hd];
+      const rTop0: [number, number, number] = [0, peakHeight + slabThickness - sag0, z0];
+      const rTop1: [number, number, number] = [0, peakHeight + slabThickness - sag1, z1];
+      const rBot0: [number, number, number] = [0, peakHeight - sag0, z0];
+      const rBot1: [number, number, number] = [0, peakHeight - sag1, z1];
 
-    const eaveLTopFront: [number, number, number] = [-hw, slabThickness, hd];
-    const eaveLTopBack: [number, number, number] = [-hw, slabThickness, -hd];
-    const eaveLBotFront: [number, number, number] = [-hw, 0, hd];
-    const eaveLBotBack: [number, number, number] = [-hw, 0, -hd];
+      const eRTop0: [number, number, number] = [hw, slabThickness - eaveSag0, z0];
+      const eRTop1: [number, number, number] = [hw, slabThickness - eaveSag1, z1];
+      const eRBot0: [number, number, number] = [hw, -eaveSag0, z0];
+      const eRBot1: [number, number, number] = [hw, -eaveSag1, z1];
 
-    // Top pitched slopes (Right +X, Left -X)
-    pushQuadWithHint(accRoof, eaveRTopFront, eaveRTopBack, ridgeTop[1], ridgeTop[0], [0, 0], [1, 0], [1, 1], [0, 1], [1, 1, 0]);
-    pushQuadWithHint(accRoof, eaveLTopBack, eaveLTopFront, ridgeTop[0], ridgeTop[1], [0, 0], [1, 0], [1, 1], [0, 1], [-1, 1, 0]);
+      const eLTop0: [number, number, number] = [-hw, slabThickness - eaveSag0, z0];
+      const eLTop1: [number, number, number] = [-hw, slabThickness - eaveSag1, z1];
+      const eLBot0: [number, number, number] = [-hw, -eaveSag0, z0];
+      const eLBot1: [number, number, number] = [-hw, -eaveSag1, z1];
 
-    // Bottom soffits
-    pushQuadWithHint(accRoof, eaveRBotBack, eaveRBotFront, ridgeBot[0], ridgeBot[1], [0, 0], [1, 0], [1, 1], [0, 1], [-1, -1, 0]);
-    pushQuadWithHint(accRoof, eaveLBotFront, eaveLBotBack, ridgeBot[1], ridgeBot[0], [0, 0], [1, 0], [1, 1], [0, 1], [1, -1, 0]);
+      // Top pitched slopes (Right +X, Left -X)
+      pushQuadWithHint(accRoof, eRTop0, eRTop1, rTop1, rTop0, [f0, 0], [f1, 0], [f1, 1], [f0, 1], [1, 1, 0]);
+      pushQuadWithHint(accRoof, eLTop1, eLTop0, rTop0, rTop1, [f0, 0], [f1, 0], [f1, 1], [f0, 1], [-1, 1, 0]);
 
-    // Side fascias
-    pushQuadWithHint(accRoof, eaveRBotFront, eaveRBotBack, eaveRTopBack, eaveRTopFront, [0, 0], [1, 0], [1, 1], [0, 1], [1, 0, 0]);
-    pushQuadWithHint(accRoof, eaveLBotBack, eaveLBotFront, eaveLTopFront, eaveLTopBack, [0, 0], [1, 0], [1, 1], [0, 1], [-1, 0, 0]);
+      // Bottom soffits
+      pushQuadWithHint(accRoof, eRBot1, eRBot0, rBot0, rBot1, [f0, 0], [f1, 0], [f1, 1], [f0, 1], [-1, -1, 0]);
+      pushQuadWithHint(accRoof, eLBot0, eLBot1, rBot1, rBot0, [f0, 0], [f1, 0], [f1, 1], [f0, 1], [1, -1, 0]);
 
-    // Front & back rake fascia caps
-    pushQuadWithHint(accRoof, ridgeBot[0], eaveRBotFront, eaveRTopFront, ridgeTop[0], [0, 0], [1, 0], [1, 1], [0, 1], [0, 0, 1]);
-    pushQuadWithHint(accRoof, eaveLBotFront, ridgeBot[0], ridgeTop[0], eaveLTopFront, [0, 0], [1, 0], [1, 1], [0, 1], [0, 0, 1]);
-    pushQuadWithHint(accRoof, eaveRBotBack, ridgeBot[1], ridgeTop[1], eaveRTopBack, [0, 0], [1, 0], [1, 1], [0, 1], [0, 0, -1]);
-    pushQuadWithHint(accRoof, ridgeBot[1], eaveLBotBack, eaveLTopBack, ridgeTop[1], [0, 0], [1, 0], [1, 1], [0, 1], [0, 0, -1]);
+      // Side fascias
+      pushQuadWithHint(accRoof, eRBot0, eRBot1, eRTop1, eRTop0, [f0, 0], [f1, 0], [f1, 1], [f0, 1], [1, 0, 0]);
+      pushQuadWithHint(accRoof, eLBot1, eLBot0, eLTop0, eLTop1, [f0, 0], [f1, 0], [f1, 1], [f0, 1], [-1, 0, 0]);
+    }
+
+    // Front & back rake fascia caps (at z = +hd and z = -hd where sag = 0)
+    const rTopF: [number, number, number] = [0, peakHeight + slabThickness, hd];
+    const rBotF: [number, number, number] = [0, peakHeight, hd];
+    const rTopB: [number, number, number] = [0, peakHeight + slabThickness, -hd];
+    const rBotB: [number, number, number] = [0, peakHeight, -hd];
+
+    pushQuadWithHint(accRoof, rBotF, [hw, 0, hd], [hw, slabThickness, hd], rTopF, [0, 0], [1, 0], [1, 1], [0, 1], [0, 0, 1]);
+    pushQuadWithHint(accRoof, [-hw, 0, hd], rBotF, rTopF, [-hw, slabThickness, hd], [0, 0], [1, 0], [1, 1], [0, 1], [0, 0, 1]);
+    pushQuadWithHint(accRoof, [hw, 0, -hd], rBotB, rTopB, [hw, slabThickness, -hd], [0, 0], [1, 0], [1, 1], [0, 1], [0, 0, -1]);
+    pushQuadWithHint(accRoof, rBotB, [-hw, 0, -hd], [-hw, slabThickness, -hd], rTopB, [0, 0], [1, 0], [1, 1], [0, 1], [0, 0, -1]);
 
     // Gable triangular walls recessed cleanly under eaves
     const gh = Math.max(0.15, peakHeight - (overhang / Math.max(0.25, bHw)) * peakHeight * 0.25);
     pushTriWithHint(accGable, [-bHw, 0, bHd], [bHw, 0, bHd], [0, gh, bHd], [0, 0], [1, 0], [0.5, 1], [0, 0, 1]);
     pushTriWithHint(accGable, [bHw, 0, -bHd], [-bHw, 0, -bHd], [0, gh, -bHd], [0, 0], [1, 0], [0.5, 1], [0, 0, -1]);
+
+    // Stepped gable bargeboards + king-post finial at front/back gable rakes when roof is house-sized
+    if (width >= 2.2) {
+      const slopeAngle = Math.atan2(peakHeight, hw);
+      const rakeLen = Math.hypot(hw, peakHeight) + 0.08;
+      for (const sz of [-1, 1]) {
+        const zPos = sz * (hd - 0.05);
+        for (const sx of [-1, 1]) {
+          const barge = makeBeveledBox(rakeLen, 0.11, 0.12, 0.016, trimHex);
+          barge.rotateZ(-sx * slopeAngle);
+          barge.translate(sx * hw * 0.5, peakHeight * 0.5 + slabThickness * 0.4, zPos);
+          trimParts.push(barge);
+        }
+        const finial = makeBeveledBox(0.14, 0.34, 0.14, 0.02, trimHex, {
+          offset: [0, peakHeight + slabThickness * 0.65, sz * (hd - 0.04)],
+        });
+        trimParts.push(finial);
+      }
+    }
   } else {
     // Hip roof: 4 pitched trapezoidal/triangular faces converging to shorter ridge line along Z
     const ridgeHalfZ = Math.max(0.05, hd - hw * 0.85);
     const rFTop: [number, number, number] = [0, peakHeight + slabThickness, ridgeHalfZ];
+    const rMidTop: [number, number, number] = [0, peakHeight + slabThickness - sag * 0.65, 0];
     const rBTop: [number, number, number] = [0, peakHeight + slabThickness, -ridgeHalfZ];
     const rFBot: [number, number, number] = [0, peakHeight, ridgeHalfZ];
     const rBBot: [number, number, number] = [0, peakHeight, -ridgeHalfZ];
 
     const cRFTop: [number, number, number] = [hw, slabThickness, hd];
+    const cRMTop: [number, number, number] = [hw, slabThickness - sag * 0.2, 0];
     const cRBTop: [number, number, number] = [hw, slabThickness, -hd];
     const cLBTop: [number, number, number] = [-hw, slabThickness, -hd];
+    const cLMTop: [number, number, number] = [-hw, slabThickness - sag * 0.2, 0];
     const cLFTop: [number, number, number] = [-hw, slabThickness, hd];
 
     const cRFBot: [number, number, number] = [hw, 0, hd];
@@ -1252,9 +1628,11 @@ export function makePitchedRoofGeometry(
     const cLBBot: [number, number, number] = [-hw, 0, -hd];
     const cLFBot: [number, number, number] = [-hw, 0, hd];
 
-    // Top faces
-    pushQuadWithHint(accRoof, cRFTop, cRBTop, rBTop, rFTop, [0, 0], [1, 0], [0.85, 1], [0.15, 1], [1, 1, 0]);
-    pushQuadWithHint(accRoof, cLBTop, cLFTop, rFTop, rBTop, [0, 0], [1, 0], [0.85, 1], [0.15, 1], [-1, 1, 0]);
+    // Top faces (2-segment side slopes with mid-span sag + front/back hip triangles)
+    pushQuadWithHint(accRoof, cRFTop, cRMTop, rMidTop, rFTop, [0, 0], [0.5, 0], [0.5, 1], [0.15, 1], [1, 1, 0]);
+    pushQuadWithHint(accRoof, cRMTop, cRBTop, rBTop, rMidTop, [0.5, 0], [1, 0], [0.85, 1], [0.5, 1], [1, 1, 0]);
+    pushQuadWithHint(accRoof, cLBTop, cLMTop, rMidTop, rBTop, [0, 0], [0.5, 0], [0.5, 1], [0.15, 1], [-1, 1, 0]);
+    pushQuadWithHint(accRoof, cLMTop, cLFTop, rFTop, rMidTop, [0.5, 0], [1, 0], [0.85, 1], [0.5, 1], [-1, 1, 0]);
     pushTriWithHint(accRoof, cLFTop, cRFTop, rFTop, [0, 0], [1, 0], [0.5, 1], [0, 1, 1]);
     pushTriWithHint(accRoof, cRBTop, cLBTop, rBTop, [0, 0], [1, 0], [0.5, 1], [0, 1, -1]);
 
@@ -1276,9 +1654,44 @@ export function makePitchedRoofGeometry(
   }
 
   const ridgeLen = style === 'gable' ? hd * 2 + 0.06 : Math.max(0.2, hd * 2 - hw * 1.7 + 0.08);
-  const ridgeTrim = makeBeveledBox(0.16, 0.14, ridgeLen, 0.025, trimHex, {
-    offset: [0, peakHeight + slabThickness + 0.02, 0],
-  });
+  const ridgeBeam = makeSegmentedBeveledBox(
+    0.16,
+    0.14,
+    ridgeLen,
+    0.025,
+    1,
+    1,
+    3,
+    (x, y, z) => {
+      const u = ridgeLen > 1e-4 ? z / (ridgeLen * 0.5) : 0;
+      const sagDrop = (1 - u * u) * sag * (style === 'gable' ? 1.0 : 0.65);
+      return [x, y - sagDrop, z];
+    },
+    trimHex,
+    { offset: [0, peakHeight + slabThickness + 0.02, 0] }
+  );
+  trimParts.push(ridgeBeam);
+
+  // Protruding eave rafter tails along left & right eaves
+  const nRafters = options.rafterCount ?? (depth >= 2.2 ? Math.min(6, Math.max(3, Math.round(depth / 1.15))) : 0);
+  if (nRafters >= 2) {
+    for (let r = 0; r < nRafters; r++) {
+      const f = nRafters > 1 ? r / (nRafters - 1) : 0.5;
+      const rz = (f - 0.5) * (depth - 0.36);
+      const eaveSag = 4 * f * (1 - f) * sag * (style === 'gable' ? 0.25 : 0.15);
+      for (const sx of [-1, 1]) {
+        const tail = makeBeveledBox(overhang + 0.14, 0.09, 0.095, 0.015, trimHex, {
+          offset: [sx * (bHw + overhang * 0.52), -0.02 - eaveSag, rz],
+        });
+        trimParts.push(tail);
+      }
+    }
+  }
+
+  const ridgeTrim = trimParts.length === 1 ? trimParts[0] : mergeColoredParts(trimParts);
+  if (trimParts.length > 1) {
+    for (const p of trimParts) p.dispose();
+  }
 
   return {
     roofShell: finishAccumToGeometry(accRoof, roofHex),
@@ -1517,9 +1930,116 @@ export function makeSdfOrganicMesh(
 
   const acc = createAccum();
   const cIdx = (cx: number, cy: number, cz: number) => cellVertIdx[cz * cN * cN + cy * cN + cx];
+  const cellQuadList: [number, number, number, number, boolean][] = [];
 
-  const emitCellQuad = (v0: number, v1: number, v2: number, v3: number, flip: boolean) => {
+  const recordCellQuad = (v0: number, v1: number, v2: number, v3: number, flip: boolean) => {
     if (v0 < 0 || v1 < 0 || v2 < 0 || v3 < 0) return;
+    cellQuadList.push([v0, v1, v2, v3, flip]);
+  };
+
+  // Collect quads dual to surface-crossing grid edges
+  for (let iz = 1; iz < gN - 1; iz++) {
+    for (let iy = 1; iy < gN - 1; iy++) {
+      for (let ix = 1; ix < gN - 1; ix++) {
+        const vHere = valAt(ix, iy, iz);
+        const inside = vHere < 0;
+
+        // Edge along +X: shared by cells (ix, iy-1, iz-1), (ix, iy, iz-1), (ix, iy, iz), (ix, iy-1, iz)
+        if (ix + 1 < gN) {
+          const vX = valAt(ix + 1, iy, iz) < 0;
+          if (inside !== vX) {
+            recordCellQuad(
+              cIdx(ix, iy - 1, iz - 1),
+              cIdx(ix, iy, iz - 1),
+              cIdx(ix, iy, iz),
+              cIdx(ix, iy - 1, iz),
+              inside
+            );
+          }
+        }
+        // Edge along +Y
+        if (iy + 1 < gN) {
+          const vY = valAt(ix, iy + 1, iz) < 0;
+          if (inside !== vY) {
+            recordCellQuad(
+              cIdx(ix - 1, iy, iz - 1),
+              cIdx(ix - 1, iy, iz),
+              cIdx(ix, iy, iz),
+              cIdx(ix, iy, iz - 1),
+              inside
+            );
+          }
+        }
+        // Edge along +Z
+        if (iz + 1 < gN) {
+          const vZ = valAt(ix, iy, iz + 1) < 0;
+          if (inside !== vZ) {
+            recordCellQuad(
+              cIdx(ix - 1, iy - 1, iz),
+              cIdx(ix, iy - 1, iz),
+              cIdx(ix, iy, iz),
+              cIdx(ix - 1, iy, iz),
+              inside
+            );
+          }
+        }
+      }
+    }
+  }
+
+  // 2-Pass Taubin lambda/mu tangential relaxation (lambda = 0.45, mu = -0.47)
+  // Eliminates voxel/Surface-Nets stair-stepping while preserving volume and silhouette ridges
+  if (vertPos.length > 0 && cellQuadList.length > 0) {
+    const vNeighbors: number[][] = Array.from({ length: vertPos.length }, () => []);
+    const addNb = (a: number, b: number) => {
+      if (a !== b && !vNeighbors[a].includes(b)) vNeighbors[a].push(b);
+      if (a !== b && !vNeighbors[b].includes(a)) vNeighbors[b].push(a);
+    };
+    for (const [v0, v1, v2, v3] of cellQuadList) {
+      addNb(v0, v1);
+      addNb(v1, v2);
+      addNb(v2, v3);
+      addNb(v3, v0);
+    }
+
+    const taubinWeights = [0.45, -0.47, 0.45, -0.47];
+    const nextPos: [number, number, number][] = vertPos.map((p) => [p[0], p[1], p[2]]);
+    for (const w of taubinWeights) {
+      for (let i = 0; i < vertPos.length; i++) {
+        const nbs = vNeighbors[i];
+        if (nbs.length === 0) continue;
+        let avgX = 0,
+          avgY = 0,
+          avgZ = 0;
+        for (const nb of nbs) {
+          avgX += vertPos[nb][0];
+          avgY += vertPos[nb][1];
+          avgZ += vertPos[nb][2];
+        }
+        const inv = 1 / nbs.length;
+        let lx = avgX * inv - vertPos[i][0];
+        let ly = avgY * inv - vertPos[i][1];
+        let lz = avgZ * inv - vertPos[i][2];
+        // Tangential projection preserves sharp normal ridges & prevents shrinkage
+        const nrm = vertNrm[i];
+        const nDot = lx * nrm[0] + ly * nrm[1] + lz * nrm[2];
+        lx -= nDot * nrm[0] * 0.45;
+        ly -= nDot * nrm[1] * 0.45;
+        lz -= nDot * nrm[2] * 0.45;
+        nextPos[i][0] = vertPos[i][0] + w * lx;
+        nextPos[i][1] = vertPos[i][1] + w * ly;
+        nextPos[i][2] = vertPos[i][2] + w * lz;
+      }
+      for (let i = 0; i < vertPos.length; i++) {
+        vertPos[i][0] = nextPos[i][0];
+        vertPos[i][1] = nextPos[i][1];
+        vertPos[i][2] = nextPos[i][2];
+        vertNrm[i] = gradAt(vertPos[i][0], vertPos[i][1], vertPos[i][2]);
+      }
+    }
+  }
+
+  for (const [v0, v1, v2, v3, flip] of cellQuadList) {
     const p0 = vertPos[v0],
       p1 = vertPos[v1],
       p2 = vertPos[v2],
@@ -1548,56 +2068,6 @@ export function makeSdfOrganicMesh(
       pushQuadWithHint(acc, p0, p3, p2, p1, [0, 0], [0, 1], [1, 1], [1, 0], avgN, smooth);
     } else {
       pushQuadWithHint(acc, p0, p1, p2, p3, [0, 0], [1, 0], [1, 1], [0, 1], avgN, smooth);
-    }
-  };
-
-  // Emit quads dual to surface-crossing grid edges
-  for (let iz = 1; iz < gN - 1; iz++) {
-    for (let iy = 1; iy < gN - 1; iy++) {
-      for (let ix = 1; ix < gN - 1; ix++) {
-        const vHere = valAt(ix, iy, iz);
-        const inside = vHere < 0;
-
-        // Edge along +X: shared by cells (ix, iy-1, iz-1), (ix, iy, iz-1), (ix, iy, iz), (ix, iy-1, iz)
-        if (ix + 1 < gN) {
-          const vX = valAt(ix + 1, iy, iz) < 0;
-          if (inside !== vX) {
-            emitCellQuad(
-              cIdx(ix, iy - 1, iz - 1),
-              cIdx(ix, iy, iz - 1),
-              cIdx(ix, iy, iz),
-              cIdx(ix, iy - 1, iz),
-              inside
-            );
-          }
-        }
-        // Edge along +Y
-        if (iy + 1 < gN) {
-          const vY = valAt(ix, iy + 1, iz) < 0;
-          if (inside !== vY) {
-            emitCellQuad(
-              cIdx(ix - 1, iy, iz - 1),
-              cIdx(ix - 1, iy, iz),
-              cIdx(ix, iy, iz),
-              cIdx(ix, iy, iz - 1),
-              inside
-            );
-          }
-        }
-        // Edge along +Z
-        if (iz + 1 < gN) {
-          const vZ = valAt(ix, iy, iz + 1) < 0;
-          if (inside !== vZ) {
-            emitCellQuad(
-              cIdx(ix - 1, iy - 1, iz),
-              cIdx(ix, iy - 1, iz),
-              cIdx(ix, iy, iz),
-              cIdx(ix - 1, iy, iz),
-              inside
-            );
-          }
-        }
-      }
     }
   }
 

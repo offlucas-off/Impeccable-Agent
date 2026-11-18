@@ -32,6 +32,7 @@ import {
 } from './PixelUvUnwrapper';
 import {
   applyHeightGtaoAndWear,
+  bake3DCurvatureToUvIslands,
   bakeVertexAoAndCreases,
   subdivideForAo,
 } from './VertexAndTexelBaker';
@@ -52,6 +53,7 @@ export interface SynthMaterialOptions {
   gtaoStrength?: number;
   gtaoRadiusPx?: number;
   normalStrength?: number;
+  curvatureMap?: Float32Array | null;
   rarityTier?: 'normal' | 'common' | 'rare' | 'epic' | 'legendary';
   eyeHex?: string;
   eyeGlowHex?: string | null;
@@ -407,7 +409,11 @@ function sampleMaterialRecipe(
 ): TexelSample {
   const v = h > 1 ? ly / (h - 1) : 0.5;
   const onPerimeter = lx === 0 || ly === 0 || lx === w - 1 || ly === h - 1;
-  const gradV = (v - 0.5) * 0.22; // crisp top-to-bottom cel tone falloff
+  const gradV = (v - 0.5) * 0.25; // crisp top-to-bottom cel tone falloff
+  const silverTrim: [number, number, number] = [218, 224, 234]; // #dae0ea
+  const steelTrim: [number, number, number] = [179, 185, 209]; // #b3b9d1
+  const crimsonAccent: [number, number, number] = [180, 32, 42]; // #b4202a
+  const brassAccent: [number, number, number] = [214, 166, 68];
 
   switch (recipe) {
     case 'stone_masonry':
@@ -415,11 +421,11 @@ function sampleMaterialRecipe(
       const tinyTrim = w <= 4 || h <= 4;
       if (tinyTrim) {
         const block = Math.floor((lx + ly * 2) / 2);
-        const grain = ((block % 3) - 1) * 0.08 + ((lx + ly * 2) / Math.max(2, w + h) - 0.5) * 0.16;
-        let rgb = shadeHueShiftRgb(baseRgb, grain + gradV * 0.45);
+        const grain = ((block % 3) - 1) * 0.1 + ((lx + ly * 2) / Math.max(2, w + h) - 0.5) * 0.18;
+        let rgb = shadeHueShiftRgb(baseRgb, grain + gradV * 0.5);
         let heightVal = 0.68 + grain * 0.35;
         if (recipe === 'mossy_cobble' && (ly === 0 || (lx === 0 && seed % 2 === 0))) {
-          rgb = mixRgb(rgb, accentRgb, 0.5);
+          rgb = mixRgb(rgb, accentRgb, 0.55);
           heightVal += 0.06;
         }
         return { rgb, height: heightVal };
@@ -433,55 +439,82 @@ function sampleMaterialRecipe(
       const brickCol = Math.floor((lx + staggerX) / colW);
       const mortar = bx === 0 || by === 0;
       const brickId = hash2d(brickCol, brickRow, seed);
-      const brickDelta = (brickId - 0.5) * 0.15 + (by === rowH - 1 ? 0.06 : 0) + gradV * 0.35;
+
+      // Macro-cluster weathering (5x5 block scale) + occasional mortar diagonal fissure
+      const macroWeather = (smoothNoise2d(Math.floor(lx / 5) * 0.65, Math.floor(ly / 5) * 0.65, seed + 41) - 0.5) * 0.16;
+      const hasCrack = brickId > 0.78 && bx === Math.floor(colW * 0.5) && by <= Math.floor(rowH * 0.6);
+      const topBevel = by === rowH - 1 ? 0.08 : by === 1 ? -0.05 : 0;
+      const brickDelta = (brickId - 0.5) * 0.18 + topBevel + macroWeather + gradV * 0.42;
+
       let rgb = mortar
-        ? shadeHueShiftRgb(baseRgb, -0.22)
-        : shadeHueShiftRgb(baseRgb, brickDelta);
-      let heightVal = mortar ? 0.3 : 0.72 + (brickId - 0.5) * 0.12;
+        ? shadeHueShiftRgb(baseRgb, -0.26)
+        : hasCrack
+          ? shadeHueShiftRgb(baseRgb, -0.21)
+          : shadeHueShiftRgb(baseRgb, brickDelta);
+      let heightVal = mortar ? 0.28 : hasCrack ? 0.36 : 0.72 + (brickId - 0.5) * 0.14 + topBevel * 0.4;
+
+      // Basal damp grime & moss creep on lower courses
+      const mx = Math.floor(lx / 3);
+      const my = Math.floor(ly / 3);
+      const mossPatch = smoothNoise2d(mx * 0.48, my * 0.48, seed + 71);
       if (recipe === 'mossy_cobble') {
-        const mx = Math.floor(lx / 2);
-        const my = Math.floor(ly / 2);
-        const mossPatch = smoothNoise2d(mx * 0.42, my * 0.42, seed + 71);
-        if ((v < 0.34 && mossPatch > 0.44) || (mortar && mossPatch > 0.6)) {
-          rgb = mixRgb(rgb, accentRgb, 0.68);
+        if ((v < 0.42 && mossPatch > 0.4) || (mortar && mossPatch > 0.54)) {
+          rgb = mixRgb(rgb, accentRgb, 0.72);
           heightVal += 0.07;
         }
+      } else if (v < 0.28 && mossPatch > 0.52) {
+        rgb = shadeHueShiftRgb(rgb, -0.12);
       }
       return { rgb, height: heightVal };
     }
 
     case 'wood_planks':
     case 'timber_frame': {
-      const plankW = w >= 14 ? 5 : 4;
+      const plankW = w >= 14 ? 6 : 4;
       const plankIdx = Math.floor(lx / plankW);
       const seam = lx % plankW === 0 && w >= 6;
       const narrowFiber =
-        w < 6 || h < 6 ? ((Math.floor(lx / 2) + Math.floor(ly / 2) + seed) % 3 - 1) * 0.07 : 0;
-      const clusterY = Math.floor(ly / 2);
+        w < 6 || h < 6 ? ((Math.floor(lx / 2) + Math.floor(ly / 2) + seed) % 3 - 1) * 0.08 : 0;
+      const clusterY = Math.floor(ly / 3);
       const grain =
-        Math.sin((clusterY + plankIdx * 2) * 0.9 + hash2d(plankIdx, 0, seed) * 4) * 0.065 +
+        Math.sin((clusterY + plankIdx * 2) * 0.85 + hash2d(plankIdx, 0, seed) * 4) * 0.08 +
         narrowFiber;
-      const plankVar = (hash2d(plankIdx, 19, seed) - 0.5) * 0.14;
+      const plankVar = (hash2d(plankIdx, 19, seed) - 0.5) * 0.17;
+
+      // Chunky timber knot cluster (2x2 px) in middle of select planks
+      const knotY = Math.floor(h * (0.35 + 0.35 * hash2d(plankIdx, 7, seed)));
+      const isKnot =
+        w >= 10 &&
+        h >= 10 &&
+        hash2d(plankIdx, 31, seed) > 0.58 &&
+        Math.abs(lx % plankW - Math.floor(plankW * 0.5)) <= 1 &&
+        Math.abs(ly - knotY) <= 1;
+
       const nailSpot =
         !seam &&
         lx % plankW === Math.floor(plankW * 0.5) &&
         (ly === 1 || ly === h - 2) &&
         h >= 8;
       if (nailSpot) {
-        return { rgb: shadeHueShiftRgb(accentRgb, -0.06), height: 0.88 };
+        return { rgb: mixRgb(steelTrim, accentRgb, 0.4), height: 0.9 };
       }
       if (seam) {
-        return { rgb: shadeHueShiftRgb(baseRgb, -0.22), height: 0.34 };
+        return { rgb: shadeHueShiftRgb(baseRgb, -0.25), height: 0.32 };
       }
+      if (isKnot) {
+        return { rgb: shadeHueShiftRgb(baseRgb, -0.18), height: 0.56 };
+      }
+      // End-grain weathering near top/bottom beam ends
+      const endWeather = (ly <= 1 || ly >= h - 2) && h >= 10 ? -0.09 : 0;
       return {
-        rgb: shadeHueShiftRgb(baseRgb, plankVar + grain + gradV * 0.35),
-        height: 0.72 + grain * 0.35,
+        rgb: shadeHueShiftRgb(baseRgb, plankVar + grain + endWeather + gradV * 0.4),
+        height: 0.72 + grain * 0.38,
       };
     }
 
     case 'roof_shingle': {
       if (w <= 4 || h <= 4) {
-        const slope = ((lx + ly * 2) / Math.max(2, w + h * 2) - 0.4) * 0.22;
+        const slope = ((lx + ly * 2) / Math.max(2, w + h * 2) - 0.4) * 0.24;
         return {
           rgb: shadeHueShiftRgb(baseRgb, slope),
           height: 0.62 + slope * 0.35,
@@ -493,61 +526,90 @@ function sampleMaterialRecipe(
       const stag = (row % 2) * Math.floor(tileW * 0.5);
       const col = Math.floor((lx + stag) / tileW);
       const shadowLip = ly % courseH === 0;
+      const lipBevel = ly % courseH === 1;
       const topRidge = ly % courseH === courseH - 1;
       const vEdge = (lx + stag) % tileW === 0;
-      const idVar = (hash2d(col, row, seed + 33) - 0.5) * 0.11;
-      const slopeShade = (v - 0.3) * 0.12 + (topRidge ? 0.06 : 0);
-      const rgb = shadowLip
-        ? shadeHueShiftRgb(baseRgb, -0.18)
+      const idVar = (hash2d(col, row, seed + 33) - 0.5) * 0.16;
+      const mossLichen = smoothNoise2d(Math.floor(lx / 4) * 0.6, Math.floor(ly / 4) * 0.6, seed + 89);
+      const slopeShade = (v - 0.3) * 0.15 + (topRidge ? 0.08 : 0) + (lipBevel ? 0.09 : 0);
+      let rgb = shadowLip
+        ? shadeHueShiftRgb(baseRgb, -0.24)
         : vEdge
-          ? shadeHueShiftRgb(baseRgb, -0.09)
+          ? shadeHueShiftRgb(baseRgb, -0.12)
           : shadeHueShiftRgb(baseRgb, idVar + slopeShade);
-      const stepSlope = ((ly % courseH) / Math.max(1, courseH - 1)) * 0.28;
-      return { rgb, height: shadowLip ? 0.34 : 0.6 + stepSlope };
+      if (!shadowLip && mossLichen > 0.68 && v < 0.65) {
+        rgb = mixRgb(rgb, accentRgb, 0.38);
+      }
+      const stepSlope = ((ly % courseH) / Math.max(1, courseH - 1)) * 0.3;
+      return { rgb, height: shadowLip ? 0.32 : 0.6 + stepSlope };
     }
 
     case 'plaster_wall': {
-      const mx = Math.floor(lx / 3);
-      const my = Math.floor(ly / 3);
-      const macro = smoothNoise2d(mx * 0.48, my * 0.48, seed + 19) - 0.5;
+      const mx = Math.floor(lx / 4);
+      const my = Math.floor(ly / 4);
+      const macro = smoothNoise2d(mx * 0.52, my * 0.52, seed + 19) - 0.5;
+      const dampBase = v < 0.3 ? (0.3 - v) * -0.42 : 0;
       const trimEdge = (ly === 0 || ly === h - 1 || lx === 0 || lx === w - 1) && w >= 6 && h >= 6;
-      const diagBevel = w < 6 || h < 6 ? ((lx + ly * 2) / Math.max(2, w + h) - 0.5) * 0.18 : 0;
+      const innerBevel =
+        !trimEdge && (ly === 1 || ly === h - 2 || lx === 1 || lx === w - 2) && w >= 8 && h >= 8;
+      const diagBevel = w < 6 || h < 6 ? ((lx + ly * 2) / Math.max(2, w + h) - 0.5) * 0.2 : 0;
       const rgb = trimEdge
-        ? shadeHueShiftRgb(accentRgb, -0.08)
-        : shadeHueShiftRgb(baseRgb, macro * 0.14 + diagBevel + gradV * 0.4);
-      return { rgb, height: trimEdge ? 0.82 : 0.62 + macro * 0.12 };
+        ? shadeHueShiftRgb(accentRgb, -0.1)
+        : innerBevel
+          ? shadeHueShiftRgb(baseRgb, 0.1)
+          : shadeHueShiftRgb(baseRgb, macro * 0.18 + dampBase + diagBevel + gradV * 0.45);
+      return { rgb, height: trimEdge ? 0.84 : innerBevel ? 0.74 : 0.62 + macro * 0.14 };
     }
 
     case 'forged_steel':
     case 'brushed_gold':
     case 'rarity_armor': {
-      // Crisp cel armor sheen band & bevel rim with zero high-frequency sparkle noise
-      const sheenBand = Math.exp(-Math.pow((v - 0.68) * 3.0, 2)) * 0.18;
-      const diag = w < 5 || h < 5 ? ((lx * 0.9 + ly * 1.3) / Math.max(2, w + h) - 0.5) * 0.18 : 0;
+      // Dark-fantasy high-contrast armor sheen, crisp metallic edge trim (#dae0ea/#b3b9d1), rivets & fuller ridge
+      const sheenBand = Math.exp(-Math.pow((v - 0.68) * 2.8, 2)) * 0.22;
+      const diag = w < 5 || h < 5 ? ((lx * 0.9 + ly * 1.3) / Math.max(2, w + h) - 0.5) * 0.2 : 0;
       const macroBrush =
-        (smoothNoise2d(Math.floor(lx / 2) * 0.35, Math.floor(ly / 2) * 0.45, seed) - 0.5) * 0.08 +
+        (smoothNoise2d(Math.floor(lx / 3) * 0.42, Math.floor(ly / 3) * 0.5, seed) - 0.5) * 0.11 +
         diag;
       const borderHigh = onPerimeter && w >= 4 && h >= 4;
+      const innerInlay =
+        !onPerimeter &&
+        (lx === 1 || lx === w - 2 || ly === 1 || ly === h - 2) &&
+        w >= 10 &&
+        h >= 10;
       const cornerRivet =
-        w >= 9 &&
-        h >= 9 &&
+        w >= 8 &&
+        h >= 8 &&
         ((lx === 1 || lx === w - 2) && (ly === 1 || ly === h - 2));
 
-      let rgb = shadeHueShiftRgb(baseRgb, gradV * 0.55 + sheenBand + macroBrush);
-      let heightVal = 0.72 + sheenBand * 0.22;
+      let rgb = shadeHueShiftRgb(baseRgb, gradV * 0.6 + sheenBand + macroBrush);
+      let heightVal = 0.72 + sheenBand * 0.24;
       let emissiveRgb: [number, number, number] | undefined;
 
       if (borderHigh) {
-        const edgeCol = recipe === 'rarity_armor' ? accentRgb : baseRgb;
-        rgb = mixRgb(shadeHueShiftRgb(edgeCol, 0.18), rgb, 0.3);
-        heightVal = 0.86;
+        const trimBase =
+          recipe === 'brushed_gold'
+            ? mixRgb(accentRgb, silverTrim, 0.35)
+            : recipe === 'rarity_armor'
+              ? mixRgb(accentRgb, silverTrim, 0.5)
+              : mixRgb(baseRgb, steelTrim, 0.58);
+        rgb = shadeHueShiftRgb(trimBase, 0.16);
+        heightVal = 0.88;
+      } else if (innerInlay) {
+        // Dark-fantasy recessed cavity groove framing the raised silver/brass trim
+        const grooveAccent =
+          recipe === 'rarity_armor' && rarityTier === 'epic'
+            ? mixRgb(baseRgb, crimsonAccent, 0.35)
+            : baseRgb;
+        rgb = shadeHueShiftRgb(grooveAccent, -0.2);
+        heightVal = 0.52;
       }
+
       if (cornerRivet) {
-        rgb = shadeHueShiftRgb(accentRgb, 0.2);
+        rgb = shadeHueShiftRgb(mixRgb(accentRgb, silverTrim, 0.45), 0.22);
         heightVal = 0.94;
       }
 
-      // Rare / Epic / Legendary trim runes along centerline when island large enough
+      // Rare / Epic / Legendary trim runes or crimson/gold filigree along centerline when island large enough
       if (
         recipe === 'rarity_armor' &&
         (rarityTier === 'rare' || rarityTier === 'epic' || rarityTier === 'legendary') &&
@@ -568,19 +630,27 @@ function sampleMaterialRecipe(
 
     case 'stitched_leather':
     case 'woven_cloth': {
-      const wave = Math.sin(lx * 0.95 + ly * 0.45) * 0.055;
-      const crease = smoothNoise2d(lx * 0.24, ly * 0.16, seed + 51) - 0.5;
+      // Chunky pleated folds + double-stitched border + dark-fantasy brass/crimson hem trim
+      const pleatPeriod = Math.max(4, Math.min(7, Math.floor(w / 3)));
+      const pleatPhase = ((lx % pleatPeriod) / pleatPeriod) * Math.PI * 2;
+      const pleatWave = Math.sin(pleatPhase) * (recipe === 'woven_cloth' ? 0.11 : 0.065);
+      const crease = smoothNoise2d(Math.floor(lx / 3) * 0.45, Math.floor(ly / 3) * 0.35, seed + 51) - 0.5;
       const isStitch =
-        recipe === 'stitched_leather' &&
         (lx === 1 || lx === w - 2 || ly === 1 || ly === h - 2) &&
         ((lx + ly) % 2 === 0) &&
         w >= 6 &&
         h >= 6;
+      const isHemTrim = (ly === 0 || ly === h - 1) && w >= 6 && h >= 6;
       if (isStitch) {
-        return { rgb: shadeHueShiftRgb(accentRgb, 0.25), height: 0.85 };
+        const stitchCol = recipe === 'stitched_leather' ? mixRgb(accentRgb, brassAccent, 0.4) : mixRgb(accentRgb, silverTrim, 0.35);
+        return { rgb: shadeHueShiftRgb(stitchCol, 0.22), height: 0.86 };
       }
-      const rgb = shadeHueShiftRgb(baseRgb, crease * 0.26 + wave + gradV * 0.65);
-      return { rgb, height: 0.62 + crease * 0.18 + wave * 0.4 };
+      if (isHemTrim) {
+        const hemCol = recipe === 'woven_cloth' ? mixRgb(accentRgb, crimsonAccent, 0.3) : accentRgb;
+        return { rgb: shadeHueShiftRgb(hemCol, 0.12), height: 0.8 };
+      }
+      const rgb = shadeHueShiftRgb(baseRgb, crease * 0.24 + pleatWave + gradV * 0.65);
+      return { rgb, height: 0.62 + crease * 0.18 + pleatWave * 0.45 };
     }
 
     case 'human_skin':
@@ -971,12 +1041,13 @@ export function synthesizeAtlasTextures(
       }
     }
 
-    // Apply Phase 4B texel-space Horizon AO + Laplacian Curvature Wear + Vertical Grime
+    // Apply Phase 4B texel-space Horizon AO + 3D Dihedral Curvature Wear + Zenithal/Vertical Grime
     applyHeightGtaoAndWear(heightField, coverageMask, w, h, unwrapped.islands, albedoRgba, {
       gtaoStrength: options.gtaoStrength ?? 0.55,
       gtaoRadiusPx: options.gtaoRadiusPx ?? 3,
-      curvatureStrength: 0.22,
-      verticalGrimeStrength: 0.2,
+      curvatureStrength: 0.24,
+      verticalGrimeStrength: 0.24,
+      curvatureMap: options.curvatureMap ?? null,
     });
 
     // Compute subtle tangent-space Sobel normals (clamped so Pass 3 ignores flat areas)
@@ -1491,9 +1562,30 @@ export function bakeTaggedPartsAsset(
     minAtlasSize: options.minAtlasSize ?? 64,
     maxAtlasSize: options.maxAtlasSize ?? 1024,
     islandChartCosThreshold: options.islandChartCosThreshold ?? 0.91,
+    sewChamfersToParentChart: options.sewChamfersToParentChart ?? true,
     computeTangents: !willSubdivide,
     vertexColorMode: 'white_for_ao',
   });
+
+  const aoStrength = options.aoStrength ?? 0.55;
+  const gtaoStrength = options.gtaoStrength ?? Math.min(0.85, aoStrength);
+  const normalStrength = options.normalStrength ?? 0.36;
+  const effectiveCacheKey = options.cacheKey
+    ? `${options.cacheKey}:s${seed}:g${Math.round(gtaoStrength * 20)}:n${Math.round(normalStrength * 20)}:${options.rarityTier ?? 'normal'}`
+    : undefined;
+  const isCacheHit = Boolean(
+    options.usePool && effectiveCacheKey && MATERIAL_TEXTURE_POOL.has(effectiveCacheKey)
+  );
+
+  // Compute 3D edge dihedral curvature map only when synthesizing a new un-pooled texture bundle
+  const curvatureMap = isCacheHit
+    ? null
+    : bake3DCurvatureToUvIslands(
+        unwrapped.geometry,
+        unwrapped.islands,
+        unwrapped.texWidth,
+        unwrapped.texHeight
+      );
 
   let outGeo = unwrapped.geometry;
 
@@ -1532,10 +1624,6 @@ export function bakeTaggedPartsAsset(
     outGeo = subGeo;
   }
 
-  const aoStrength = options.aoStrength ?? 0.55;
-  const gtaoStrength = options.gtaoStrength ?? Math.min(0.85, aoStrength);
-  const normalStrength = options.normalStrength ?? 0.36;
-
   bakeVertexAoAndCreases(outGeo, {
     rays: options.aoRays ?? 16,
     maxDist: options.aoMaxDist ?? 0.65,
@@ -1543,15 +1631,12 @@ export function bakeTaggedPartsAsset(
     creaseBoost: options.creaseBoost ?? (aoStrength <= 0.01 ? 0 : 0.06),
   });
 
-  const effectiveCacheKey = options.cacheKey
-    ? `${options.cacheKey}:s${seed}:g${Math.round(gtaoStrength * 20)}:n${Math.round(normalStrength * 20)}:${options.rarityTier ?? 'normal'}`
-    : undefined;
-
   const textures = synthesizeAtlasTextures(unwrapped, {
     seed,
     gtaoStrength,
     gtaoRadiusPx: options.gtaoRadiusPx ?? 3,
     normalStrength,
+    curvatureMap,
     rarityTier: options.rarityTier ?? 'normal',
     eyeHex: options.eyeHex,
     eyeGlowHex: options.eyeGlowHex,

@@ -84,7 +84,7 @@ void main() {
     if (uDebugView > 5.5) {
       outFinalColor = vec4(0.06, 0.07, 0.09, 1.0);
     } else {
-      outFinalColor = cColor;
+      outFinalColor = vec4(cColor.rgb, (cColor.a > 0.25) ? 1.0 : 0.0);
     }
     return;
   }
@@ -224,6 +224,6 @@ void main() {
     color = mix(color, cOutline.rgb, cOutline.a);
   }
 
-  outFinalColor = vec4(color, cColor.a);
+  outFinalColor = vec4(color, (cColor.a > 0.25) ? 1.0 : 0.0);
 }
 `;

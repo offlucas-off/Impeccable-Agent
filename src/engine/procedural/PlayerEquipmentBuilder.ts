@@ -24,7 +24,9 @@ import {
   makeDomeShieldGeometry,
   makeLatheProfile,
   makePauldronShellGeometry,
+  makePleatedTabardGeometry,
   makeRecurveBowGeometry,
+  makeSegmentedBeveledBox,
   makeSwordBladeGeometry,
   tagPart,
   type FinishMode,
@@ -669,27 +671,57 @@ function buildSlotAttachments(
   } else if (slot === 'chest') {
     const beltParts: TaggedGeometryPart[] = [
       tagPart(
-        makeBeveledBoneSegmentBox(0.072, 0.165, 0.125, 0.165, 0.125, 0.012, pal.secondary),
+        makeBeveledBoneSegmentBox(0.076, 0.172, 0.132, 0.168, 0.128, 0.012, pal.secondary),
         'belt_strap',
         'stitched_leather',
         pal.secondary,
         { accentHex: pal.trim }
       ),
       tagPart(
-        makeBeveledBox(0.085, 0.075, 0.045, 0.01, pal.trim, { offset: [0, 0.05, 0.12] }),
+        makeBeveledBox(0.095, 0.082, 0.05, 0.012, pal.trim, { offset: [0, 0.05, 0.126] }),
         'belt_buckle',
         'brushed_gold',
         pal.trim,
         { landmarkKind: 'chest_crest' }
       ),
+      // Rigid bone-mounted front & rear pleated battle-tabard / coat tails (widens waist-to-thigh silhouette with zero cloth physics)
+      tagPart(
+        makePleatedTabardGeometry(0.16, 0.22 + tier * 0.008, 0.24, 0.032, 3, pal.secondary, {
+          offset: [0, -0.07, 0.118],
+          flareZ: 0.024,
+        }),
+        'belt_tabard_front',
+        classId === 'knight' ? 'woven_cloth' : armorRecipe,
+        pal.secondary,
+        { accentHex: pal.trim }
+      ),
+      tagPart(
+        makePleatedTabardGeometry(0.19, 0.28 + tier * 0.01, 0.28, 0.034, 3, pal.primary, {
+          offset: [0, -0.09, -0.118],
+          flareZ: -0.032,
+        }),
+        'belt_tabard_back',
+        classId === 'mage' ? 'woven_cloth' : armorRecipe,
+        pal.primary,
+        { accentHex: pal.trim }
+      ),
     ];
-    if (classId === 'knight' || tier >= 3) {
-      for (const [tIdx, sx] of [-1, 1].entries()) {
-        const tasset = makeBeveledBox(0.092, 0.125, 0.135, 0.014, pal.primary, {
-          offset: [sx * 0.145, -0.02, 0],
-        });
-        beltParts.push(tagPart(tasset, `belt_tasset_${tIdx}`, armorRecipe, pal.primary, { accentHex: pal.trim }));
-      }
+    for (const [tIdx, sx] of [-1, 1].entries()) {
+      const tasset = makePleatedTabardGeometry(
+        0.105,
+        0.145 + tier * 0.006,
+        0.19,
+        0.036,
+        2,
+        pal.primary,
+        { flareZ: 0.018 }
+      );
+      tasset.rotateY(sx * (Math.PI * 0.5));
+      tasset.rotateZ(sx * -0.16);
+      tasset.translate(sx * 0.158, -0.04, 0);
+      beltParts.push(
+        tagPart(tasset, `belt_tasset_${tIdx}`, armorRecipe, pal.primary, { accentHex: pal.trim })
+      );
     }
     bakeBoneParts('pelvis', beltParts, { isMetal: classId === 'knight' });
 
@@ -697,7 +729,7 @@ function buildSlotAttachments(
       'spine_01',
       [
         tagPart(
-          makeBeveledBoneSegmentBox(spine1Len * 1.05, 0.142, 0.104, 0.156, 0.114, 0.014, pal.secondary),
+          makeBeveledBoneSegmentBox(spine1Len * 1.05, 0.142, 0.104, 0.162, 0.118, 0.014, pal.secondary),
           'chest_lower',
           armorRecipe,
           pal.secondary,
@@ -707,46 +739,81 @@ function buildSlotAttachments(
       { isMetal: classId === 'knight' }
     );
 
+    // Sculpted V-taper anatomical cuirass on spine_02 with sternal ridge & cross-belt
+    const midCuirass = makeSegmentedBeveledBox(
+      0.34,
+      spine2Len * 1.1,
+      0.245,
+      0.016,
+      2,
+      2,
+      2,
+      (x, y, z) => {
+        const vNorm = spine2Len > 1e-4 ? y / (spine2Len * 0.55) : 0; // -1..+1
+        const vTaper = 1.0 + vNorm * 0.1;
+        const sternalKeel = z > 0 && Math.abs(x) < 0.06 ? 0.014 * (1 - Math.abs(x) / 0.06) : 0;
+        return [x * vTaper, y + spine2Len * 0.52, z + sternalKeel];
+      },
+      pal.primary
+    );
+    const crossBelt = makeBeveledBox(0.35, 0.046, 0.255, 0.01, pal.trim);
+    crossBelt.rotateZ(0.32);
+    crossBelt.translate(0, spine2Len * 0.54, 0);
+
     bakeBoneParts(
       'spine_02',
       [
+        tagPart(midCuirass, 'chest_mid', armorRecipe, pal.primary, {
+          accentHex: pal.trim,
+          landmarkKind: 'chest_crest',
+        }),
         tagPart(
-          makeBeveledBoneSegmentBox(spine2Len * 1.08, 0.16, 0.115, 0.18, 0.13, 0.015, pal.primary),
-          'chest_mid',
-          armorRecipe,
-          pal.primary,
-          { accentHex: pal.trim, landmarkKind: 'chest_crest' }
-        ),
-        tagPart(
-          makeBeveledBox(0.28, 0.052, 0.24, 0.01, pal.trim, { offset: [0, spine2Len * 0.5, 0] }),
+          makeBeveledBox(0.31, 0.052, 0.245, 0.01, pal.trim, { offset: [0, spine2Len * 0.22, 0] }),
           'chest_band',
           'brushed_gold',
           pal.trim
         ),
+        tagPart(crossBelt, 'chest_cross_strap', 'stitched_leather', pal.trim),
       ],
-      { isMetal: classId === 'knight', inspectUvs: true }
+      { isMetal: classId === 'knight' }
     );
 
+    const upperCuirass = makeSegmentedBeveledBox(
+      0.39,
+      spine3Len * 0.96,
+      0.27,
+      0.018,
+      2,
+      2,
+      2,
+      (x, y, z) => {
+        const vNorm = spine3Len > 1e-4 ? y / (spine3Len * 0.48) : 0;
+        const shoulderFlare = 1.0 + vNorm * 0.09;
+        const pecSwell = z > 0 ? 0.012 * Math.cos((x / 0.2) * Math.PI * 0.5) : 0;
+        return [x * shoulderFlare, y + spine3Len * 0.48, z + pecSwell];
+      },
+      pal.primary
+    );
+    const gorgetCollar = makeBeveledBox(0.25, 0.068, 0.21, 0.014, pal.trim, {
+      offset: [0, spine3Len * 0.92, -0.005],
+    });
     const topParts: TaggedGeometryPart[] = [
-      tagPart(
-        makeBeveledBoneSegmentBox(spine3Len * 0.94, 0.185, 0.13, 0.2, 0.135, 0.016, pal.primary),
-        'chest_upper',
-        armorRecipe,
-        pal.primary,
-        { accentHex: pal.trim }
-      ),
+      tagPart(upperCuirass, 'chest_upper', armorRecipe, pal.primary, { accentHex: pal.trim }),
+      tagPart(gorgetCollar, 'chest_gorget_collar', 'brushed_gold', pal.trim),
     ];
     if (classId === 'knight') {
-      const gorget = makeBeveledBox(0.22, 0.06, 0.18, 0.012, pal.trim, {
-        offset: [0, spine3Len * 0.9, 0],
+      const crest = makeBeveledBox(0.125, 0.125, 0.048, 0.012, pal.secondary, {
+        offset: [0, spine3Len * 0.48, 0.142],
       });
-      const crest = makeBeveledBox(0.115, 0.115, 0.044, 0.01, pal.secondary, {
-        offset: [0, spine3Len * 0.48, 0.135],
+      const backGuard = makeBeveledBox(0.24, 0.16, 0.045, 0.012, pal.secondary, {
+        offset: [0, spine3Len * 0.52, -0.14],
       });
       topParts.push(
-        tagPart(gorget, 'knight_gorget', 'brushed_gold', pal.trim),
         tagPart(crest, 'knight_crest', 'rarity_armor', pal.secondary, {
           landmarkKind: 'chest_crest',
+          accentHex: pal.trim,
+        }),
+        tagPart(backGuard, 'knight_dorsal_plate', 'rarity_armor', pal.secondary, {
           accentHex: pal.trim,
         })
       );
@@ -769,11 +836,11 @@ function buildSlotAttachments(
         tagPart(arrows, 'archer_fletching', 'woven_cloth', pal.trim)
       );
     } else {
-      const mantle = makeBeveledBox(0.38, 0.065, 0.24, 0.014, pal.trim, {
+      const mantle = makeBeveledBox(0.41, 0.072, 0.26, 0.015, pal.trim, {
         offset: [0, spine3Len * 0.78, -0.01],
       });
-      const rune = prepareColoredPart(new THREE.OctahedronGeometry(0.05, 0), pal.glow);
-      rune.translate(0, spine3Len * 0.48, 0.138);
+      const rune = prepareColoredPart(new THREE.OctahedronGeometry(0.052, 0), pal.glow);
+      rune.translate(0, spine3Len * 0.48, 0.145);
       topParts.push(
         tagPart(mantle, 'mage_mantle', 'brushed_gold', pal.trim),
         tagPart(rune, 'mage_chest_rune', 'runic_glow', pal.glow, { lockVertical: false })
@@ -797,28 +864,29 @@ function buildSlotAttachments(
         (classId === 'mage' && tier >= 2) ||
         tier >= 3;
       if (hasPauldron) {
-        const pW = classId === 'knight' ? 0.18 + tier * 0.008 : 0.145;
-        const pH = classId === 'knight' ? 0.155 : 0.115;
-        const pauldron = makePauldronShellGeometry(pW, pH, pW * 1.12, 0.032, pal.primary);
+        const pW = classId === 'knight' ? 0.195 + tier * 0.008 : 0.155;
+        const pH = classId === 'knight' ? 0.165 : 0.125;
+        const pauldron = makePauldronShellGeometry(pW, pH, pW * 1.14, 0.036, pal.primary);
         if (side === 'r') {
           pauldron.rotateY(Math.PI);
         }
-        pauldron.translate(side === 'l' ? 0.01 : -0.01, 0.05, 0);
+        // Centered near y ≈ +0.02 on upperarm_l/r per Invariant #5
+        pauldron.translate(side === 'l' ? 0.012 : -0.012, 0.022, 0);
         armParts.push(
           tagPart(pauldron, `pauldron_${side}`, armorRecipe, pal.primary, {
             accentHex: pal.trim,
             lockVertical: true,
           })
         );
-        if (tier >= 3) {
+        if (tier >= 2) {
           const rim = makeBeveledBox(pW + 0.025, 0.038, pW + 0.025, 0.008, pal.trim, {
-            offset: [0, 0.01, 0],
+            offset: [0, 0.005, 0],
           });
           armParts.push(tagPart(rim, `pauldron_rim_${side}`, 'brushed_gold', pal.trim));
         }
-        if (tier >= 5) {
+        if (tier >= 4) {
           const spike = prepareColoredPart(new THREE.ConeGeometry(0.042, 0.11, 5), pal.trim);
-          spike.translate(side === 'l' ? 0.045 : -0.045, 0.12, 0);
+          spike.translate(side === 'l' ? 0.045 : -0.045, 0.095, 0);
           armParts.push(tagPart(spike, `pauldron_spike_${side}`, 'brushed_gold', pal.trim));
         }
       }
@@ -826,17 +894,34 @@ function buildSlotAttachments(
     }
   } else if (slot === 'legs') {
     for (const side of ['l', 'r'] as const) {
+      const sx = side === 'l' ? 1 : -1;
+      const flaredCuisse = makePleatedTabardGeometry(
+        0.11,
+        0.15 + tier * 0.006,
+        thigh * 0.62,
+        0.034,
+        2,
+        pal.secondary,
+        { flareZ: 0.016 }
+      );
+      flaredCuisse.rotateY(sx * (Math.PI * 0.5));
+      flaredCuisse.rotateZ(sx * -0.12);
+      flaredCuisse.translate(sx * 0.076, thigh * 0.36, 0);
+
       const parts: TaggedGeometryPart[] = [
         tagPart(
-          makeBeveledBoneSegmentBox(thigh * 0.88, 0.09, 0.09, 0.072, 0.072, 0.013, pal.primary),
+          makeBeveledBoneSegmentBox(thigh * 0.88, 0.092, 0.092, 0.074, 0.074, 0.013, pal.primary),
           `thigh_guard_${side}`,
           armorRecipe,
           pal.primary,
           { accentHex: pal.trim }
         ),
+        tagPart(flaredCuisse, `thigh_cuisse_skirt_${side}`, armorRecipe, pal.secondary, {
+          accentHex: pal.trim,
+        }),
         tagPart(
-          makeBeveledBox(0.135, 0.082, 0.14, 0.014, pal.trim, {
-            offset: [0, thigh * 0.86, 0.015],
+          makeBeveledBox(0.142, 0.092, 0.148, 0.016, pal.trim, {
+            offset: [0, thigh * 0.86, 0.02],
           }),
           `kneecap_${side}`,
           'brushed_gold',
@@ -844,11 +929,11 @@ function buildSlotAttachments(
         ),
       ];
       if (tier >= 3) {
-        const outerPlate = makeBeveledBox(0.155, thigh * 0.52, 0.062, 0.01, pal.secondary, {
-          offset: [0, thigh * 0.45, 0],
+        const kneeFin = makeBeveledBox(0.06, 0.11, 0.075, 0.012, pal.primary, {
+          offset: [sx * 0.068, thigh * 0.86, 0.025],
         });
         parts.push(
-          tagPart(outerPlate, `thigh_plate_${side}`, armorRecipe, pal.secondary, {
+          tagPart(kneeFin, `knee_wing_${side}`, armorRecipe, pal.primary, {
             accentHex: pal.trim,
           })
         );
@@ -859,17 +944,25 @@ function buildSlotAttachments(
     for (const side of ['l', 'r'] as const) {
       const calfParts: TaggedGeometryPart[] = [
         tagPart(
-          makeBeveledBoneSegmentBox(calf * 0.72, 0.068, 0.068, 0.076, 0.076, 0.012, pal.secondary),
+          makeBeveledBoneSegmentBox(calf * 0.74, 0.07, 0.07, 0.078, 0.078, 0.012, pal.secondary),
           `greave_${side}`,
           armorRecipe,
           pal.secondary,
           { accentHex: pal.trim }
         ),
         tagPart(
-          makeBeveledBox(0.15, 0.065, 0.15, 0.012, pal.trim, {
+          makeBeveledBox(0.154, 0.068, 0.154, 0.012, pal.trim, {
             offset: [0, calf * 0.34, 0],
           }),
           `boot_cuff_${side}`,
+          'brushed_gold',
+          pal.trim
+        ),
+        tagPart(
+          makeBeveledBox(0.062, calf * 0.56, 0.048, 0.01, pal.trim, {
+            offset: [0, calf * 0.36, 0.065],
+          }),
+          `greave_shin_crest_${side}`,
           'brushed_gold',
           pal.trim
         ),
@@ -895,17 +988,27 @@ function buildSlotAttachments(
     }
   } else if (slot === 'gloves') {
     for (const side of ['l', 'r'] as const) {
+      const sx = side === 'l' ? 1 : -1;
       const bracerParts: TaggedGeometryPart[] = [
         tagPart(
-          makeBeveledBoneSegmentBox(lArm * 0.62, 0.054, 0.054, 0.062, 0.062, 0.01, pal.primary),
+          makeBeveledBoneSegmentBox(lArm * 0.64, 0.056, 0.056, 0.064, 0.064, 0.01, pal.primary),
           `bracer_${side}`,
           armorRecipe,
           pal.primary,
           { accentHex: pal.trim }
         ),
+        // Sculpted elbow cop (couter) protecting joint at parent end of lowerarm
+        tagPart(
+          makeBeveledBox(0.115, 0.078, 0.115, 0.014, pal.trim, {
+            offset: [sx * 0.018, 0.04, -0.022],
+          }),
+          `elbow_cop_${side}`,
+          'brushed_gold',
+          pal.trim
+        ),
       ];
       if (tier >= 2) {
-        const rim = makeBeveledBox(0.12, 0.048, 0.12, 0.01, pal.trim, {
+        const rim = makeBeveledBox(0.124, 0.05, 0.124, 0.01, pal.trim, {
           offset: [0, lArm * 0.56, 0],
         });
         bracerParts.push(tagPart(rim, `bracer_cuff_${side}`, 'brushed_gold', pal.trim));

@@ -178,6 +178,18 @@ export function createStageManager(
     ctx.activeSandbox = createNwlPlaySandbox(ctx.stageEl, ctx.pipeline, {
       onExitSandbox: () => exitPlaySandbox(true),
       finishOptions: ctx.generatorHandle?.getFinishOptions(),
+      projectWorldToScreen: (worldPos) => {
+        const w = ctx.stageEl.clientWidth || ctx.canvas.width || 1;
+        const h = ctx.stageEl.clientHeight || ctx.canvas.height || 1;
+        ctx.activeCamera.updateMatrixWorld();
+        const projected = worldPos.clone().project(ctx.activeCamera);
+        if (projected.z < -1 || projected.z > 1) return { x: 0, y: 0, visible: false };
+        return {
+          x: (projected.x * 0.5 + 0.5) * w,
+          y: (-projected.y * 0.5 + 0.5) * h,
+          visible: true,
+        };
+      },
       onZoneOrActorChanged: () => {
         if (!ctx.activeSandbox) return;
         const target = ctx.activeSandbox.getCameraTarget();
@@ -342,11 +354,15 @@ export function createStageManager(
       ctx.actions.syncAnimClipSelector([], 0);
     }
 
+    const triSummary = loaded.wasSimplified
+      ? `${loaded.finalTriangles.toLocaleString()} tris (otimizado de ${loaded.originalTriangles.toLocaleString()}${loaded.usedWorker ? ' via Worker' : ''})`
+      : `${loaded.finalTriangles.toLocaleString()} tris${loaded.usedWorker ? ' (via Worker)' : ''}`;
+
     applyStage({
       name: titleOverride ?? `Imported: ${loaded.name}`,
       description:
         descOverride ??
-        `${loaded.meshes.length} mesh(es) converted to PixelizerMaterial · ${loaded.animations.length} animation clip(s).`,
+        `${loaded.meshes.length} mesh(es) · ${triSummary} · ${loaded.animations.length} animation clip(s).`,
       subjectRoot: loaded.root,
       sceneRoot: wrapScene,
       items,
@@ -940,18 +956,33 @@ export function createStageManager(
 
   async function handleModelImport(file: File): Promise<void> {
     const token = ++ctx.loadRequestToken;
+    refs.captionTitle.textContent = `Importando ${file.name}...`;
+    refs.captionDesc.textContent = 'Lendo arquivo e preparando pipeline Pixelizer 3D...';
     try {
       const loaded = await loadModelFromFile(
         file,
-        ctx.pipeline.getSharedResourcesForMaterial()
+        ctx.pipeline.getSharedResourcesForMaterial(),
+        {},
+        {
+          unifyObjectId: true,
+          onProgress: (info) => {
+            if (token !== ctx.loadRequestToken) return;
+            refs.captionDesc.textContent = info.detail;
+          },
+        }
       );
       if (token !== ctx.loadRequestToken) {
         disposeGroupResources(loaded.root);
         return;
       }
+      ctx.lastStageOrigin = 'preset';
       mountLoadedModel(loaded);
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to load 3D file');
+      if (token !== ctx.loadRequestToken) return;
+      const msg = err instanceof Error ? err.message : 'Failed to load 3D file';
+      refs.captionTitle.textContent = `Erro ao importar ${file.name}`;
+      refs.captionDesc.textContent = msg;
+      alert(msg);
     }
   }
 
