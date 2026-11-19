@@ -1275,6 +1275,7 @@ export function buildQuadrupedCreature(
   }
 
   const clips = buildQuadrupedAnimClips(rig);
+  root.userData.nwlAnimClips = clips;
 
   return {
     id,

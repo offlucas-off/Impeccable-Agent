@@ -384,7 +384,165 @@ export interface GeneratedMonsterResult {
   root: THREE.Group;
   meshes: THREE.Mesh[];
   materials: PixelizerMaterial[];
+  clips: THREE.AnimationClip[];
   dispose?: () => void;
+}
+
+function makeMonsterEulerTrack(
+  nodeName: string,
+  times: number[],
+  eulers: Array<[number, number, number]>
+): THREE.QuaternionKeyframeTrack {
+  const values: number[] = [];
+  const q = new THREE.Quaternion();
+  const e = new THREE.Euler();
+  for (const [rx, ry, rz] of eulers) {
+    e.set(rx, ry, rz, 'XYZ');
+    q.setFromEuler(e);
+    values.push(q.x, q.y, q.z, q.w);
+  }
+  return new THREE.QuaternionKeyframeTrack(`${nodeName}.quaternion`, times, values);
+}
+
+function addMonsterWingTracks(
+  tracks: THREE.KeyframeTrack[],
+  times: number[],
+  leftPoses: Array<[number, number, number]>
+): void {
+  const rightPoses: Array<[number, number, number]> = leftPoses.map(([rx, ry, rz]) => [
+    rx,
+    -ry,
+    -rz,
+  ]);
+  tracks.push(
+    makeMonsterEulerTrack('Monster_Wing_l', times, leftPoses),
+    makeMonsterEulerTrack('Monster_Wing_r', times, rightPoses)
+  );
+}
+
+/**
+ * Generates wing-root & chest breathing/flap AnimationClips for winged NWL monsters
+ * (`demons.boss_demon` and `monster.gargoyle`), driving `Monster_Wing_l` and `Monster_Wing_r`.
+ */
+export function buildMonsterWingAnimClips(id: NwlMonsterId): THREE.AnimationClip[] {
+  if (id !== 'demons.boss_demon' && id !== 'monster.gargoyle') {
+    return [];
+  }
+  const amp = id === 'demons.boss_demon' ? 1.0 : 0.85;
+
+  const idleTimes = [0, 0.5, 1.0, 1.5, 2.0];
+  const idleTracks: THREE.KeyframeTrack[] = [
+    makeMonsterEulerTrack('spine_03', idleTimes, [
+      [0.02, 0, 0],
+      [-0.02, 0, 0],
+      [0.02, 0, 0],
+      [-0.01, 0, 0],
+      [0.02, 0, 0],
+    ]),
+  ];
+  addMonsterWingTracks(idleTracks, idleTimes, [
+    [-0.06, 0.24 * amp, 0.1 * amp],
+    [-0.12, 0.14 * amp, 0.22 * amp],
+    [-0.06, 0.24 * amp, 0.1 * amp],
+    [-0.02, 0.28 * amp, 0.05 * amp],
+    [-0.06, 0.24 * amp, 0.1 * amp],
+  ]);
+
+  const walkTimes = [0, 0.25, 0.5, 0.75, 1.0];
+  const walkTracks: THREE.KeyframeTrack[] = [
+    makeMonsterEulerTrack('spine_03', walkTimes, [
+      [0.03, 0.04, 0],
+      [0, 0, 0],
+      [0.03, -0.04, 0],
+      [0, 0, 0],
+      [0.03, 0.04, 0],
+    ]),
+  ];
+  addMonsterWingTracks(walkTracks, walkTimes, [
+    [-0.08, 0.2 * amp, 0.14 * amp],
+    [-0.16, 0.08 * amp, 0.34 * amp],
+    [0.04, 0.22 * amp, 0.1 * amp],
+    [0.08, 0.26 * amp, 0.02 * amp],
+    [-0.08, 0.2 * amp, 0.14 * amp],
+  ]);
+
+  const flapTimes = [0, 0.175, 0.35, 0.525, 0.7];
+  const flapTracks: THREE.KeyframeTrack[] = [
+    makeMonsterEulerTrack('spine_03', flapTimes, [
+      [-0.06, 0, 0],
+      [0.04, 0, 0],
+      [0.08, 0, 0],
+      [0.02, 0, 0],
+      [-0.06, 0, 0],
+    ]),
+  ];
+  addMonsterWingTracks(flapTracks, flapTimes, [
+    [-0.2, -0.1 * amp, 0.58 * amp],
+    [0.14, 0.06 * amp, 0.04 * amp],
+    [0.24, 0.22 * amp, -0.44 * amp],
+    [-0.14, 0.1 * amp, 0.22 * amp],
+    [-0.2, -0.1 * amp, 0.58 * amp],
+  ]);
+
+  const attackTimes = [0, 0.25, 0.45, 0.8];
+  const attackTracks: THREE.KeyframeTrack[] = [];
+  addMonsterWingTracks(attackTracks, attackTimes, [
+    [-0.06, 0.24 * amp, 0.1 * amp],
+    [-0.24, -0.28 * amp, 0.62 * amp],
+    [0.22, 0.12 * amp, -0.32 * amp],
+    [-0.06, 0.24 * amp, 0.1 * amp],
+  ]);
+
+  return [
+    new THREE.AnimationClip('Idle_Winged', 2.0, idleTracks),
+    new THREE.AnimationClip('Walk_Winged', 1.0, walkTracks),
+    new THREE.AnimationClip('Flight_Flap', 0.7, flapTracks),
+    new THREE.AnimationClip('Attack_WingFlare', 0.8, attackTracks),
+  ];
+}
+
+/**
+ * Clones an external UAL AnimationClip and injects synchronized `Monster_Wing_l`/`Monster_Wing_r`
+ * quaternion tracks matched to the clip duration and motion archetype.
+ */
+export function attachWingTracksToClip(clip: THREE.AnimationClip): THREE.AnimationClip {
+  const cloned = clip.clone();
+  const hasWingTrack = cloned.tracks.some(
+    (t) => t.name === 'Monster_Wing_l.quaternion' || t.name === 'Monster_Wing_r.quaternion'
+  );
+  if (hasWingTrack) return cloned;
+
+  const d = Math.max(0.2, cloned.duration);
+  const name = cloned.name;
+  if (/attack|sword|slash|spell|cast|punch|smash/i.test(name)) {
+    addMonsterWingTracks(cloned.tracks, [0, d * 0.3, d * 0.55, d], [
+      [-0.06, 0.22, 0.1],
+      [-0.24, -0.26, 0.58],
+      [0.2, 0.12, -0.28],
+      [-0.06, 0.22, 0.1],
+    ]);
+  } else if (/walk|run|jog|sprint|jump|fly/i.test(name)) {
+    addMonsterWingTracks(cloned.tracks, [0, d * 0.25, d * 0.5, d * 0.75, d], [
+      [-0.14, 0.04, 0.42],
+      [0.12, 0.14, -0.18],
+      [-0.14, 0.04, 0.42],
+      [0.12, 0.14, -0.18],
+      [-0.14, 0.04, 0.42],
+    ]);
+  } else if (/death|hit|fall/i.test(name)) {
+    addMonsterWingTracks(cloned.tracks, [0, d * 0.4, d], [
+      [-0.06, 0.22, 0.1],
+      [-0.2, 0.32, 0.38],
+      [0.12, 0.48, -0.35],
+    ]);
+  } else {
+    addMonsterWingTracks(cloned.tracks, [0, d * 0.5, d], [
+      [-0.06, 0.24, 0.1],
+      [-0.12, 0.14, 0.22],
+      [-0.06, 0.24, 0.1],
+    ]);
+  }
+  return cloned;
 }
 
 function getBoneSpanY(rig: CanonicalUalRig, boneName: string, fallback: number): number {
@@ -569,13 +727,15 @@ export function buildNwlMonster(
     name: string,
     boneName: string,
     parts: TaggedGeometryPart[],
-    inspectUvs = false
+    inspectUvs = false,
+    localOffset?: [number, number, number]
   ) => {
     const baked = bakeTaggedPartsAsset(parts, {
       finishMode,
       texelsPerMeter: 64,
+      maxAtlasSize: isBoss ? 512 : 1024,
       seed: seed + parts.length * 13,
-      aoRays: 10,
+      aoRays: isBossDemon || name.startsWith('Monster_Wing_') ? 4 : 6,
       aoMaxDist: 0.34,
       aoStrength: Math.min(0.52, aoStrength),
       normalStrength,
@@ -596,6 +756,7 @@ export function buildNwlMonster(
       name,
       boneName,
       geometry: baked.geometry,
+      localOffset,
       materialOptions: bakedToMaterialOptions(baked, {
         workflow: armorRecipe === 'forged_steel' ? 'metallic' : 'specular',
         metallic: armorRecipe === 'forged_steel' ? 0.25 : 0.05,
@@ -914,30 +1075,6 @@ export function buildNwlMonster(
       { flatShaded: false }
     );
     chestParts.push(tagPart(gargSdf, 'gargoyle_chest_sdf', 'stone_masonry', spec.skinColor));
-    // Sculpted stone bat wings on gargoyle
-    for (const [wIdx, sx] of [-1, 1].entries()) {
-      const wingArm = makeSplineLoftGeometry(
-        [
-          [sx * 0.12 * bulk, spine3Len * 0.68, -0.1 * bulk],
-          [sx * 0.42 * bulk, spine3Len * 1.15, -0.18 * bulk],
-          [sx * 0.72 * bulk, spine3Len * 0.92, -0.26 * bulk],
-        ],
-        [0.045, 0.032, 0.014],
-        10,
-        12,
-        { colorHex: spec.skinColor }
-      );
-      const wingWeb = makePleatedTabardGeometry(0.42, 0.56, 0.48, 0.026, 3, spec.armorColor, {
-        flareZ: -0.04,
-      });
-      wingWeb.rotateZ(sx * -0.45);
-      wingWeb.rotateY(sx * 0.35);
-      wingWeb.translate(sx * 0.4 * bulk, spine3Len * 0.65, -0.2 * bulk);
-      chestParts.push(
-        tagPart(wingArm, `gargoyle_wing_arm_${wIdx}`, 'stone_masonry', spec.skinColor),
-        tagPart(wingWeb, `gargoyle_wing_web_${wIdx}`, 'stone_masonry', spec.armorColor)
-      );
-    }
   } else if (isGolem) {
     const golemSdf = makeSdfOrganicMesh(
       (x, y, z) => {
@@ -963,6 +1100,40 @@ export function buildNwlMonster(
       if (cIdx === 2) shard.rotateX(Math.PI * 0.5);
       shard.translate(cx * bulk, spine3Len * cy, cz * bulk);
       chestParts.push(tagPart(shard, `golem_chest_crystal_${cIdx}`, 'runic_glow', spec.accentColor));
+    }
+    if (id === 'monster.crystal_golem') {
+      const coreCollar = makeLatheProfile(
+        [
+          [0.065 * bulk, 0],
+          [0.088 * bulk, 0.02],
+          [0.068 * bulk, 0.04],
+        ],
+        8,
+        spec.armorColor,
+        { smoothRadialNormals: true }
+      );
+      coreCollar.rotateX(Math.PI * 0.5);
+      coreCollar.translate(0, spine3Len * 0.58, 0.14 * bulk);
+      chestParts.push(
+        tagPart(coreCollar, 'crystal_golem_core_collar', 'stone_masonry', spec.armorColor, {
+          accentHex: spec.accentColor,
+          lockVertical: false,
+        })
+      );
+      for (const [sIdx, sx] of [-1, 1].entries()) {
+        const backCrystal = prepareColoredPart(
+          new THREE.ConeGeometry(0.042 * bulk, 0.19 * bulk, 6),
+          spec.accentColor
+        );
+        backCrystal.rotateX(-0.55);
+        backCrystal.rotateZ(sx * -0.35);
+        backCrystal.translate(sx * 0.15 * bulk, spine3Len * 0.86, -0.14 * bulk);
+        chestParts.push(
+          tagPart(backCrystal, `crystal_golem_back_shard_${sIdx}`, 'runic_glow', spec.accentColor, {
+            lockVertical: false,
+          })
+        );
+      }
     }
   } else if (id === 'monster.dark_cultist') {
     const mantle = makeLatheProfile(
@@ -1244,11 +1415,127 @@ export function buildNwlMonster(
         })
       );
     }
+    if (id === 'boss.minotaur_warlord') {
+      // Bronze crossed war-harness straps framing chest core
+      for (const [sIdx, sx] of [-1, 1].entries()) {
+        const harness = makeSplineLoftGeometry(
+          [
+            [sx * 0.22 * bulk, spine3Len * 0.88, 0.06 * bulk],
+            [sx * 0.09 * bulk, spine3Len * 0.62, 0.165 * bulk],
+            [-sx * 0.14 * bulk, spine3Len * 0.18, 0.14 * bulk],
+          ],
+          [0.024 * bulk, 0.028 * bulk, 0.022 * bulk],
+          8,
+          10,
+          { colorHex: spec.trimColor }
+        );
+        chestParts.push(
+          tagPart(harness, `minotaur_chest_harness_${sIdx}`, 'brushed_gold', spec.trimColor, {
+            accentHex: spec.accentColor,
+            lockVertical: false,
+          })
+        );
+      }
+    } else if (id === 'boss.dread_knight') {
+      // Twin diagonal arcane rune ribs flanking chest core
+      for (const [rIdx, sx] of [-1, 1].entries()) {
+        const runeRib = makeSplineLoftGeometry(
+          [
+            [sx * 0.065 * bulk, spine3Len * 0.44, 0.165 * bulk],
+            [sx * 0.155 * bulk, spine3Len * 0.64, 0.155 * bulk],
+            [sx * 0.215 * bulk, spine3Len * 0.84, 0.065 * bulk],
+          ],
+          [0.015 * bulk, 0.021 * bulk, 0.014 * bulk],
+          7,
+          8,
+          { colorHex: spec.accentColor }
+        );
+        chestParts.push(
+          tagPart(runeRib, `dread_chest_rune_rib_${rIdx}`, 'runic_glow', spec.accentColor, {
+            accentHex: spec.trimColor,
+            lockVertical: false,
+          })
+        );
+      }
+    }
   }
   addBakedBone('Monster_Spine3', 'spine_03', chestParts, false);
 
+  if (id === 'monster.gargoyle') {
+    // Articulated carved-stone bat wings pivoted at scapular root on spine_03
+    for (const [wIdx, sx] of [-1, 1].entries()) {
+      const side = sx > 0 ? 'l' : 'r';
+      const wRoot: [number, number, number] = [sx * 0.12 * bulk, spine3Len * 0.68, -0.1 * bulk];
+      const pRoot: [number, number, number] = [0, 0, 0];
+      const pElbow: [number, number, number] = [sx * 0.3 * bulk, spine3Len * 0.47, -0.08 * bulk];
+      const pWrist: [number, number, number] = [sx * 0.6 * bulk, spine3Len * 0.24, -0.16 * bulk];
+      const pTrailIn: [number, number, number] = [sx * 0.04 * bulk, -spine3Len * 0.42, -0.08 * bulk];
+      const pTrailMid: [number, number, number] = [sx * 0.3 * bulk, -spine3Len * 0.48, -0.18 * bulk];
+      const pTrailOut: [number, number, number] = [sx * 0.58 * bulk, -spine3Len * 0.52, -0.24 * bulk];
+
+      const wingArm = makeSplineLoftGeometry(
+        [pRoot, pElbow, pWrist],
+        [0.046, 0.034, 0.016],
+        10,
+        12,
+        { colorHex: spec.skinColor }
+      );
+      const wingStrut = makeSplineLoftGeometry(
+        [pWrist, pTrailOut],
+        [0.022, 0.008],
+        7,
+        8,
+        { colorHex: spec.skinColor }
+      );
+      const bayIn = makeBossWingMembraneGrid(
+        pRoot,
+        pElbow,
+        pTrailIn,
+        pTrailMid,
+        4,
+        3,
+        0.03,
+        0.045,
+        0.012,
+        spec.armorColor
+      );
+      const bayOut = makeBossWingMembraneGrid(
+        pElbow,
+        pWrist,
+        pTrailMid,
+        pTrailOut,
+        4,
+        3,
+        0.035,
+        0.05,
+        0.015,
+        spec.armorColor
+      );
+      addBakedBone(
+        `Monster_Wing_${side}`,
+        'spine_03',
+        [
+          tagPart(wingArm, `gargoyle_wing_arm_${wIdx}`, 'stone_masonry', spec.skinColor, {
+            lockVertical: false,
+          }),
+          tagPart(wingStrut, `gargoyle_wing_strut_${wIdx}`, 'stone_masonry', spec.skinColor, {
+            lockVertical: false,
+          }),
+          tagPart(bayIn, `gargoyle_wing_mem_in_${wIdx}`, 'stone_masonry', spec.armorColor, {
+            lockVertical: false,
+          }),
+          tagPart(bayOut, `gargoyle_wing_mem_out_${wIdx}`, 'stone_masonry', spec.armorColor, {
+            lockVertical: false,
+          }),
+        ],
+        false,
+        wRoot
+      );
+    }
+  }
+
   if (isBossDemon) {
-    // Imposing articulated demonic bat wings attached to spine_03
+    // Imposing articulated demonic bat wings attached to spine_03, pivoted at scapular root
     const lerp3 = (
       a: readonly [number, number, number],
       b: readonly [number, number, number],
@@ -1258,23 +1545,29 @@ export function buildNwlMonster(
       a[1] + (b[1] - a[1]) * t,
       a[2] + (b[2] - a[2]) * t,
     ];
+    const sub3 = (
+      a: readonly [number, number, number],
+      b: readonly [number, number, number]
+    ): [number, number, number] => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+
     for (const [wIdx, sx] of [-1, 1].entries()) {
       const side = sx > 0 ? 'l' : 'r';
       const wRoot: [number, number, number] = [sx * 0.1 * bulk, spine3Len * 0.62, -0.15 * bulk];
-      const wElbow: [number, number, number] = [sx * 0.36, spine3Len * 0.92, -0.34];
-      const wWrist: [number, number, number] = [sx * 0.72, spine3Len + 0.27, -0.26];
+      const pRoot: [number, number, number] = [0, 0, 0];
+      const pElbow = sub3([sx * 0.36, spine3Len * 0.92, -0.34], wRoot);
+      const pWrist = sub3([sx * 0.72, spine3Len + 0.27, -0.26], wRoot);
 
-      const f1Mid: [number, number, number] = [sx * 0.98, spine3Len + 0.29, -0.38];
-      const f1End: [number, number, number] = [sx * 1.24, spine3Len + 0.08, -0.56];
-      const f2Mid: [number, number, number] = [sx * 0.94, spine3Len + 0.02, -0.44];
-      const f2End: [number, number, number] = [sx * 1.12, spine3Len - 0.28, -0.62];
-      const f3Mid: [number, number, number] = [sx * 0.76, spine3Len - 0.18, -0.46];
-      const f3End: [number, number, number] = [sx * 0.82, spine3Len - 0.56, -0.62];
-      const f4Mid: [number, number, number] = [sx * 0.52, spine3Len - 0.28, -0.44];
-      const f4End: [number, number, number] = [sx * 0.48, spine3Len - 0.64, -0.56];
+      const f1Mid = sub3([sx * 0.98, spine3Len + 0.29, -0.38], wRoot);
+      const f1End = sub3([sx * 1.24, spine3Len + 0.08, -0.56], wRoot);
+      const f2Mid = sub3([sx * 0.94, spine3Len + 0.02, -0.44], wRoot);
+      const f2End = sub3([sx * 1.12, spine3Len - 0.28, -0.62], wRoot);
+      const f3Mid = sub3([sx * 0.76, spine3Len - 0.18, -0.46], wRoot);
+      const f3End = sub3([sx * 0.82, spine3Len - 0.56, -0.62], wRoot);
+      const f4Mid = sub3([sx * 0.52, spine3Len - 0.28, -0.44], wRoot);
+      const f4End = sub3([sx * 0.48, spine3Len - 0.64, -0.56], wRoot);
 
       const armSpar = makeSplineLoftGeometry(
-        [wRoot, wElbow, wWrist],
+        [pRoot, pElbow, pWrist],
         [0.068, 0.052, 0.038],
         10,
         12,
@@ -1291,27 +1584,27 @@ export function buildNwlMonster(
         '#d8be84'
       );
       thumbClaw.rotateX(0.35);
-      thumbClaw.translate(wWrist[0], wWrist[1], wWrist[2]);
+      thumbClaw.translate(pWrist[0], pWrist[1], pWrist[2]);
 
-      const finger1 = makeSplineLoftGeometry([wWrist, f1Mid, f1End], [0.036, 0.024, 0.008], 8, 10, {
+      const finger1 = makeSplineLoftGeometry([pWrist, f1Mid, f1End], [0.036, 0.024, 0.008], 8, 10, {
         colorHex: spec.armorColor,
       });
-      const finger2 = makeSplineLoftGeometry([wWrist, f2Mid, f2End], [0.028, 0.018, 0.007], 7, 10, {
+      const finger2 = makeSplineLoftGeometry([pWrist, f2Mid, f2End], [0.028, 0.018, 0.007], 7, 10, {
         colorHex: spec.armorColor,
       });
-      const finger3 = makeSplineLoftGeometry([wWrist, f3Mid, f3End], [0.026, 0.016, 0.006], 7, 10, {
+      const finger3 = makeSplineLoftGeometry([pWrist, f3Mid, f3End], [0.026, 0.016, 0.006], 7, 10, {
         colorHex: spec.armorColor,
       });
-      const finger4 = makeSplineLoftGeometry([wWrist, f4Mid, f4End], [0.024, 0.015, 0.006], 7, 10, {
+      const finger4 = makeSplineLoftGeometry([pWrist, f4Mid, f4End], [0.024, 0.015, 0.006], 7, 10, {
         colorHex: spec.armorColor,
       });
 
       const memHex = '#3b0d18';
-      const innerTrailA: [number, number, number] = [sx * 0.11, spine3Len - 0.42, -0.22];
-      const innerTrailB: [number, number, number] = [sx * 0.36, spine3Len - 0.54, -0.46];
+      const innerTrailA = sub3([sx * 0.11, spine3Len - 0.42, -0.22], wRoot);
+      const innerTrailB = sub3([sx * 0.36, spine3Len - 0.54, -0.46], wRoot);
       const bayFlank = makeBossWingMembraneGrid(
-        wRoot,
-        wElbow,
+        pRoot,
+        pElbow,
         innerTrailA,
         innerTrailB,
         6,
@@ -1322,8 +1615,8 @@ export function buildNwlMonster(
         memHex
       );
       const bayArm = makeBossWingMembraneGrid(
-        wElbow,
-        wWrist,
+        pElbow,
+        pWrist,
         innerTrailB,
         f4End,
         6,
@@ -1334,8 +1627,8 @@ export function buildNwlMonster(
         memHex
       );
       const bay43 = makeBossWingMembraneGrid(
-        lerp3(wWrist, f4End, 0.1),
-        lerp3(wWrist, f3End, 0.1),
+        lerp3(pWrist, f4End, 0.1),
+        lerp3(pWrist, f3End, 0.1),
         f4End,
         f3End,
         6,
@@ -1346,8 +1639,8 @@ export function buildNwlMonster(
         memHex
       );
       const bay32 = makeBossWingMembraneGrid(
-        lerp3(wWrist, f3End, 0.1),
-        lerp3(wWrist, f2End, 0.1),
+        lerp3(pWrist, f3End, 0.1),
+        lerp3(pWrist, f2End, 0.1),
         f3End,
         f2End,
         6,
@@ -1358,8 +1651,8 @@ export function buildNwlMonster(
         memHex
       );
       const bay21 = makeBossWingMembraneGrid(
-        lerp3(wWrist, f2End, 0.1),
-        lerp3(wWrist, f1End, 0.1),
+        lerp3(pWrist, f2End, 0.1),
+        lerp3(pWrist, f1End, 0.1),
         f2End,
         f1End,
         6,
@@ -1370,51 +1663,57 @@ export function buildNwlMonster(
         memHex
       );
 
-      addBakedBone(`Monster_Wing_${side}`, 'spine_03', [
-        tagPart(armSpar, `demon_wing_arm_${wIdx}`, 'magma_obsidian', spec.armorColor, {
-          accentHex: spec.accentColor,
-          lockVertical: false,
-        }),
-        tagPart(thumbClaw, `demon_wing_thumb_${wIdx}`, 'bone_ivory', '#d8be84', {
-          lockVertical: false,
-        }),
-        tagPart(finger1, `demon_wing_f1_${wIdx}`, 'magma_obsidian', spec.armorColor, {
-          accentHex: spec.accentColor,
-          lockVertical: false,
-        }),
-        tagPart(finger2, `demon_wing_f2_${wIdx}`, 'magma_obsidian', spec.armorColor, {
-          accentHex: spec.accentColor,
-          lockVertical: false,
-        }),
-        tagPart(finger3, `demon_wing_f3_${wIdx}`, 'magma_obsidian', spec.armorColor, {
-          accentHex: spec.accentColor,
-          lockVertical: false,
-        }),
-        tagPart(finger4, `demon_wing_f4_${wIdx}`, 'magma_obsidian', spec.armorColor, {
-          accentHex: spec.accentColor,
-          lockVertical: false,
-        }),
-        tagPart(bayFlank, `demon_wing_mem_flank_${wIdx}`, 'wing_membrane', memHex, {
-          accentHex: spec.accentColor,
-          lockVertical: false,
-        }),
-        tagPart(bayArm, `demon_wing_mem_arm_${wIdx}`, 'wing_membrane', memHex, {
-          accentHex: spec.accentColor,
-          lockVertical: false,
-        }),
-        tagPart(bay43, `demon_wing_mem_43_${wIdx}`, 'wing_membrane', memHex, {
-          accentHex: spec.accentColor,
-          lockVertical: false,
-        }),
-        tagPart(bay32, `demon_wing_mem_32_${wIdx}`, 'wing_membrane', memHex, {
-          accentHex: spec.accentColor,
-          lockVertical: false,
-        }),
-        tagPart(bay21, `demon_wing_mem_21_${wIdx}`, 'wing_membrane', memHex, {
-          accentHex: spec.accentColor,
-          lockVertical: false,
-        }),
-      ]);
+      addBakedBone(
+        `Monster_Wing_${side}`,
+        'spine_03',
+        [
+          tagPart(armSpar, `demon_wing_arm_${wIdx}`, 'magma_obsidian', spec.armorColor, {
+            accentHex: spec.accentColor,
+            lockVertical: false,
+          }),
+          tagPart(thumbClaw, `demon_wing_thumb_${wIdx}`, 'bone_ivory', '#d8be84', {
+            lockVertical: false,
+          }),
+          tagPart(finger1, `demon_wing_f1_${wIdx}`, 'magma_obsidian', spec.armorColor, {
+            accentHex: spec.accentColor,
+            lockVertical: false,
+          }),
+          tagPart(finger2, `demon_wing_f2_${wIdx}`, 'magma_obsidian', spec.armorColor, {
+            accentHex: spec.accentColor,
+            lockVertical: false,
+          }),
+          tagPart(finger3, `demon_wing_f3_${wIdx}`, 'magma_obsidian', spec.armorColor, {
+            accentHex: spec.accentColor,
+            lockVertical: false,
+          }),
+          tagPart(finger4, `demon_wing_f4_${wIdx}`, 'magma_obsidian', spec.armorColor, {
+            accentHex: spec.accentColor,
+            lockVertical: false,
+          }),
+          tagPart(bayFlank, `demon_wing_mem_flank_${wIdx}`, 'wing_membrane', memHex, {
+            accentHex: spec.accentColor,
+            lockVertical: false,
+          }),
+          tagPart(bayArm, `demon_wing_mem_arm_${wIdx}`, 'wing_membrane', memHex, {
+            accentHex: spec.accentColor,
+            lockVertical: false,
+          }),
+          tagPart(bay43, `demon_wing_mem_43_${wIdx}`, 'wing_membrane', memHex, {
+            accentHex: spec.accentColor,
+            lockVertical: false,
+          }),
+          tagPart(bay32, `demon_wing_mem_32_${wIdx}`, 'wing_membrane', memHex, {
+            accentHex: spec.accentColor,
+            lockVertical: false,
+          }),
+          tagPart(bay21, `demon_wing_mem_21_${wIdx}`, 'wing_membrane', memHex, {
+            accentHex: spec.accentColor,
+            lockVertical: false,
+          }),
+        ],
+        false,
+        wRoot
+      );
     }
   }
 
@@ -1796,9 +2095,104 @@ export function buildNwlMonster(
         { colorHex: spec.skinColor }
       );
       headParts.push(tagPart(gargSnout, 'gargoyle_snout', 'stone_masonry', spec.skinColor));
+    } else if (id === 'boss.minotaur_warlord') {
+      const bullSnout = makeSplineLoftGeometry(
+        [
+          [0, 0.075 * bulk, 0.055 * bulk],
+          [0, 0.055 * bulk, 0.185 * bulk],
+          [0, 0.048 * bulk, 0.245 * bulk],
+        ],
+        [
+          [0.095 * bulk, 0.068 * bulk],
+          [0.082 * bulk, 0.058 * bulk],
+          [0.064 * bulk, 0.048 * bulk],
+        ],
+        10,
+        10,
+        { colorHex: spec.skinColor }
+      );
+      const noseRing = makeSplineLoftGeometry(
+        [
+          [-0.036 * bulk, 0.036 * bulk, 0.245 * bulk],
+          [-0.042 * bulk, 0.002 * bulk, 0.258 * bulk],
+          [0, -0.014 * bulk, 0.262 * bulk],
+          [0.042 * bulk, 0.002 * bulk, 0.258 * bulk],
+          [0.036 * bulk, 0.036 * bulk, 0.245 * bulk],
+        ],
+        [0.01 * bulk, 0.012 * bulk, 0.013 * bulk, 0.012 * bulk, 0.01 * bulk],
+        7,
+        8,
+        { colorHex: spec.trimColor }
+      );
+      headParts.push(
+        tagPart(bullSnout, 'minotaur_snout', 'demon_hide', spec.skinColor),
+        tagPart(noseRing, 'minotaur_nose_ring', 'brushed_gold', spec.trimColor, {
+          lockVertical: false,
+        })
+      );
+    } else if (id === 'boss.dread_knight') {
+      const visorRidge = makeSplineLoftGeometry(
+        [
+          [0, 0.19 * bulk, 0.128 * bulk],
+          [0, 0.105 * bulk, 0.145 * bulk],
+          [0, 0.03 * bulk, 0.125 * bulk],
+        ],
+        [
+          [0.022 * bulk, 0.018 * bulk],
+          [0.028 * bulk, 0.022 * bulk],
+          [0.018 * bulk, 0.016 * bulk],
+        ],
+        8,
+        8,
+        { colorHex: spec.armorColor }
+      );
+      const visorBar = makeSplineLoftGeometry(
+        [
+          [-0.11 * bulk, 0.135 * bulk, 0.095 * bulk],
+          [0, 0.155 * bulk, 0.142 * bulk],
+          [0.11 * bulk, 0.135 * bulk, 0.095 * bulk],
+        ],
+        [0.018 * bulk, 0.024 * bulk, 0.018 * bulk],
+        8,
+        8,
+        { colorHex: spec.trimColor }
+      );
+      headParts.push(
+        tagPart(visorRidge, 'dread_helm_visor_ridge', 'magma_obsidian', spec.armorColor, {
+          accentHex: spec.accentColor,
+          lockVertical: false,
+        }),
+        tagPart(visorBar, 'dread_helm_visor_bar', 'runic_glow', spec.trimColor, {
+          accentHex: spec.accentColor,
+          lockVertical: false,
+        })
+      );
     }
     const hornHex = id === 'boss.dread_knight' ? spec.trimColor : id === 'monster.gargoyle' ? spec.skinColor : '#ffd541';
     for (const [hIdx, sx] of [-1, 1].entries()) {
+      if (id === 'boss.minotaur_warlord' || id === 'boss.dread_knight') {
+        const collar = makeLatheProfile(
+          [
+            [0.068, 0],
+            [0.076, 0.025],
+            [0.062, 0.05],
+          ],
+          10,
+          id === 'boss.minotaur_warlord' ? spec.trimColor : spec.armorColor,
+          { smoothRadialNormals: true }
+        );
+        collar.rotateZ(sx * -0.18);
+        collar.translate(sx * 0.105 * bulk, 0.2 * bulk, 0);
+        headParts.push(
+          tagPart(
+            collar,
+            `boss_horn_collar_${hIdx}`,
+            id === 'boss.minotaur_warlord' ? 'brushed_gold' : 'magma_obsidian',
+            id === 'boss.minotaur_warlord' ? spec.trimColor : spec.armorColor,
+            { accentHex: spec.accentColor, lockVertical: false }
+          )
+        );
+      }
       const horn = makeCurvedHornGeometry(
         10,
         0.066,
@@ -1942,6 +2336,42 @@ export function buildNwlMonster(
             { lockVertical: false }
           )
         );
+        if (id === 'monster.crystal_golem') {
+          const sideShard = prepareColoredPart(
+            new THREE.ConeGeometry(0.028 * bulk, 0.14 * bulk, 6),
+            spec.trimColor
+          );
+          sideShard.rotateZ(side === 'l' ? -1.15 : 1.15);
+          sideShard.rotateX(0.35);
+          sideShard.translate(side === 'l' ? 0.1 * bulk : -0.1 * bulk, 0.025, 0.045);
+          uParts.push(
+            tagPart(sideShard, `crystal_pauldron_subshard_${side}`, 'runic_glow', spec.trimColor, {
+              lockVertical: false,
+            })
+          );
+        } else if (id === 'boss.minotaur_warlord' || id === 'boss.dread_knight') {
+          const rimSx = side === 'l' ? 1 : -1;
+          const pauldronCrest = makeSplineLoftGeometry(
+            [
+              [rimSx * 0.015, 0.095, -0.08 * bulk],
+              [rimSx * 0.085 * bulk, 0.075, 0],
+              [rimSx * 0.015, 0.095, 0.08 * bulk],
+            ],
+            [0.014, 0.024, 0.014],
+            8,
+            8,
+            { colorHex: spec.trimColor }
+          );
+          uParts.push(
+            tagPart(
+              pauldronCrest,
+              `boss_pauldron_crest_${side}`,
+              id === 'boss.minotaur_warlord' ? 'brushed_gold' : 'runic_glow',
+              spec.trimColor,
+              { accentHex: spec.accentColor, lockVertical: false }
+            )
+          );
+        }
       }
     }
     addBakedBone(`Monster_UA_${side}`, `upperarm_${side}`, uParts);
@@ -1984,6 +2414,18 @@ export function buildNwlMonster(
       laParts.push(
         tagPart(elbowSpike, `demon_elbow_spike_${side}`, 'magma_obsidian', spec.armorColor, {
           accentHex: spec.accentColor,
+          lockVertical: false,
+        })
+      );
+    } else if (id === 'monster.crystal_golem') {
+      const armCrystal = prepareColoredPart(
+        new THREE.ConeGeometry(0.025 * bulk, 0.13 * bulk, 6),
+        spec.accentColor
+      );
+      armCrystal.rotateX(-Math.PI * 0.55);
+      armCrystal.translate(0, 0.05, -0.058 * bulk);
+      laParts.push(
+        tagPart(armCrystal, `crystal_forearm_spur_${side}`, 'runic_glow', spec.accentColor, {
           lockVertical: false,
         })
       );
@@ -2403,9 +2845,14 @@ export function buildNwlMonster(
     }
   }
 
+  const clips = buildMonsterWingAnimClips(id);
+
   const root = new THREE.Group();
   root.name = id;
   root.userData.unwrapMetrics = keyMetrics;
+  if (clips.length > 0) {
+    root.userData.wingAnimClips = clips;
+  }
   if (id === 'demons.boss_demon') {
     root.userData.nwlIsBoss = true;
   }
@@ -2418,6 +2865,7 @@ export function buildNwlMonster(
     root,
     meshes: rigidRes.meshes,
     materials: rigidRes.materials,
+    clips,
     dispose: () => {
       for (const m of rigidRes.meshes) m.geometry.dispose();
       disposeMonsterMaterialsSafely(rigidRes.materials);

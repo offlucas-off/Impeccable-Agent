@@ -1,4 +1,5 @@
 import type { PresetCategory, PresetEntry } from './PresetRegistry';
+import { getUnityImporterScript } from './unity/PixelizerUnityImporterTemplate';
 
 export interface ZipFileEntry {
   path: string;
@@ -10,6 +11,7 @@ export interface BatchExportOptions {
   includeGlb: boolean;
   includePng: boolean;
   include8DirSheet: boolean;
+  includeUnityImporter?: boolean;
   quantizeGlb: boolean;
   ditherGlb: boolean;
   pngSize?: number;
@@ -281,6 +283,12 @@ export async function runBatchExport(
     path: 'manifest.json',
     data: JSON.stringify(manifest, null, 2),
   });
+  if (opts.includeUnityImporter !== false) {
+    zipFiles.push({
+      path: 'Unity/PixelizerUnityImporter.cs',
+      data: getUnityImporterScript(),
+    });
+  }
 
   const zipBlob = createZipBlob(zipFiles);
   return { zipBlob, manifest };

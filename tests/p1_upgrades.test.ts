@@ -452,7 +452,8 @@ describe('P1 Upgrade 3: HDR Emissive Bloom Shaders & Pipeline Presets', () => {
     } as unknown as THREE.WebGLRenderer;
 
     const pipeline = new PixelizerPipeline(mockRenderer);
-    expect(pipeline.pipelineConfig.bloomEnabled).toBe(false);
+    expect(pipeline.pipelineConfig.bloomEnabled).toBe(true);
+    expect(pipeline.pipelineConfig.bloomThreshold).toBeGreaterThanOrEqual(0.85);
 
     pipeline.applyVisualStylePreset('hades_lab');
     expect(pipeline.pipelineConfig.bloomEnabled).toBe(true);

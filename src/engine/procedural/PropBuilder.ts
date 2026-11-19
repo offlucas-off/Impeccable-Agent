@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import structuralKnowledgeRaw from '../../data/structuralKnowledge.json';
 import { PixelizerMaterial, type PixelizerMaterialResources } from '../PixelizerMaterial';
 import { voxelizeObject3D, buildVoxelMeshGroup } from '../Voxelizer';
-import { createSeededRng } from './SdfVoxelPrimitives';
+import { computeGeometryTangents, createSeededRng } from './SdfVoxelPrimitives';
 import {
   makeAnatomicalTorsoGeometry,
   makeAxeHeadGeometry,
@@ -25,6 +25,7 @@ import {
 import {
   bakeTaggedPartsAsset,
   createPixelizerMaterialFromBaked,
+  generateLeafClusterTexture,
 } from './PixelMaterialSynth';
 
 export type PropKind =
@@ -114,6 +115,556 @@ const DEFAULT_PROP_COLORS: Record<PropKind, [string, string, string]> = {
   weapon_rack: ['#7c5338', '#94a3b8', '#d4a359'],
 };
 
+export interface LeafCardSpec {
+  center: [number, number, number];
+  width: number;
+  height: number;
+  yaw: number;
+  pitch?: number;
+  roll?: number;
+  sunlitWeight?: number;
+}
+
+export interface StylizedLeafCardsBuildOptions {
+  cards: LeafCardSpec[];
+  seed?: number;
+  sunlitHex?: string;
+  shadedHex?: string;
+  sunlitTintHex?: string;
+  shadedTintHex?: string;
+  referenceMetrics?: { texelsPerMeter: number; texWidth: number; texHeight: number };
+  pixelated?: boolean;
+  pixelSize?: number;
+  objectId?: number;
+  outlineColor?: string;
+  outlineAlpha?: number;
+  alphaClipThreshold?: number;
+  pixelArtSampling?: boolean;
+  usePool?: boolean;
+  cacheKey?: string;
+  name?: string;
+}
+
+export interface StylizedTreePartsResult {
+  taggedParts: TaggedGeometryPart[];
+  leafCards: LeafCardSpec[];
+  trunkH: number;
+}
+
+interface PooledLeafAtlasEntry {
+  albedoMap: THREE.DataTexture;
+  normalMap: THREE.DataTexture;
+  roughnessMap: THREE.DataTexture;
+}
+
+const LEAF_CARD_ATLAS_POOL = new Map<string, PooledLeafAtlasEntry>();
+
+function blitResampledRgbaCell(
+  src: Uint8Array | Uint8ClampedArray,
+  srcSize: number,
+  dst: Uint8Array,
+  dstW: number,
+  dstH: number,
+  x0: number,
+  y0: number,
+  cellW: number,
+  cellH: number,
+  padPx = 1
+): void {
+  const xMin = Math.max(0, x0 - padPx);
+  const yMin = Math.max(0, y0 - padPx);
+  const xMax = Math.min(dstW, x0 + cellW + padPx);
+  const yMax = Math.min(dstH, y0 + cellH + padPx);
+  for (let dy = yMin; dy < yMax; dy++) {
+    const v = Math.max(0, Math.min(1, (dy - y0 + 0.5) / Math.max(1, cellH)));
+    const sy = Math.max(0, Math.min(srcSize - 1, Math.floor(v * srcSize)));
+    for (let dx = xMin; dx < xMax; dx++) {
+      const u = Math.max(0, Math.min(1, (dx - x0 + 0.5) / Math.max(1, cellW)));
+      const sx = Math.max(0, Math.min(srcSize - 1, Math.floor(u * srcSize)));
+      const sIdx = (sy * srcSize + sx) * 4;
+      const dIdx = (dy * dstW + dx) * 4;
+      dst[dIdx + 0] = src[sIdx + 0];
+      dst[dIdx + 1] = src[sIdx + 1];
+      dst[dIdx + 2] = src[sIdx + 2];
+      dst[dIdx + 3] = src[sIdx + 3];
+    }
+  }
+}
+
+/**
+ * Builds sculpted Painterly Bark trunk/roots/boughs, compact inner foliage core,
+ * and crossed Jabami-style leaf card placements for trees across PropBuilder, CityBuilder, and NwlTilesetDungeon.
+ */
+export function buildStylizedTreeTrunkAndCoreParts(options: {
+  seed?: number;
+  scale?: number;
+  barkHex?: string;
+  foliageDarkHex?: string;
+  foliageSunHex?: string;
+  tagPrefix?: string;
+  includeVoxelTiers?: boolean;
+  sdfSteps?: number;
+} = {}): StylizedTreePartsResult {
+  const seed = Math.floor(options.seed ?? 1337);
+  const rng = createSeededRng(seed);
+  const scaleVar = options.scale ?? 1.0;
+  const barkHex = options.barkHex ?? '#5a3921';
+  const foliageDarkHex = options.foliageDarkHex ?? '#387d44';
+  const foliageSunHex = options.foliageSunHex ?? '#55a654';
+  const prefix = options.tagPrefix ?? 'tree';
+  const sdfSteps = options.sdfSteps ?? 16;
+
+  const trunkH = (1.55 + rng() * 0.35) * scaleVar;
+  const taggedParts: TaggedGeometryPart[] = [];
+
+  const trunk = makeSplineLoftGeometry(
+    [
+      [0, 0, 0],
+      [0.03 * scaleVar, trunkH * 0.35, -0.02 * scaleVar],
+      [-0.02 * scaleVar, trunkH * 0.72, 0.03 * scaleVar],
+      [0, trunkH + 0.16 * scaleVar, 0],
+    ],
+    [0.32 * scaleVar, 0.22 * scaleVar, 0.17 * scaleVar, 0.12 * scaleVar],
+    12,
+    14,
+    { colorHex: barkHex }
+  );
+  taggedParts.push(
+    tagPart(trunk, `${prefix}_trunk`, 'timber_frame', barkHex, {
+      accentHex: foliageDarkHex,
+      lockVertical: true,
+    })
+  );
+
+  const boughTips: Array<[number, number, number]> = [];
+  for (let rIdx = 0; rIdx < 3; rIdx++) {
+    const ang = (rIdx / 3) * Math.PI * 2 + 0.35;
+    const cx = Math.cos(ang);
+    const cz = Math.sin(ang);
+    const root = makeSplineLoftGeometry(
+      [
+        [cx * 0.12 * scaleVar, 0.28 * scaleVar, cz * 0.12 * scaleVar],
+        [cx * 0.28 * scaleVar, 0.1 * scaleVar, cz * 0.28 * scaleVar],
+        [cx * 0.44 * scaleVar, 0.01 * scaleVar, cz * 0.44 * scaleVar],
+      ],
+      [0.1 * scaleVar, 0.075 * scaleVar, 0.035 * scaleVar],
+      8,
+      8,
+      { colorHex: barkHex }
+    );
+    const tipX = cx * 0.56 * scaleVar;
+    const tipY = trunkH + 0.26 * scaleVar;
+    const tipZ = cz * 0.56 * scaleVar;
+    boughTips.push([tipX, tipY, tipZ]);
+    const bough = makeSplineLoftGeometry(
+      [
+        [0, trunkH * 0.74, 0],
+        [cx * 0.3 * scaleVar, trunkH * 0.95, cz * 0.3 * scaleVar],
+        [tipX, tipY, tipZ],
+      ],
+      [0.095 * scaleVar, 0.068 * scaleVar, 0.038 * scaleVar],
+      8,
+      8,
+      { colorHex: barkHex }
+    );
+    taggedParts.push(
+      tagPart(root, `${prefix}_root_${rIdx}`, 'timber_frame', barkHex, {
+        accentHex: foliageDarkHex,
+        lockVertical: true,
+      }),
+      tagPart(bough, `${prefix}_bough_${rIdx}`, 'timber_frame', barkHex, {
+        accentHex: foliageDarkHex,
+        lockVertical: true,
+      })
+    );
+  }
+
+  // Compact sculpted inner canopy core nested inside boughs so alpha leaf cards reveal branches & sky
+  const rCore = (options.includeVoxelTiers ? 0.94 : 0.56) * scaleVar;
+  const yMid = trunkH + 0.62 * scaleVar;
+  const canopyGeo = makeSdfOrganicMesh(
+    (x, y, z) => {
+      const dMain = sdEllipsoid(x, y, z, 0, yMid, 0, rCore, rCore * 0.68, rCore);
+      const dTop = sdEllipsoid(
+        x,
+        y,
+        z,
+        0.08 * scaleVar,
+        yMid + 0.44 * scaleVar,
+        -0.05 * scaleVar,
+        rCore * 0.68,
+        rCore * 0.54,
+        rCore * 0.68
+      );
+      const base = sminPoly(dMain, dTop, 0.18);
+      return base + sdfHashNoise3D(x * 2.6, y * 2.6, z * 2.6, seed) * 0.055;
+    },
+    [-rCore * 1.35, trunkH - 0.08 * scaleVar, -rCore * 1.35],
+    [rCore * 1.35, yMid + rCore * 1.18, rCore * 1.35],
+    sdfSteps,
+    foliageDarkHex,
+    { flatShaded: false }
+  );
+  taggedParts.push(
+    tagPart(canopyGeo, `${prefix}_canopy_core`, 'foliage_leaf', foliageDarkHex, {
+      accentHex: foliageSunHex,
+      lockVertical: true,
+    })
+  );
+
+  if (options.includeVoxelTiers) {
+    const tierSpecs: Array<[number, number, number, number, string]> = [
+      [0.42 * scaleVar, yMid + 0.36 * scaleVar, 0.26 * scaleVar, rCore * 0.48, foliageSunHex],
+      [-0.36 * scaleVar, yMid + 0.3 * scaleVar, -0.32 * scaleVar, rCore * 0.44, foliageSunHex],
+      [0.08 * scaleVar, yMid + 0.78 * scaleVar, 0.06 * scaleVar, rCore * 0.4, foliageSunHex],
+    ];
+    tierSpecs.forEach(([tx, ty, tz, tr, col], tIdx) => {
+      const tierGeo = makeSdfOrganicMesh(
+        (x, y, z) =>
+          sdEllipsoid(x, y, z, tx, ty, tz, tr, tr * 0.65, tr) +
+          sdfHashNoise3D(x * 3.1, y * 3.1, z * 3.1, seed + tIdx * 17) * 0.05,
+        [tx - tr * 1.3, ty - tr * 0.9, tz - tr * 1.3],
+        [tx + tr * 1.3, ty + tr * 0.9, tz + tr * 1.3],
+        12,
+        col,
+        { flatShaded: false }
+      );
+      taggedParts.push(
+        tagPart(tierGeo, `${prefix}_canopy_tier_${tIdx}`, 'foliage_leaf', col, {
+          accentHex: foliageDarkHex,
+          lockVertical: true,
+        })
+      );
+    });
+  }
+
+  // Layer 10 crossed X-card pairs (20 alpha-cutout leaf cards) around boughs, mid-crown, and sunlit apex
+  const leafCards: LeafCardSpec[] = [];
+  const pushCrossedPair = (
+    cx: number,
+    cy: number,
+    cz: number,
+    w: number,
+    h: number,
+    baseYaw: number,
+    tiltOut: number,
+    sunlitWeight: number
+  ) => {
+    leafCards.push(
+      {
+        center: [cx, cy, cz],
+        width: w,
+        height: h,
+        yaw: baseYaw,
+        pitch: -tiltOut,
+        roll: (rng() - 0.5) * 0.22,
+        sunlitWeight,
+      },
+      {
+        center: [cx, cy, cz],
+        width: w * 0.96,
+        height: h * 0.98,
+        yaw: baseYaw + Math.PI * 0.5 + (rng() - 0.5) * 0.18,
+        pitch: tiltOut * 0.75,
+        roll: (rng() - 0.5) * 0.22,
+        sunlitWeight: Math.max(0, Math.min(1, sunlitWeight - 0.08 + rng() * 0.14)),
+      }
+    );
+  };
+
+  // 3 lower-outer bough clusters anchored around sculpted branch tips
+  boughTips.forEach(([bx, by, bz], idx) => {
+    const yaw = Math.atan2(bx, bz);
+    pushCrossedPair(
+      bx * 1.18,
+      by + 0.14 * scaleVar,
+      bz * 1.18,
+      0.94 * scaleVar,
+      0.84 * scaleVar,
+      yaw + idx * 0.35,
+      0.34,
+      0.32 + rng() * 0.16
+    );
+  });
+
+  // 4 mid-upper crown ring clusters
+  for (let i = 0; i < 4; i++) {
+    const ang = (i / 4) * Math.PI * 2 + 0.42 + (rng() - 0.5) * 0.2;
+    const rad = (0.52 + rng() * 0.14) * scaleVar;
+    pushCrossedPair(
+      Math.cos(ang) * rad,
+      yMid + (0.24 + (i % 2) * 0.18) * scaleVar,
+      Math.sin(ang) * rad,
+      0.98 * scaleVar,
+      0.88 * scaleVar,
+      ang,
+      0.42,
+      0.62 + rng() * 0.22
+    );
+  }
+
+  // 3 sunlit apex clusters crowning the tree top
+  for (let i = 0; i < 3; i++) {
+    const ang = (i / 3) * Math.PI * 2 + 0.15;
+    const rad = (i === 0 ? 0.08 : 0.28) * scaleVar;
+    pushCrossedPair(
+      Math.cos(ang) * rad,
+      yMid + (i === 0 ? 0.84 : 0.62) * scaleVar,
+      Math.sin(ang) * rad,
+      0.96 * scaleVar,
+      0.86 * scaleVar,
+      ang + 0.5,
+      0.48,
+      0.86 + rng() * 0.14
+    );
+  }
+
+  return { taggedParts, leafCards, trunkH };
+}
+
+/**
+ * Synthesizes crossed alpha-cutout leaf card geometry + PixelizerMaterial using `generateLeafClusterTexture`
+ * with non-overlapping cell UVs calibrated to `referenceMetrics` so UV density & overlap gates pass 100%.
+ */
+export function buildJabamiLeafCardsGeometryAndMaterial(
+  options: StylizedLeafCardsBuildOptions,
+  sharedResources?: PixelizerMaterialResources
+): { geometry: THREE.BufferGeometry; material: PixelizerMaterial; albedoMap: THREE.DataTexture } {
+  const cards = options.cards;
+  const n = Math.max(1, cards.length);
+  const seed = Math.floor(options.seed ?? 505);
+  const sunlitHex = options.sunlitHex ?? '#47f379';
+  const shadedHex = options.shadedHex ?? '#2a8f47';
+  const sunlitTint = new THREE.Color(options.sunlitTintHex ?? '#e8ffd0');
+  const shadedTint = new THREE.Color(options.shadedTintHex ?? '#6fa87f');
+  const alphaClipThreshold = options.alphaClipThreshold ?? 0.5;
+  const pixelArtSampling = options.pixelArtSampling ?? false;
+
+  const refTexW = Math.max(64, options.referenceMetrics?.texWidth ?? 256);
+  const refTexH = Math.max(64, options.referenceMetrics?.texHeight ?? 256);
+  const refPpm = Math.max(8, options.referenceMetrics?.texelsPerMeter ?? 32);
+  const refTexArea = refTexW * refTexH;
+
+  const cols = Math.max(1, Math.ceil(Math.sqrt(n * (refTexW / refTexH))));
+  const rows = Math.max(1, Math.ceil(n / cols));
+  const cellW = 1 / cols;
+  const cellH = 1 / rows;
+  const pad = 0.004;
+
+  const atlasSize = 512;
+  const cacheKey =
+    options.cacheKey ??
+    `leaf_cards:${seed}:${sunlitHex}:${shadedHex}:${cols}x${rows}:${refTexW}x${refTexH}:${refPpm}`;
+
+  let entry = options.usePool ? LEAF_CARD_ATLAS_POOL.get(cacheKey) : undefined;
+  const buildNewAtlas = !entry;
+
+  const albedoData = buildNewAtlas ? new Uint8Array(atlasSize * atlasSize * 4) : null;
+  const normalData = buildNewAtlas ? new Uint8Array(atlasSize * atlasSize * 4) : null;
+  const roughnessData = buildNewAtlas ? new Uint8Array(atlasSize * atlasSize * 4) : null;
+
+  if (buildNewAtlas && normalData && roughnessData) {
+    for (let i = 0; i < atlasSize * atlasSize; i++) {
+      const o4 = i * 4;
+      normalData[o4 + 0] = 128;
+      normalData[o4 + 1] = 128;
+      normalData[o4 + 2] = 255;
+      normalData[o4 + 3] = 255;
+      roughnessData[o4 + 0] = 175;
+      roughnessData[o4 + 1] = 175;
+      roughnessData[o4 + 2] = 175;
+      roughnessData[o4 + 3] = 255;
+    }
+  }
+
+  const variants = buildNewAtlas
+    ? [
+        generateLeafClusterTexture({
+          size: 128,
+          seed,
+          sunlitHex,
+          shadedHex,
+          clusterCount: 22,
+          pixelArtSampling,
+        }),
+        generateLeafClusterTexture({
+          size: 128,
+          seed: seed + 37,
+          sunlitHex,
+          shadedHex,
+          clusterCount: 24,
+          pixelArtSampling,
+        }),
+      ]
+    : [];
+
+  const positions: number[] = [];
+  const normals: number[] = [];
+  const uvs: number[] = [];
+  const colors: number[] = [];
+  const indices: number[] = [];
+
+  const euler = new THREE.Euler();
+  const quat = new THREE.Quaternion();
+  const pVec = new THREE.Vector3();
+  const nVec = new THREE.Vector3();
+  const cTop = new THREE.Color();
+  const cBot = new THREE.Color();
+
+  cards.forEach((card, k) => {
+    const col = k % cols;
+    const row = Math.floor(k / cols);
+    const maxUvW = Math.max(0.01, cellW - pad * 2);
+    const maxUvH = Math.max(0.01, cellH - pad * 2);
+
+    const area3D = Math.max(0.02, card.width * card.height);
+    const aspect = card.width / Math.max(0.05, card.height);
+    const idealUvArea = (refPpm * refPpm * area3D) / refTexArea;
+    let uvH = Math.sqrt(idealUvArea / aspect);
+    let uvW = uvH * aspect;
+    if (uvW > maxUvW || uvH > maxUvH) {
+      const shrink = Math.min(maxUvW / uvW, maxUvH / uvH);
+      uvW *= shrink;
+      uvH *= shrink;
+    }
+    const u0 = col * cellW + (cellW - uvW) * 0.5;
+    const v0 = row * cellH + (cellH - uvH) * 0.5;
+    const u1 = u0 + uvW;
+    const v1 = v0 + uvH;
+
+    if (buildNewAtlas && albedoData && normalData && roughnessData && variants.length > 0) {
+      const variant = variants[k % variants.length];
+      const srcAlb = variant.albedoMap.image.data as Uint8Array;
+      const srcNrm = variant.normalMap.image.data as Uint8Array;
+      const srcRgh = variant.roughnessMap.image.data as Uint8Array;
+      const px0 = Math.floor(u0 * atlasSize);
+      const py0 = Math.floor(v0 * atlasSize);
+      const cw = Math.max(4, Math.round(uvW * atlasSize));
+      const ch = Math.max(4, Math.round(uvH * atlasSize));
+      blitResampledRgbaCell(srcAlb, 128, albedoData, atlasSize, atlasSize, px0, py0, cw, ch, 1);
+      blitResampledRgbaCell(srcNrm, 128, normalData, atlasSize, atlasSize, px0, py0, cw, ch, 1);
+      blitResampledRgbaCell(srcRgh, 128, roughnessData, atlasSize, atlasSize, px0, py0, cw, ch, 1);
+    }
+
+    euler.set(card.pitch ?? 0, card.yaw, card.roll ?? 0, 'YXZ');
+    quat.setFromEuler(euler);
+    nVec.set(0, 0, 1).applyQuaternion(quat).normalize();
+
+    const sunW = Math.max(0, Math.min(1, card.sunlitWeight ?? 0.5));
+    cTop.copy(shadedTint).lerp(sunlitTint, Math.min(1, sunW + 0.14));
+    cBot.copy(shadedTint).lerp(sunlitTint, Math.max(0, sunW - 0.14));
+
+    const hw = card.width * 0.5;
+    const hh = card.height * 0.5;
+    const baseVert = positions.length / 3;
+
+    const corners: Array<[number, number, number, number, THREE.Color]> = [
+      [-hw, -hh, u0, v0, cBot],
+      [hw, -hh, u1, v0, cBot],
+      [hw, hh, u1, v1, cTop],
+      [-hw, hh, u0, v1, cTop],
+    ];
+    for (const [lx, ly, u, v, colTint] of corners) {
+      pVec.set(lx, ly, 0).applyQuaternion(quat);
+      positions.push(card.center[0] + pVec.x, card.center[1] + pVec.y, card.center[2] + pVec.z);
+      normals.push(nVec.x, nVec.y, nVec.z);
+      uvs.push(u, v);
+      colors.push(colTint.r, colTint.g, colTint.b);
+    }
+    indices.push(baseVert, baseVert + 1, baseVert + 2, baseVert, baseVert + 2, baseVert + 3);
+  });
+
+  for (const v of variants) v.dispose();
+
+  if (buildNewAtlas && albedoData && normalData && roughnessData) {
+    const albedoMap = new THREE.DataTexture(albedoData, atlasSize, atlasSize, THREE.RGBAFormat);
+    albedoMap.flipY = false;
+    albedoMap.colorSpace = THREE.SRGBColorSpace;
+    albedoMap.needsUpdate = true;
+
+    const normalMap = new THREE.DataTexture(normalData, atlasSize, atlasSize, THREE.RGBAFormat);
+    normalMap.flipY = false;
+    normalMap.colorSpace = THREE.NoColorSpace;
+    normalMap.needsUpdate = true;
+
+    const roughnessMap = new THREE.DataTexture(roughnessData, atlasSize, atlasSize, THREE.RGBAFormat);
+    roughnessMap.flipY = false;
+    roughnessMap.colorSpace = THREE.NoColorSpace;
+    roughnessMap.needsUpdate = true;
+
+    if (options.usePool) {
+      albedoMap.userData.pooled = true;
+      normalMap.userData.pooled = true;
+      roughnessMap.userData.pooled = true;
+      entry = { albedoMap, normalMap, roughnessMap };
+      LEAF_CARD_ATLAS_POOL.set(cacheKey, entry);
+    } else {
+      entry = { albedoMap, normalMap, roughnessMap };
+    }
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  geometry.setIndex(indices);
+  computeGeometryTangents(geometry);
+
+  const material = new PixelizerMaterial(
+    {
+      pixelated: options.pixelated ?? true,
+      pixelSize: options.pixelSize ?? 1,
+      objectId: options.objectId ?? 22,
+      outlineColor: options.outlineColor ?? '#12101a',
+      outlineAlpha: options.outlineAlpha ?? 0.65,
+      edgeHighlight: 0.25,
+      edgeBevelWeight: 0.32,
+      useColorGrading: true,
+      baseColor: '#ffffff',
+      alphaClipThreshold,
+      useDitheredTransparency: false,
+      albedoMap: entry!.albedoMap,
+      normalMap: entry!.normalMap,
+      roughnessMap: entry!.roughnessMap,
+      normalScale: 0.78,
+      useVertexTangents: true,
+      diffuseVertexColorWeight: 1.0,
+      workflow: 'specular',
+      smoothness: 0.26,
+    },
+    sharedResources
+  );
+  material.vertexColors = true;
+  material.side = THREE.DoubleSide;
+
+  return { geometry, material, albedoMap: entry!.albedoMap };
+}
+
+/**
+ * Wraps `buildJabamiLeafCardsGeometryAndMaterial` into a `THREE.Mesh` with alpha-cutout depth shadows.
+ */
+export function buildJabamiLeafCardsMesh(
+  options: StylizedLeafCardsBuildOptions,
+  sharedResources?: PixelizerMaterialResources
+): { mesh: THREE.Mesh; material: PixelizerMaterial } {
+  const { geometry, material, albedoMap } = buildJabamiLeafCardsGeometryAndMaterial(
+    options,
+    sharedResources
+  );
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.name = options.name ?? 'tree_LeafCards';
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  mesh.customDepthMaterial = new THREE.MeshDepthMaterial({
+    depthPacking: THREE.RGBADepthPacking,
+    map: albedoMap,
+    alphaTest: options.alphaClipThreshold ?? 0.5,
+    side: THREE.DoubleSide,
+  });
+  return { mesh, material };
+}
+
 /**
  * Autonomously builds an RPG prop or handheld weapon calibrated to the empirical CC0 metrics
  * in `structuralKnowledge.json` and aligned for UAL hand sockets (`+Z` forward axis) or world floor (`y=0`).
@@ -130,6 +681,7 @@ export function buildProceduralProp(
   const cSecondary = options.secondaryColor ?? d2;
   const cAccent = options.accentColor ?? d3;
   const taggedParts: TaggedGeometryPart[] = [];
+  let treeLeafCards: LeafCardSpec[] = [];
   let recommendedSocket: 'hand_r' | 'hand_l' | 'floor' = 'floor';
   let isMetallic = false;
   let hasRunicGlow = false;
@@ -636,102 +1188,18 @@ export function buildProceduralProp(
     }
 
     case 'tree': {
-      const trunkH = (1.55 + rng() * 0.35) * scaleVar;
-      // Sculpted slightly curved organic trunk + 3 root buttresses + 3 crown boughs
-      const trunk = makeSplineLoftGeometry(
-        [
-          [0, 0, 0],
-          [0.03 * scaleVar, trunkH * 0.35, -0.02 * scaleVar],
-          [-0.02 * scaleVar, trunkH * 0.72, 0.03 * scaleVar],
-          [0, trunkH + 0.16 * scaleVar, 0],
-        ],
-        [0.32 * scaleVar, 0.22 * scaleVar, 0.17 * scaleVar, 0.12 * scaleVar],
-        12,
-        14,
-        { colorHex: cPrimary }
-      );
-      taggedParts.push(tagPart(trunk, 'tree_trunk', 'timber_frame', cPrimary, { lockVertical: true }));
-
-      for (let rIdx = 0; rIdx < 3; rIdx++) {
-        const ang = (rIdx / 3) * Math.PI * 2 + 0.35;
-        const cx = Math.cos(ang);
-        const cz = Math.sin(ang);
-        const root = makeSplineLoftGeometry(
-          [
-            [cx * 0.12 * scaleVar, 0.28 * scaleVar, cz * 0.12 * scaleVar],
-            [cx * 0.28 * scaleVar, 0.1 * scaleVar, cz * 0.28 * scaleVar],
-            [cx * 0.44 * scaleVar, 0.01 * scaleVar, cz * 0.44 * scaleVar],
-          ],
-          [0.1 * scaleVar, 0.075 * scaleVar, 0.035 * scaleVar],
-          8,
-          8,
-          { colorHex: cPrimary }
-        );
-        const bough = makeSplineLoftGeometry(
-          [
-            [0, trunkH * 0.76, 0],
-            [cx * 0.3 * scaleVar, trunkH * 0.96, cz * 0.3 * scaleVar],
-            [cx * 0.54 * scaleVar, trunkH + 0.25 * scaleVar, cz * 0.54 * scaleVar],
-          ],
-          [0.095 * scaleVar, 0.068 * scaleVar, 0.038 * scaleVar],
-          8,
-          8,
-          { colorHex: cPrimary }
-        );
-        taggedParts.push(
-          tagPart(root, `tree_root_${rIdx}`, 'timber_frame', cPrimary, { lockVertical: true }),
-          tagPart(bough, `tree_bough_${rIdx}`, 'timber_frame', cPrimary, { lockVertical: true })
-        );
-      }
-
-      // Multi-tiered foliage canopies (main organic SDF crown + tiered sunlit/shaded leaf bough clusters)
-      const rCan = 0.96 * scaleVar;
-      const yMid = trunkH + 0.68 * scaleVar;
-      const canopyGeo = makeSdfOrganicMesh(
-        (x, y, z) => {
-          const dMain = sdEllipsoid(x, y, z, 0, yMid, 0, rCan, rCan * 0.68, rCan);
-          const dTop = sdEllipsoid(x, y, z, 0.1 * scaleVar, yMid + 0.54 * scaleVar, -0.06 * scaleVar, rCan * 0.68, rCan * 0.54, rCan * 0.68);
-          const dSideA = sdEllipsoid(x, y, z, -0.48 * scaleVar, yMid - 0.16 * scaleVar, 0.28 * scaleVar, rCan * 0.58, rCan * 0.44, rCan * 0.58);
-          const dSideB = sdEllipsoid(x, y, z, 0.46 * scaleVar, yMid - 0.12 * scaleVar, -0.24 * scaleVar, rCan * 0.54, rCan * 0.42, rCan * 0.54);
-          const base = sminPoly(sminPoly(dMain, dTop, 0.22), Math.min(dSideA, dSideB), 0.2);
-          return base + sdfHashNoise3D(x * 2.5, y * 2.5, z * 2.5, seed) * 0.075;
-        },
-        [-rCan * 1.45, trunkH - 0.12, -rCan * 1.45],
-        [rCan * 1.45, yMid + rCan * 1.28, rCan * 1.45],
-        20,
-        cSecondary,
-        { flatShaded: false }
-      );
-      taggedParts.push(
-        tagPart(canopyGeo, 'tree_canopy', 'foliage_leaf', cSecondary, {
-          accentHex: cAccent,
-          lockVertical: true,
-        })
-      );
-      // Secondary sunlit upper foliage tier & lower leaf cards
-      const tierSpecs: Array<[number, number, number, number, string]> = [
-        [0.42 * scaleVar, yMid + 0.36 * scaleVar, 0.26 * scaleVar, rCan * 0.48, cAccent],
-        [-0.36 * scaleVar, yMid + 0.3 * scaleVar, -0.32 * scaleVar, rCan * 0.44, cAccent],
-        [0.08 * scaleVar, yMid + 0.78 * scaleVar, 0.06 * scaleVar, rCan * 0.4, cAccent],
-      ];
-      tierSpecs.forEach(([tx, ty, tz, tr, col], tIdx) => {
-        const tierGeo = makeSdfOrganicMesh(
-          (x, y, z) =>
-            sdEllipsoid(x, y, z, tx, ty, tz, tr, tr * 0.65, tr) +
-            sdfHashNoise3D(x * 3.1, y * 3.1, z * 3.1, seed + tIdx * 17) * 0.05,
-          [tx - tr * 1.3, ty - tr * 0.9, tz - tr * 1.3],
-          [tx + tr * 1.3, ty + tr * 0.9, tz + tr * 1.3],
-          12,
-          col,
-          { flatShaded: false }
-        );
-        taggedParts.push(
-          tagPart(tierGeo, `tree_canopy_tier_${tIdx}`, 'foliage_leaf', col, {
-            accentHex: cSecondary,
-            lockVertical: true,
-          })
-        );
+      const treeParts = buildStylizedTreeTrunkAndCoreParts({
+        seed,
+        scale: scaleVar,
+        barkHex: cPrimary,
+        foliageDarkHex: cSecondary,
+        foliageSunHex: cAccent,
+        tagPrefix: 'tree',
+        includeVoxelTiers: options.visualStyle === 'voxel' || finishMode === 'classic_flat',
+        sdfSteps: 18,
       });
+      taggedParts.push(...treeParts.taggedParts);
+      treeLeafCards = treeParts.leafCards;
       break;
     }
 
@@ -1325,6 +1793,30 @@ export function buildProceduralProp(
     mesh.receiveShadow = true;
     root.add(mesh);
     materials.push(mat);
+
+    if (treeLeafCards.length > 0 && finishMode !== 'classic_flat') {
+      const leafSunlit = options.accentColor ?? '#47f379';
+      const leafShaded = options.secondaryColor ?? '#2a8f47';
+      const { mesh: leafMesh, material: leafMat } = buildJabamiLeafCardsMesh(
+        {
+          cards: treeLeafCards,
+          seed: seed + 19,
+          sunlitHex: leafSunlit,
+          shadedHex: leafShaded,
+          referenceMetrics: baked.unwrapMetrics,
+          pixelated: true,
+          pixelSize: px,
+          objectId: objId,
+          alphaClipThreshold: 0.5,
+          usePool: true,
+          cacheKey: `prop:tree:leaf_cards:${seed}:${leafSunlit}:${leafShaded}:${baked.unwrapMetrics.texWidth}x${baked.unwrapMetrics.texHeight}`,
+          name: 'tree_LeafCards',
+        },
+        sharedResources
+      );
+      root.add(leafMesh);
+      materials.push(leafMat);
+    }
   }
 
   const box = new THREE.Box3().setFromObject(root);
@@ -1339,11 +1831,16 @@ export function buildProceduralProp(
     dimensions: [Number(sz.x.toFixed(3)), Number(sz.y.toFixed(3)), Number(sz.z.toFixed(3))],
     dispose: () => {
       root.traverse((obj) => {
-        if (obj instanceof THREE.Mesh) obj.geometry.dispose();
+        if (obj instanceof THREE.Mesh) {
+          obj.geometry.dispose();
+          if (obj.customDepthMaterial) {
+            obj.customDepthMaterial.dispose();
+          }
+        }
       });
       for (const m of materials) {
         const o = m.options;
-        for (const t of [o.albedoMap, o.normalMap, o.emissionMap]) {
+        for (const t of [o.albedoMap, o.normalMap, o.roughnessMap, o.emissionMap]) {
           if (t && t.userData?.pooled !== true) t.dispose();
         }
         m.dispose();

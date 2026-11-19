@@ -33,6 +33,10 @@ import {
   buildInstancedPropBatch,
   type InstancePlacement,
 } from './InstancedBatchKit';
+import {
+  buildJabamiLeafCardsGeometryAndMaterial,
+  buildStylizedTreeTrunkAndCoreParts,
+} from './PropBuilder';
 
 export type CityHouseKind =
   | 'grimorio'
@@ -152,7 +156,7 @@ function disposeCityMaterials(materials: PixelizerMaterial[]): void {
   const seenTex = new Set<THREE.Texture>();
   for (const m of materials) {
     const o = m.options;
-    for (const tex of [o.albedoMap, o.normalMap, o.emissionMap]) {
+    for (const tex of [o.albedoMap, o.normalMap, o.roughnessMap, o.emissionMap]) {
       if (tex && tex.userData?.pooled !== true && !seenTex.has(tex)) {
         seenTex.add(tex);
         tex.dispose();
@@ -1056,6 +1060,109 @@ export function buildNwlStarterCity(
   });
   root.add(lampInstanced);
 
+  // Stylized Jabami Trees on outer & courtyard grass lawns -> GPU InstancedMesh batches
+  const cityTreePlacements: InstancePlacement[] = [
+    { position: [-11.3, 0, -8.5], rotationY: 0.3, scale: 0.94 },
+    { position: [-11.3, 0, -4.2], rotationY: 1.7, scale: 1.02 },
+    { position: [-11.3, 0, 4.2], rotationY: 2.9, scale: 0.96 },
+    { position: [-11.3, 0, 8.5], rotationY: 4.1, scale: 1.04 },
+    { position: [-7.0, 0, 8.5], rotationY: 0.9, scale: 0.9 },
+    { position: [7.0, 0, 8.5], rotationY: 2.2, scale: 0.92 },
+    { position: [11.3, 0, 8.5], rotationY: 3.6, scale: 1.02 },
+    { position: [11.3, 0, 4.2], rotationY: 5.0, scale: 0.95 },
+    { position: [11.3, 0, -0.3], rotationY: 1.1, scale: 1.0 },
+  ];
+  const cityTreeParts = buildStylizedTreeTrunkAndCoreParts({
+    seed: seed + 31,
+    scale: 1.0,
+    barkHex: '#5a3921',
+    foliageDarkHex: CITY_COLORS.grass,
+    foliageSunHex: CITY_COLORS.grassBright,
+    tagPrefix: 'city_tree',
+    includeVoxelTiers: finishMode === 'classic_flat',
+    sdfSteps: 12,
+  });
+  const cityTreeBaked = bakeTaggedPartsAsset(cityTreeParts.taggedParts, {
+    finishMode,
+    texelsPerMeter: 32,
+    maxAtlasSize: 512,
+    seed: seed + 31,
+    aoRays: 4,
+    aoStrength,
+    normalStrength,
+    usePool: true,
+    cacheKey: 'city:tree_proto',
+    inspectUvs: false,
+  });
+  for (const p of cityTreeParts.taggedParts) p.geometry.dispose();
+  const cityTreeMat = createPixelizerMaterialFromBaked(
+    cityTreeBaked,
+    {
+      pixelated: true,
+      pixelSize: px,
+      objectId: 32,
+      outlineColor: '#14101c',
+      outlineAlpha: 1,
+      edgeHighlight: 0.34,
+      edgeBevelWeight: 0.65,
+      useColorGrading: true,
+    },
+    sharedResources
+  );
+  materials.push(cityTreeMat);
+  root.add(
+    buildInstancedPropBatch({
+      name: 'City_Trees_Instanced',
+      geometry: cityTreeBaked.geometry,
+      material: cityTreeMat,
+      placements: cityTreePlacements,
+      pixelSize: px,
+      gridReference: root,
+      castShadow: true,
+      receiveShadow: true,
+    })
+  );
+  if (finishMode !== 'classic_flat' && cityTreeParts.leafCards.length > 0) {
+    const leafLayer = buildJabamiLeafCardsGeometryAndMaterial(
+      {
+        cards: cityTreeParts.leafCards,
+        seed: seed + 47,
+        sunlitHex: '#47f379',
+        shadedHex: '#2a8f47',
+        referenceMetrics: cityTreeBaked.unwrapMetrics,
+        pixelated: true,
+        pixelSize: px,
+        objectId: 32,
+        alphaClipThreshold: 0.5,
+        usePool: true,
+        cacheKey: 'city:tree_leaf_cards',
+      },
+      sharedResources
+    );
+    materials.push(leafLayer.material);
+    const leafInstanced = buildInstancedPropBatch({
+      name: 'City_Tree_LeafCards_Instanced',
+      geometry: leafLayer.geometry,
+      material: leafLayer.material,
+      placements: cityTreePlacements,
+      pixelSize: px,
+      gridReference: root,
+      castShadow: true,
+      receiveShadow: true,
+    });
+    leafInstanced.customDepthMaterial = new THREE.MeshDepthMaterial({
+      depthPacking: THREE.RGBADepthPacking,
+      map: leafLayer.albedoMap,
+      alphaTest: 0.5,
+      side: THREE.DoubleSide,
+    });
+    root.add(leafInstanced);
+  }
+  for (const tp of cityTreePlacements) {
+    const [tx, , tz] = tp.position;
+    colliders.push({ minX: tx - 0.45, maxX: tx + 0.45, minZ: tz - 0.45, maxZ: tz + 0.45, tag: 'city_tree' });
+  }
+
   // Calibrated dynamic plaza lights (Portal arcane beacon + SpotLight + Forge glow)
   const portalPointLight = new THREE.PointLight('#249fde', 1.4, 9.5, 1.8);
   portalPointLight.position.set(0, 2.2, -8.8);
@@ -1449,7 +1556,10 @@ export function buildNwlStarterCity(
     dispose: () => {
       root.traverse((obj) => {
         if (obj instanceof THREE.InstancedMesh) obj.dispose();
-        if (obj instanceof THREE.Mesh) obj.geometry?.dispose();
+        if (obj instanceof THREE.Mesh) {
+          obj.geometry?.dispose();
+          if (obj.customDepthMaterial) obj.customDepthMaterial.dispose();
+        }
       });
       disposeCityMaterials(materials);
     },

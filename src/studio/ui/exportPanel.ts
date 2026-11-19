@@ -6,6 +6,7 @@ import {
   type SpriteSheetExportResult,
 } from '../../engine/SpriteSheetExporter';
 import { runBatchExport } from '../../engine/BatchExporter';
+import { getUnityImporterScript } from '../../engine/unity/PixelizerUnityImporterTemplate';
 import {
   getAllPresets,
   PRESET_CATEGORY_LABELS,
@@ -132,6 +133,19 @@ export function mountExportPanel(
         </button>
         <div id="batch-export-status" class="voxel-stats-box">
           <span>Gera .ZIP único com manifest.json no estilo ativo do Studio</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="ctrl-section">
+      <div class="ctrl-section-head"><span>Unity 6 URP Bridge</span></div>
+      <div class="ctrl-section-body">
+        <button id="btn-download-unity-importer" class="btn" type="button">
+          ${ICONS.download}
+          <span>Download Unity Importer (.cs)</span>
+        </button>
+        <div class="voxel-stats-box">
+          <span>Coloque em Assets/Editor/ · Tools → Pixelizer Engine</span>
         </div>
       </div>
     </div>
@@ -548,6 +562,13 @@ export function mountExportPanel(
         batchStatusEl.textContent = `Erro no Batch: ${err instanceof Error ? err.message : String(err)}`;
       }
     })();
+  });
+
+  events.listen(container.querySelector('#btn-download-unity-importer')!, 'click', () => {
+    ctx.actions.downloadBlob(
+      new Blob([getUnityImporterScript()], { type: 'text/plain;charset=utf-8' }),
+      'PixelizerUnityImporter.cs'
+    );
   });
 
   events.listen(container.querySelector('#btn-export-obj')!, 'click', () => {

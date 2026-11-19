@@ -17,7 +17,7 @@ void main() {
   float emitSignal = clamp((c.a - 0.506) * 3.03, 0.0, 1.5);
   float luma = dot(c.rgb, vec3(0.2126, 0.7152, 0.0722));
   float effectiveThresh = max(0.05, uBloomThreshold);
-  float soft = clamp((emitSignal - effectiveThresh) / max(0.05, 1.5 - effectiveThresh), 0.0, 1.0);
+  float soft = clamp((emitSignal - effectiveThresh) / max(0.05, 1.32 - effectiveThresh), 0.0, 1.0);
   float strength = soft * clamp(0.95 + emitSignal * 1.45 + luma * 0.35, 0.0, 2.8);
   fragColor = vec4(c.rgb * strength, 1.0);
 }

@@ -12,6 +12,7 @@ varying vec3 vViewPos;
 varying vec4 vVertexColor;
 varying vec3 vTangentView;
 varying vec3 vBitangentView;
+varying vec3 vWorldUpView;
 
 void main() {
   vUv = uv;
@@ -73,6 +74,9 @@ void main() {
 
   vec4 mvPosition = viewMatrix * worldPosition;
   vViewPos = -mvPosition.xyz;
+  vec3 rawUpView = (viewMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xyz;
+  float upLen = length(rawUpView);
+  vWorldUpView = (upLen > 1e-6) ? (rawUpView / upLen) : vec3(0.0, 1.0, 0.0);
 
   gl_Position = projectionMatrix * mvPosition;
 
@@ -100,6 +104,7 @@ varying vec3 vViewPos;
 varying vec4 vVertexColor;
 varying vec3 vTangentView;
 varying vec3 vBitangentView;
+varying vec3 vWorldUpView;
 
 uniform float uPixelated;
 uniform float uPixelSize;
@@ -352,7 +357,53 @@ void main() {
   vec3 effectiveAmbient = mix(sceneAmbient, uAmbientConstantLinear, uAmbientConstantWeight);
   vec3 diffuseColor = albedoLinear * mix(1.0, 1.0 - uMetallic * 0.65, uIsMetallicWorkflow);
 
-  vec3 rawLitLinear = diffuseColor * (directLight + effectiveAmbient) + specAccum;
+  vec3 iblContribution = vec3(0.0);
+  if (uPixelated < 0.5) {
+    vec3 worldUpView = normalize(vWorldUpView);
+    vec3 R = reflect(-V, N);
+    float rUp = clamp(dot(R, worldUpView), -1.0, 1.0);
+    float nUp = clamp(dot(N, worldUpView), -1.0, 1.0);
+    float ndv = clamp(dot(N, V), 0.0, 1.0);
+
+    // Procedural 3-band sky / horizon / warm ground bounce IBL (linear space)
+    vec3 skyTint = vec3(0.24, 0.40, 0.72);
+    vec3 horizonTint = vec3(0.30, 0.34, 0.42);
+    vec3 groundBounce = vec3(0.28, 0.18, 0.11);
+
+    vec3 envUpper = mix(horizonTint, skyTint, pow(max(rUp, 0.0), 0.72));
+    vec3 envLower = mix(horizonTint, groundBounce, pow(max(-rUp, 0.0), 0.65));
+    vec3 envColor = (rUp >= 0.0) ? envUpper : envLower;
+
+    // Subtle horizon sheen on smoother surfaces
+    float horizonSheen = exp(-pow((rUp - 0.10) * 4.0, 2.0)) * (0.14 * clamp(uSmoothness, 0.0, 1.0));
+    envColor += vec3(0.68, 0.78, 0.94) * horizonSheen;
+
+    float metalAmt = (uIsMetallicWorkflow > 0.5)
+      ? clamp(uMetallic, 0.0, 1.0)
+      : clamp(max(uSpecularColorLinear.r, max(uSpecularColorLinear.g, uSpecularColorLinear.b)) * 0.4, 0.0, 0.3);
+    vec3 f0 = (uIsMetallicWorkflow > 0.5)
+      ? mix(vec3(0.04), albedoLinear, metalAmt)
+      : max(uSpecularColorLinear, vec3(0.04));
+    float fresnel = pow(1.0 - ndv, 4.0);
+    vec3 fresnelSpec = f0 + (vec3(1.0) - f0) * fresnel * (0.28 + 0.55 * clamp(uSmoothness, 0.0, 1.0));
+
+    float iblSmoothWeight = mix(0.22, 0.92, clamp(uSmoothness, 0.0, 1.0));
+    float iblMetalWeight = (uIsMetallicWorkflow > 0.5)
+      ? mix(0.45, 1.0, sqrt(metalAmt))
+      : 0.22;
+    float iblShadowDamp = 0.72 + 0.28 * shadowMask;
+
+    vec3 skyGroundFill = mix(groundBounce * 0.45, skyTint * 0.40, 0.5 + 0.5 * nUp);
+    iblContribution = (envColor * fresnelSpec * iblSmoothWeight + skyGroundFill * albedoLinear * 0.14 * metalAmt)
+      * iblMetalWeight * iblShadowDamp;
+  }
+
+  vec3 rawLitLinear = diffuseColor * (directLight + effectiveAmbient) + specAccum + iblContribution;
+  if (uPixelated < 0.5) {
+    // Soft highlight shoulder above 0.85 linear so metallic specular + IBL preserve hue without clipping to white
+    vec3 over = max(rawLitLinear - vec3(0.85), vec3(0.0));
+    rawLitLinear = min(rawLitLinear, vec3(0.85)) + over / (vec3(1.0) + over * 1.15);
+  }
 
   // Cel shading via HSV Value sampled through 1D Lighting Ramp
   vec3 rawLitSrgb = linearToSrgb(rawLitLinear);

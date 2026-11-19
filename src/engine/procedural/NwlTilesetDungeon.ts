@@ -20,7 +20,6 @@ import {
   makeLatheProfile,
   makeSdfOrganicMesh,
   sdEllipsoid,
-  sminPoly,
   sdfHashNoise3D,
   tagPart,
   type FinishMode,
@@ -37,6 +36,12 @@ import {
   buildInstancedPropBatch,
   type InstancePlacement,
 } from './InstancedBatchKit';
+import {
+  buildJabamiLeafCardsGeometryAndMaterial,
+  buildJabamiLeafCardsMesh,
+  buildStylizedTreeTrunkAndCoreParts,
+  type LeafCardSpec,
+} from './PropBuilder';
 
 export type NwlTilesetBiome = 'green_ruins' | 'city' | 'training_field';
 export type DungeonRoomKind = 'entrance' | 'corridor' | 'combat' | 'treasure' | 'boss';
@@ -113,7 +118,7 @@ function disposeMaterialsAndOwnedTextures(materials: PixelizerMaterial[]): void 
   const seenTex = new Set<THREE.Texture>();
   for (const m of materials) {
     const o = m.options;
-    for (const tex of [o.albedoMap, o.normalMap, o.emissionMap]) {
+    for (const tex of [o.albedoMap, o.normalMap, o.roughnessMap, o.emissionMap]) {
       if (tex && tex.userData?.pooled !== true && !seenTex.has(tex)) {
         seenTex.add(tex);
         tex.dispose();
@@ -290,35 +295,29 @@ export function buildNwlTilesetCatalog(
   }
 
   // Row 2 (5 Interactive & Nature Pieces: Tree, Boulder, Altar, Chest, Spike Trap)
+  const catTreeLeafCards: LeafCardSpec[] = [];
   {
     const [x, z] = cellPos(pieceCount++);
-    const trunk = makeLatheProfile(
-      [
-        [0.3, 0],
-        [0.2, 0.35],
-        [0.16, 1.55],
-      ],
-      8,
-      RUINS_PAL.wood,
-      { offset: [x, 0, z], staveGrooveAmplitude: 0.04 }
-    );
-    const canopy = makeSdfOrganicMesh(
-      (px0, py0, pz0) => {
-        const d1 = sdEllipsoid(px0, py0, pz0, x, 2.05, z, 0.88, 0.72, 0.88);
-        const d2 = sdEllipsoid(px0, py0, pz0, x + 0.18, 2.52, z - 0.12, 0.58, 0.48, 0.58);
-        return sminPoly(d1, d2, 0.18) + sdfHashNoise3D(px0 * 3, py0 * 3, pz0 * 3, seed) * 0.06;
-      },
-      [x - 1.15, 1.2, z - 1.15],
-      [x + 1.15, 3.1, z + 1.15],
-      12,
-      RUINS_PAL.floraGreen
-    );
-    pieceParts.push(
-      tagPart(trunk, 'cat_tree_trunk', 'timber_frame', RUINS_PAL.wood, { lockVertical: true }),
-      tagPart(canopy, 'cat_tree_canopy', 'foliage_leaf', RUINS_PAL.floraGreen, {
-        lockVertical: true,
-      })
-    );
+    const catTree = buildStylizedTreeTrunkAndCoreParts({
+      seed: seed + 11,
+      scale: 0.92,
+      barkHex: '#5a3921',
+      foliageDarkHex: RUINS_PAL.floraGreen,
+      foliageSunHex: '#47f379',
+      tagPrefix: 'cat_tree',
+      includeVoxelTiers: finishMode === 'classic_flat',
+      sdfSteps: 10,
+    });
+    for (const part of catTree.taggedParts) {
+      part.geometry.translate(x, 0, z);
+      pieceParts.push(part);
+    }
+    for (const card of catTree.leafCards) {
+      catTreeLeafCards.push({
+        ...card,
+        center: [card.center[0] + x, card.center[1], card.center[2] + z],
+      });
+    }
   }
   {
     const [x, z] = cellPos(pieceCount++);
@@ -519,6 +518,29 @@ export function buildNwlTilesetCatalog(
   root.userData.unwrapMetrics = pieceBaked.unwrapMetrics;
   root.add(floorMesh, pieceMesh);
 
+  if (finishMode !== 'classic_flat' && catTreeLeafCards.length > 0) {
+    const { mesh: catLeafMesh, material: catLeafMat } = buildJabamiLeafCardsMesh(
+      {
+        cards: catTreeLeafCards,
+        seed: seed + 17,
+        sunlitHex: '#47f379',
+        shadedHex: RUINS_PAL.floraGreen,
+        referenceMetrics: pieceBaked.unwrapMetrics,
+        pixelated: true,
+        pixelSize: px,
+        objectId: 52,
+        alphaClipThreshold: 0.5,
+        usePool: true,
+        cacheKey: `nwl_catalog:${biome}:tree_leaf_cards:${seed}`,
+        name: 'Tileset_Catalog_Tree_LeafCards',
+      },
+      sharedResources
+    );
+    attachSnap(catLeafMesh, px, root);
+    root.add(catLeafMesh);
+    materials.push(catLeafMat);
+  }
+
   return {
     name: root.name,
     biome,
@@ -527,8 +549,12 @@ export function buildNwlTilesetCatalog(
     root,
     materials,
     dispose: () => {
-      floorMesh.geometry.dispose();
-      pieceMesh.geometry.dispose();
+      root.traverse((obj) => {
+        if (obj instanceof THREE.Mesh) {
+          obj.geometry.dispose();
+          if (obj.customDepthMaterial) obj.customDepthMaterial.dispose();
+        }
+      });
       disposeMaterialsAndOwnedTextures(materials);
     },
   };
@@ -864,31 +890,17 @@ export function buildGreenRuinsFloor1(
   }
 
   if (treePlacements.length > 0) {
-    const trunk = makeLatheProfile(
-      [
-        [0.28, 0],
-        [0.2, 0.5],
-        [0.15, 1.75],
-      ],
-      7,
-      RUINS_PAL.wood,
-      { staveGrooveAmplitude: 0.04 }
-    );
-    const crown = makeSdfOrganicMesh(
-      (px0, py0, pz0) => {
-        const d1 = sdEllipsoid(px0, py0, pz0, 0, 2.2, 0, 0.82, 0.68, 0.82);
-        return d1 + sdfHashNoise3D(px0 * 2.5, py0 * 2.5, pz0 * 2.5, seed + 7) * 0.07;
-      },
-      [-1.0, 1.4, -1.0],
-      [1.0, 3.05, 1.0],
-      10,
-      RUINS_PAL.floraGreen
-    );
-    const treeProtoParts: TaggedGeometryPart[] = [
-      tagPart(trunk, 'ruins_tree_trunk', 'timber_frame', RUINS_PAL.wood, { lockVertical: true }),
-      tagPart(crown, 'ruins_tree_crown', 'foliage_leaf', RUINS_PAL.floraGreen, { lockVertical: true }),
-    ];
-    const treeBaked = bakeTaggedPartsAsset(treeProtoParts, {
+    const ruinsTreeParts = buildStylizedTreeTrunkAndCoreParts({
+      seed: seed + 23,
+      scale: 0.96,
+      barkHex: '#5a3921',
+      foliageDarkHex: RUINS_PAL.floraGreen,
+      foliageSunHex: '#47f379',
+      tagPrefix: 'ruins_tree',
+      includeVoxelTiers: finishMode === 'classic_flat',
+      sdfSteps: 10,
+    });
+    const treeBaked = bakeTaggedPartsAsset(ruinsTreeParts.taggedParts, {
       finishMode,
       texelsPerMeter: 32,
       maxAtlasSize: 512,
@@ -900,7 +912,7 @@ export function buildGreenRuinsFloor1(
       cacheKey: `nwl_ruins:tree_proto:${seed}`,
       inspectUvs: false,
     });
-    for (const p of treeProtoParts) p.geometry.dispose();
+    for (const p of ruinsTreeParts.taggedParts) p.geometry.dispose();
     const treeMat = createPixelizerMaterialFromBaked(
       treeBaked,
       {
@@ -928,6 +940,43 @@ export function buildGreenRuinsFloor1(
         receiveShadow: true,
       })
     );
+
+    if (finishMode !== 'classic_flat' && ruinsTreeParts.leafCards.length > 0) {
+      const leafLayer = buildJabamiLeafCardsGeometryAndMaterial(
+        {
+          cards: ruinsTreeParts.leafCards,
+          seed: seed + 29,
+          sunlitHex: '#47f379',
+          shadedHex: RUINS_PAL.floraGreen,
+          referenceMetrics: treeBaked.unwrapMetrics,
+          pixelated: true,
+          pixelSize: px,
+          objectId: 59,
+          alphaClipThreshold: 0.5,
+          usePool: true,
+          cacheKey: `nwl_ruins:tree_leaf_cards:${seed}`,
+        },
+        sharedResources
+      );
+      materials.push(leafLayer.material);
+      const leafInstanced = buildInstancedPropBatch({
+        name: 'Ruins_Tree_LeafCards_Instanced',
+        geometry: leafLayer.geometry,
+        material: leafLayer.material,
+        placements: treePlacements,
+        pixelSize: px,
+        gridReference: root,
+        castShadow: true,
+        receiveShadow: true,
+      });
+      leafInstanced.customDepthMaterial = new THREE.MeshDepthMaterial({
+        depthPacking: THREE.RGBADepthPacking,
+        map: leafLayer.albedoMap,
+        alphaTest: 0.5,
+        side: THREE.DoubleSide,
+      });
+      root.add(leafInstanced);
+    }
   }
 
   const floorGeo = mergeColoredParts(floorGeos);
@@ -1507,7 +1556,10 @@ export function buildGreenRuinsFloor1(
     dispose: () => {
       root.traverse((obj) => {
         if (obj instanceof THREE.InstancedMesh) obj.dispose();
-        if (obj instanceof THREE.Mesh) obj.geometry.dispose();
+        if (obj instanceof THREE.Mesh) {
+          obj.geometry.dispose();
+          if (obj.customDepthMaterial) obj.customDepthMaterial.dispose();
+        }
       });
       disposeMaterialsAndOwnedTextures(materials);
     },

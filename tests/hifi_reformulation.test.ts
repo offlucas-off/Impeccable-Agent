@@ -48,7 +48,8 @@ describe('Hi-Fi 3D Reformulation: Clean Hi-Fi render mode (no destructive pixela
       expect(pipeline.pipelineConfig.usePixelExpansion).toBe(false);
       expect(pipeline.pipelineConfig.edgeHighlightStrength).toBe(0);
       expect(pipeline.pipelineConfig.edgeBevelStrength).toBe(0);
-      expect(pipeline.pipelineConfig.bloomEnabled).toBe(false);
+      expect(pipeline.pipelineConfig.bloomEnabled).toBe(true);
+      expect(pipeline.pipelineConfig.bloomThreshold).toBeGreaterThanOrEqual(0.85);
       expect(pipeline.cameraConfig.resolutionMode).toBe('fixed_downscale_ratio');
       expect(pipeline.cameraConfig.downscaleRatio).toBe(1);
       expect(pipeline.cameraConfig.snapCameraPosition).toBe(false);

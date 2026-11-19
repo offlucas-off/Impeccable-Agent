@@ -163,9 +163,9 @@ export class PixelizerPipeline {
       debugView: 'final',
       splitCompare: false,
       splitPosition: 0.5,
-      bloomEnabled: false,
-      bloomThreshold: 0.42,
-      bloomIntensity: 0.4,
+      bloomEnabled: true,
+      bloomThreshold: 0.88,
+      bloomIntensity: 0.28,
       exposure: 1.04,
       contrast: 1.02,
       vignetteStrength: 0.0,
@@ -253,7 +253,7 @@ export class PixelizerPipeline {
       fragmentShader: BLOOM_EXTRACT_FRAGMENT_SHADER,
       uniforms: {
         tSource: { value: null },
-        uBloomThreshold: { value: 0.38 },
+        uBloomThreshold: { value: 0.88 },
       },
       depthTest: false,
       depthWrite: false,
@@ -288,8 +288,8 @@ export class PixelizerPipeline {
         uShowRawOnly: { value: 0.0 },
         uTransparentBg: { value: 0.0 },
         uBgColorSrgb: { value: new THREE.Vector3(0.07, 0.08, 0.12) },
-        uBloomEnabled: { value: 0.0 },
-        uBloomIntensity: { value: 0.45 },
+        uBloomEnabled: { value: 1.0 },
+        uBloomIntensity: { value: 0.28 },
         uExposure: { value: 1.0 },
         uContrast: { value: 1.0 },
         uVignetteStrength: { value: 0.0 },
@@ -458,7 +458,9 @@ export class PixelizerPipeline {
       this.pipelineConfig.lightIntensity = 1.45;
       this.pipelineConfig.ambientSkyColor = '#b7c8e8';
       this.pipelineConfig.ambientIntensity = 0.7;
-      this.pipelineConfig.bloomEnabled = false;
+      this.pipelineConfig.bloomEnabled = true;
+      this.pipelineConfig.bloomThreshold = 0.88;
+      this.pipelineConfig.bloomIntensity = 0.28;
       this.pipelineConfig.exposure = 1.04;
       this.pipelineConfig.contrast = 1.02;
       this.cameraConfig.resolutionMode = 'fixed_downscale_ratio';

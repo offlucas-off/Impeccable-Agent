@@ -4,6 +4,11 @@ import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { PixelizerMaterial } from '../PixelizerMaterial';
 import { BUILTIN_PALETTES } from '../palettes';
 import { quantizeTextureToPalette } from '../procedural/PixelMaterialSynth';
+import {
+  conditionClipWithEquipment,
+  detectSubjectEquipment,
+  type EquipmentConditioningFlags,
+} from '../steppedAnimation';
 import type { ColorPaletteConfig } from '../types';
 
 export interface RiggedExportOptions {
@@ -12,6 +17,10 @@ export interface RiggedExportOptions {
   resetToRestPose?: boolean;
   /** Clamp metalness <= 0.35 so engines without HDR EnvMaps (Godot/Three/Unity) don't render dark silhouettes */
   safeMaxMetalness?: number;
+  /** Auto-detect equipped weapons/shields and condition clips to avoid torso clipping (default true) */
+  conditionEquipment?: boolean;
+  /** Optional explicit overrides for equipment conditioning flags */
+  equipmentFlags?: Partial<EquipmentConditioningFlags>;
   /** Optional Wave 3 palette quantization pass on exported albedo textures */
   quantizeAlbedo?: boolean;
   quantizePalette?: ColorPaletteConfig;
@@ -189,6 +198,8 @@ function convertPixelizerMaterialForGltf(
           ? 1.0
           : 0;
 
+    const alphaTest = o.alphaClipThreshold > 0.15 ? o.alphaClipThreshold : 0;
+
     return new THREE.MeshStandardMaterial({
       color: new THREE.Color(o.baseColor),
       vertexColors: hasVertexColors || src.vertexColors,
@@ -204,6 +215,7 @@ function convertPixelizerMaterialForGltf(
       emissiveIntensity,
       metalness,
       roughness,
+      alphaTest,
       side: src.side,
     });
   }
@@ -626,16 +638,29 @@ export async function exportRiggedAssetToGlb(
       ? new Set(options.selectedClipNames)
       : null;
 
+  const shouldCondition = options.conditionEquipment !== false;
+  const detectedEq = shouldCondition ? detectSubjectEquipment(sourceRoot) : null;
+  const eqFlags: EquipmentConditioningFlags = {
+    hasMainWeapon: options.equipmentFlags?.hasMainWeapon ?? detectedEq?.hasMainWeapon ?? false,
+    hasShield: options.equipmentFlags?.hasShield ?? detectedEq?.hasShield ?? false,
+  };
+  const applyConditioning = shouldCondition && (eqFlags.hasMainWeapon || eqFlags.hasShield);
+
   const exportClips: THREE.AnimationClip[] = [];
   for (const clip of clips) {
     if (selectedSet && !selectedSet.has(clip.name)) continue;
-    const validTracks = clip.tracks.filter((t) => {
+    const sourceClip = applyConditioning ? conditionClipWithEquipment(clip, eqFlags) : clip;
+    const validTracks = sourceClip.tracks.filter((t) => {
       const dot = t.name.lastIndexOf('.');
       const nodeName = dot > 0 ? t.name.slice(0, dot) : t.name;
       return boneNamesInClone.has(nodeName);
     });
     if (validTracks.length > 0) {
-      const c = new THREE.AnimationClip(clip.name, clip.duration, validTracks.map((t) => t.clone()));
+      const c = new THREE.AnimationClip(
+        sourceClip.name,
+        sourceClip.duration,
+        validTracks.map((t) => t.clone())
+      );
       exportClips.push(c);
     }
   }
